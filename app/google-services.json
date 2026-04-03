@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "974241874495",
+    "project_id": "ai-camera-assistant-6915f",
+    "storage_bucket": "ai-camera-assistant-6915f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:974241874495:android:07e6a73e22a3827cb26e8a",
+        "android_client_info": {
+          "package_name": "com.example.aicameraassistant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBd7ysHUCHo5vUu5l3WqUlF62I7aWV7h8o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
