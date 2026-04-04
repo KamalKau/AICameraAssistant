@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,36 +41,21 @@ import org.webrtc.VideoTrack
 @Composable
 fun WaitingForApprovalScreen(
     roomCode: String,
+    repository: FirebaseRoomRepository,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val repository = remember { FirebaseRoomRepository() }
     val scope = rememberCoroutineScope()
 
-    var roomStatus by remember { mutableStateOf("waiting") }
-    var firebaseLensFacing by remember { mutableStateOf("back") }
-    var firebaseZoomLevel by remember { mutableStateOf(1.0) }
-    var firebaseFlashEnabled by remember { mutableStateOf(false) }
-    var firebaseAnswer by remember { mutableStateOf<String?>(null) }
+    val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
+    val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
+    val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
+    val firebaseFlashEnabled by repository.getFlashEnabled(roomCode).collectAsState(initial = false)
+    val firebaseAnswer by repository.getAnswerSdp(roomCode).collectAsState(initial = null)
+    
     var rendererRef by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
     var remoteTrack by remember { mutableStateOf<VideoTrack?>(null) }
     var offerCreated by remember(roomCode) { mutableStateOf(false) }
-
-    DisposableEffect(roomCode) {
-        val registration = repository.listenToRoom(
-            roomCode
-        ) { _, _, status, _, lensFacing, zoomLevel, flashEnabled, _, answer ->
-            roomStatus = status
-            firebaseLensFacing = lensFacing
-            firebaseZoomLevel = zoomLevel
-            firebaseFlashEnabled = flashEnabled
-            firebaseAnswer = answer
-        }
-
-        onDispose {
-            registration.remove()
-        }
-    }
 
     DisposableEffect(roomCode) {
         val registration = repository.listenToCameraIceCandidates(roomCode) { candidate ->
@@ -209,7 +195,10 @@ fun WaitingForApprovalScreen(
             Button(
                 onClick = {
                     scope.launch {
-                        repository.sendCaptureRequest(roomCode)
+                        // repository.sendCaptureRequest(roomCode) // Need to add this to repo
+                        // For now let's use the one that works
+                        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                        db.collection("rooms").document(roomCode).update("captureRequest", true)
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -235,11 +224,14 @@ fun WaitingForApprovalScreen(
                 }
 
                 OutlinedButton(
-                    onClick = {},
-                    enabled = false,
+                    onClick = {
+                        scope.launch {
+                            repository.updateFlashEnabled(roomCode, !firebaseFlashEnabled)
+                        }
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Flash unavailable")
+                    Text(if (firebaseFlashEnabled) "Flash On" else "Flash Off")
                 }
             }
 

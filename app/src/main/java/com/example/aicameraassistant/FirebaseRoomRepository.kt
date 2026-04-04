@@ -3,6 +3,9 @@ package com.example.aicameraassistant
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import org.webrtc.IceCandidate
 
@@ -62,20 +65,6 @@ class FirebaseRoomRepository {
             .await()
     }
 
-    suspend fun sendCaptureRequest(roomCode: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("captureRequest", true)
-            .await()
-    }
-
-    suspend fun resetCaptureRequest(roomCode: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("captureRequest", false)
-            .await()
-    }
-
     suspend fun updateLensFacing(roomCode: String, lensFacing: String) {
         db.collection("rooms")
             .document(roomCode)
@@ -94,6 +83,13 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .update("flashEnabled", flashEnabled)
+            .await()
+    }
+
+    suspend fun resetCaptureRequest(roomCode: String) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("captureRequest", false)
             .await()
     }
 
@@ -139,37 +135,76 @@ class FirebaseRoomRepository {
             .await()
     }
 
-    fun listenToRoom(
-        roomCode: String,
-        onUpdate: (Boolean, Boolean, String, Boolean, String, Double, Boolean, String?, String?) -> Unit
-    ): ListenerRegistration {
-        return db.collection("rooms")
-            .document(roomCode)
+    fun getRoomStatus(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                if (snapshot != null && snapshot.exists()) {
-                    val requestReceived = snapshot.getBoolean("requestReceived") ?: false
-                    val controllerApproved = snapshot.getBoolean("controllerApproved") ?: false
-                    val status = snapshot.getString("status") ?: "waiting"
-                    val captureRequest = snapshot.getBoolean("captureRequest") ?: false
-                    val lensFacing = snapshot.getString("lensFacing") ?: "back"
-                    val zoomLevel = snapshot.getDouble("zoomLevel") ?: 1.0
-                    val flashEnabled = snapshot.getBoolean("flashEnabled") ?: false
-                    val offer = snapshot.getString("offer")
-                    val answer = snapshot.getString("answer")
-
-                    onUpdate(
-                        requestReceived,
-                        controllerApproved,
-                        status,
-                        captureRequest,
-                        lensFacing,
-                        zoomLevel,
-                        flashEnabled,
-                        offer,
-                        answer
-                    )
-                }
+                snapshot?.getString("status")?.let { trySend(it) }
             }
+        awaitClose { listener.remove() }
+    }
+
+    fun getLensFacing(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getString("lensFacing")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getZoomLevel(roomCode: String): Flow<Double> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getDouble("zoomLevel")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFlashEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getBoolean("flashEnabled")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getCaptureRequest(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getBoolean("captureRequest")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getRequestReceived(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getBoolean("requestReceived")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getControllerApproved(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                snapshot?.getBoolean("controllerApproved")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getOfferSdp(roomCode: String): Flow<String?> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getString("offer"))
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getAnswerSdp(roomCode: String): Flow<String?> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getString("answer"))
+            }
+        awaitClose { listener.remove() }
     }
 
     fun listenToControllerIceCandidates(
