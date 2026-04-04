@@ -5,6 +5,8 @@ import android.content.Context
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.widget.Toast
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -58,7 +60,9 @@ fun CameraScreen(
     val offerSdp by repository.getOfferSdp(roomCode).collectAsState(initial = null)
 
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
-    var imageCapture by remember { mutableStateOf(ImageCapture.Builder().build()) }
+    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var camera by remember { mutableStateOf<Camera?>(null) }
+    
     val previewView = remember { PreviewView(context).apply {
         scaleType = PreviewView.ScaleType.FILL_CENTER
     } }
@@ -88,6 +92,14 @@ fun CameraScreen(
     }
 
     fun takePhotoWithCameraX() {
+        val currentCapture = imageCapture ?: run {
+            Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
+            return
+        }
+
+        // Configure flash mode for the capture
+        currentCapture.flashMode = if (firebaseFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+
         val name = "IMG_${System.currentTimeMillis()}.jpg"
         val contentValues = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
@@ -101,12 +113,14 @@ fun CameraScreen(
             contentValues
         ).build()
 
-        imageCapture.takePicture(
+        Log.d("AICameraAssistant", "Taking picture...")
+        currentCapture.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
+                    val msg = "Photo saved: ${output.savedUri}"
+                    Log.d("AICameraAssistant", msg)
                 }
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("AICameraAssistant", "Photo capture failed", exception)
@@ -117,6 +131,7 @@ fun CameraScreen(
 
     LaunchedEffect(firebaseCaptureRequest) {
         if (firebaseCaptureRequest) {
+            Log.d("AICameraAssistant", "Capture request received from Firebase")
             flashAlpha = 0.85f
             takePhotoWithCameraX()
             scope.launch {
@@ -125,13 +140,13 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(lensFacing, firebaseZoomLevel, firebaseFlashEnabled, isStreaming) {
+    // Separate binding effect to avoid re-binding on zoom/flash changes
+    LaunchedEffect(lensFacing, isStreaming) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = try { cameraProviderFuture.get() } catch (e: Exception) { return@LaunchedEffect }
 
         delay(300)
 
-        // Target 1080p for high quality
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
                 ResolutionStrategy(
@@ -141,15 +156,18 @@ fun CameraScreen(
             )
             .build()
 
-        // 1. Local UI Preview (High quality, direct)
         val localPreview = Preview.Builder()
             .setResolutionSelector(resolutionSelector)
             .build()
         localPreview.setSurfaceProvider(previewView.surfaceProvider)
 
-        val useCases = mutableListOf<UseCase>(localPreview, imageCapture)
+        val newImageCapture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            .setResolutionSelector(resolutionSelector)
+            .build()
 
-        // 2. WebRTC Stream (Hidden background use case)
+        val useCases = mutableListOf<UseCase>(localPreview, newImageCapture)
+
         if (isStreaming) {
             val webRtcSurface = WebRtcSessionManager.startWebRtcCameraSource(context)
             if (webRtcSurface != null) {
@@ -165,35 +183,40 @@ fun CameraScreen(
             WebRtcSessionManager.stopLocalCamera()
         }
 
-        imageCapture = ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-            .setResolutionSelector(resolutionSelector)
-            .build()
-
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
             .build()
 
         try {
             cameraProvider.unbindAll()
-            val camera = cameraProvider.bindToLifecycle(
+            val boundCamera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
                 *useCases.toTypedArray()
             )
 
-            val cameraControl = camera.cameraControl
-            val cameraInfo = camera.cameraInfo
-            val zoomState = cameraInfo.zoomState.value
-            val maxZoom = zoomState?.maxZoomRatio ?: 1f
-            val minZoom = zoomState?.minZoomRatio ?: 1f
-            val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
-
-            cameraControl.setZoomRatio(clampedZoom)
-            cameraControl.enableTorch(firebaseFlashEnabled)
+            camera = boundCamera
+            imageCapture = newImageCapture
         } catch (e: Exception) {
             Log.e("CAMERA_BIND", "Camera bind failed", e)
         }
+    }
+
+    // Effect for Zoom changes
+    LaunchedEffect(camera, firebaseZoomLevel) {
+        val currentCamera = camera ?: return@LaunchedEffect
+        val zoomState = currentCamera.cameraInfo.zoomState.value
+        val maxZoom = zoomState?.maxZoomRatio ?: 1f
+        val minZoom = zoomState?.minZoomRatio ?: 1f
+        val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
+        
+        currentCamera.cameraControl.setZoomRatio(clampedZoom)
+    }
+
+    // Effect for Flash/Torch changes
+    LaunchedEffect(camera, firebaseFlashEnabled) {
+        val currentCamera = camera ?: return@LaunchedEffect
+        currentCamera.cameraControl.enableTorch(firebaseFlashEnabled)
     }
 
     LaunchedEffect(flashAlpha) {
@@ -210,7 +233,6 @@ fun CameraScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // ALWAYS use PreviewView for the local display to ensure perfect quality
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize()
@@ -236,11 +258,15 @@ fun CameraScreen(
                 color = Color.Black.copy(alpha = 0.45f),
                 onClick = onBack
             ) {
-                Text(
-                    text = "Back",
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Back",
+                        color = Color.White
+                    )
+                }
             }
 
             Surface(
