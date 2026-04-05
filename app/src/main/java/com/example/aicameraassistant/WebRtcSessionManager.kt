@@ -24,16 +24,11 @@ object WebRtcSessionManager {
     var localAudioTrack: AudioTrack? = null
     var remoteVideoTrack: VideoTrack? = null
 
-    private var videoSource: VideoSource? = null
-    private var audioSource: AudioSource? = null
-    private var surfaceTextureHelper: SurfaceTextureHelper? = null
-    private var cachedSurface: Surface? = null
-
     @Synchronized
     fun initialize(context: Context) {
         if (initialized && _factory != null) return
         
-        Log.d("WEBRTC_INIT", "Initializing WebRtcSessionManager...")
+        Log.d("WEBRTC_LOG", "Initializing WebRtcSessionManager...")
         try {
             val appContext = context.applicationContext
             
@@ -54,22 +49,28 @@ object WebRtcSessionManager {
                 .createPeerConnectionFactory()
 
             initialized = true
-            Log.d("WEBRTC_INIT", "PeerConnectionFactory initialized successfully")
+            Log.d("WEBRTC_LOG", "PeerConnectionFactory initialized successfully")
         } catch (t: Throwable) {
-            Log.e("WEBRTC_INIT", "Critical failure during WebRTC initialization", t)
+            Log.e("WEBRTC_LOG", "Critical failure during WebRTC initialization", t)
         }
     }
 
     private fun buildRtcConfig(): PeerConnection.RTCConfiguration {
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80?transport=udp")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
                 .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer()
         )
         return PeerConnection.RTCConfiguration(iceServers).apply {
-            iceTransportsType = PeerConnection.IceTransportsType.ALL
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            iceTransportsType = PeerConnection.IceTransportsType.ALL
         }
     }
 
@@ -81,8 +82,8 @@ object WebRtcSessionManager {
 
         return try {
             val helper = SurfaceTextureHelper.create("WebRtcCaptureThread", eglBase.eglBaseContext)
-            // Force high texture resolution
-            helper.setTextureSize(1920, 1080)
+            // Force 1080p Portrait texture size for exact camera quality matching
+            helper.setTextureSize(1080, 1920)
             
             val vSource = f.createVideoSource(false)
             val aSource = f.createAudioSource(MediaConstraints())
@@ -106,64 +107,40 @@ object WebRtcSessionManager {
             attachLocalTracksToCameraPeer()
             surface
         } catch (t: Throwable) {
-            Log.e("WEBRTC_CAMERA", "Failed to start camera source", t)
+            Log.e("WEBRTC_LOG", "Failed to start camera source", t)
             null
         }
     }
 
     @Synchronized
     fun stopLocalCamera() {
-        Log.d("WEBRTC_CAMERA", "Stopping local camera...")
+        Log.d("WEBRTC_LOG", "Stopping local camera...")
         try {
             surfaceTextureHelper?.stopListening()
-            
             cachedSurface?.release()
             cachedSurface = null
-
             videoSource?.capturerObserver?.onCapturerStopped()
-            
             localVideoTrack = null
             localAudioTrack = null
-
             surfaceTextureHelper?.dispose()
             surfaceTextureHelper = null
-
             videoSource?.dispose()
             videoSource = null
-
             audioSource?.dispose()
             audioSource = null
         } catch (t: Throwable) {
-            Log.e("WEBRTC_CAMERA", "Error during cleanup", t)
+            Log.e("WEBRTC_LOG", "Error during cleanup", t)
         }
     }
 
     @Synchronized
     fun renderLocalTrack(track: VideoTrack, renderer: SurfaceViewRenderer) {
-        try {
-            track.addSink(renderer)
-        } catch (t: Throwable) {
-            Log.e("WEBRTC_RENDER", "Failed to add sink to local track", t)
-        }
-    }
-
-    @Synchronized
-    fun removeLocalSink(renderer: SurfaceViewRenderer) {
-        localVideoTrack?.removeSink(renderer)
+        track.addSink(renderer)
     }
 
     @Synchronized
     fun renderRemoteTrack(track: VideoTrack, renderer: SurfaceViewRenderer) {
-        try {
-            track.addSink(renderer)
-        } catch (t: Throwable) {
-            Log.e("WEBRTC_RENDER", "Failed to add sink to remote track", t)
-        }
-    }
-
-    @Synchronized
-    fun removeRemoteSink(renderer: SurfaceViewRenderer) {
-        remoteVideoTrack?.removeSink(renderer)
+        track.addSink(renderer)
     }
 
     @Synchronized
@@ -172,34 +149,45 @@ object WebRtcSessionManager {
         val video = localVideoTrack ?: return
 
         try {
-            val alreadyHasVideo = pc.senders.any { it.track()?.id() == video.id() }
-            if (!alreadyHasVideo) {
-                pc.addTrack(video, listOf("STREAM"))
+            var sender = pc.senders.find { it.track()?.id() == video.id() }
+            if (sender == null) {
+                sender = pc.addTrack(video, listOf("STREAM"))
+                Log.d("WEBRTC_LOG", "Video track attached to peer connection")
             }
+            
+            // FORCE HIGH QUALITY PARAMETERS
+            val params = sender.parameters
+            // 1. Never drop resolution, even if network is slow
+            params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+            
+            if (params.encodings.isNotEmpty()) {
+                // 2. Set high bitrate (5 Mbps to 20 Mbps)
+                params.encodings[0].minBitrateBps = 5_000_000
+                params.encodings[0].maxBitrateBps = 20_000_000
+                params.encodings[0].maxFramerate = 30
+            }
+            sender.parameters = params
 
-            localAudioTrack?.let { audio ->
-                val alreadyHasAudio = pc.senders.any { it.track()?.id() == audio.id() }
-                if (!alreadyHasAudio) pc.addTrack(audio, listOf("STREAM"))
-            }
         } catch (t: Throwable) {
-            Log.e("WEBRTC_ATTACH", "Failed to attach tracks", t)
+            Log.e("WEBRTC_LOG", "Failed to attach tracks", t)
         }
     }
 
     @Synchronized
     fun createCameraPeerConnection(onIceCandidate: (IceCandidate) -> Unit): PeerConnection? {
         val f = factory ?: return null
-        if (cameraPeerConnection != null) return cameraPeerConnection
+        cameraPeerConnection?.dispose()
+        cameraPeerConnection = null
 
         try {
             cameraPeerConnection = f.createPeerConnection(
                 buildRtcConfig(),
                 object : PeerConnection.Observer {
                     override fun onIceCandidate(candidate: IceCandidate) = onIceCandidate(candidate)
-                    override fun onTrack(transceiver: RtpTransceiver) {}
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
-                        Log.d("WEBRTC_CAM", "ICE state: $s")
+                        Log.d("WEBRTC_LOG", "Camera ICE state: $s")
                     }
+                    override fun onTrack(transceiver: RtpTransceiver) {}
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
                     override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
                     override fun onIceConnectionReceivingChange(b: Boolean) {}
@@ -213,7 +201,7 @@ object WebRtcSessionManager {
             )
             attachLocalTracksToCameraPeer()
         } catch (t: Throwable) {
-            Log.e("WEBRTC_PC", "Failed to create camera peer connection", t)
+            Log.e("WEBRTC_LOG", "Failed to create camera peer connection", t)
         }
         return cameraPeerConnection
     }
@@ -224,7 +212,8 @@ object WebRtcSessionManager {
         onRemoteTrack: (VideoTrack) -> Unit
     ): PeerConnection? {
         val f = factory ?: return null
-        if (controllerPeerConnection != null) return controllerPeerConnection
+        controllerPeerConnection?.dispose()
+        controllerPeerConnection = null
 
         try {
             controllerPeerConnection = f.createPeerConnection(
@@ -238,10 +227,14 @@ object WebRtcSessionManager {
                             onRemoteTrack(track)
                         }
                     }
-                    override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
+                    override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
+                        Log.d("WEBRTC_LOG", "Controller ICE state: $s")
+                    }
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
                     override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-                    override fun onIceConnectionReceivingChange(b: Boolean) {}
+                    override fun onIceConnectionReceivingChange(b: Boolean) {
+                        Log.d("WEBRTC_LOG", "Controller ICE Receiving Change: $b")
+                    }
                     override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
                     override fun onAddStream(s: MediaStream?) {}
                     override fun onRemoveStream(s: MediaStream?) {}
@@ -255,15 +248,20 @@ object WebRtcSessionManager {
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
         } catch (t: Throwable) {
-            Log.e("WEBRTC_PC", "Failed to create controller peer connection", t)
+            Log.e("WEBRTC_LOG", "Failed to create controller peer connection", t)
         }
         return controllerPeerConnection
     }
 
+    private var videoSource: VideoSource? = null
+    private var audioSource: AudioSource? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private var cachedSurface: Surface? = null
+
     fun sessionDescriptionObserver(
         onCreateSuccess: (SessionDescription) -> Unit = {},
         onSetSuccess: () -> Unit = {},
-        onFailure: (String) -> Unit = { Log.e("WEBRTC_SDP", it) }
+        onFailure: (String) -> Unit = { Log.e("WEBRTC_LOG", "SDP Error: $it") }
     ) = object : SdpObserver {
         override fun onCreateSuccess(desc: SessionDescription) = onCreateSuccess(desc)
         override fun onSetSuccess() = onSetSuccess()
@@ -280,7 +278,7 @@ object WebRtcSessionManager {
             cameraPeerConnection = null
             remoteVideoTrack = null
         } catch (t: Throwable) {
-            Log.e("WEBRTC_INIT", "Error clearing connections", t)
+            Log.e("WEBRTC_LOG", "Error clearing connections", t)
         }
     }
 }

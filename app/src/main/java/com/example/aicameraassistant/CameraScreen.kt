@@ -36,9 +36,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.webrtc.MediaConstraints
-import org.webrtc.RendererCommon
-import org.webrtc.SessionDescription
+import org.webrtc.*
 
 @Composable
 fun CameraScreen(
@@ -71,13 +69,39 @@ fun CameraScreen(
     val isStreaming = roomStatus == "connected"
     var answerCreated by remember { mutableStateOf(false) }
 
+    // Buffer ICE candidates until PeerConnection is ready
+    val pendingCandidates = remember { mutableListOf<IceCandidate>() }
+    var isRemoteDescriptionSet by remember { mutableStateOf(false) }
+
+    DisposableEffect(roomCode) {
+        val registration = repository.listenToControllerIceCandidates(roomCode) { candidate ->
+            val pc = WebRtcSessionManager.cameraPeerConnection
+            if (isRemoteDescriptionSet && pc != null) {
+                pc.addIceCandidate(candidate)
+            } else {
+                pendingCandidates.add(candidate)
+            }
+        }
+        onDispose {
+            registration.remove()
+        }
+    }
+
     LaunchedEffect(offerSdp, isStreaming) {
         if (isStreaming && offerSdp != null && !answerCreated) {
             createAnswer(
                 context = context,
                 roomCode = roomCode,
                 offerSdp = offerSdp!!,
-                repository = repository
+                repository = repository,
+                onRemoteDescriptionSet = {
+                    isRemoteDescriptionSet = true
+                    val pc = WebRtcSessionManager.cameraPeerConnection
+                    if (pc != null) {
+                        pendingCandidates.forEach { pc.addIceCandidate(it) }
+                        pendingCandidates.clear()
+                    }
+                }
             )
             answerCreated = true
         }
@@ -97,7 +121,6 @@ fun CameraScreen(
             return
         }
 
-        // Configure flash mode for the capture
         currentCapture.flashMode = if (firebaseFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
@@ -119,8 +142,7 @@ fun CameraScreen(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    val msg = "Photo saved: ${output.savedUri}"
-                    Log.d("AICameraAssistant", msg)
+                    Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
                 }
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("AICameraAssistant", "Photo capture failed", exception)
@@ -131,7 +153,6 @@ fun CameraScreen(
 
     LaunchedEffect(firebaseCaptureRequest) {
         if (firebaseCaptureRequest) {
-            Log.d("AICameraAssistant", "Capture request received from Firebase")
             flashAlpha = 0.85f
             takePhotoWithCameraX()
             scope.launch {
@@ -140,7 +161,6 @@ fun CameraScreen(
         }
     }
 
-    // Separate binding effect to avoid re-binding on zoom/flash changes
     LaunchedEffect(lensFacing, isStreaming) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = try { cameraProviderFuture.get() } catch (e: Exception) { return@LaunchedEffect }
@@ -202,7 +222,6 @@ fun CameraScreen(
         }
     }
 
-    // Effect for Zoom changes
     LaunchedEffect(camera, firebaseZoomLevel) {
         val currentCamera = camera ?: return@LaunchedEffect
         val zoomState = currentCamera.cameraInfo.zoomState.value
@@ -213,7 +232,6 @@ fun CameraScreen(
         currentCamera.cameraControl.setZoomRatio(clampedZoom)
     }
 
-    // Effect for Flash/Torch changes
     LaunchedEffect(camera, firebaseFlashEnabled) {
         val currentCamera = camera ?: return@LaunchedEffect
         currentCamera.cameraControl.enableTorch(firebaseFlashEnabled)
@@ -229,6 +247,7 @@ fun CameraScreen(
     DisposableEffect(Unit) {
         onDispose {
             WebRtcSessionManager.stopLocalCamera()
+            WebRtcSessionManager.clearConnections()
         }
     }
 
@@ -379,7 +398,8 @@ fun createAnswer(
     context: Context,
     roomCode: String,
     offerSdp: String,
-    repository: FirebaseRoomRepository
+    repository: FirebaseRoomRepository,
+    onRemoteDescriptionSet: () -> Unit
 ) {
     WebRtcSessionManager.initialize(context)
 
@@ -390,7 +410,11 @@ fun createAnswer(
     } ?: return
 
     pc.setRemoteDescription(
-        WebRtcSessionManager.sessionDescriptionObserver(),
+        WebRtcSessionManager.sessionDescriptionObserver(
+            onSetSuccess = {
+                onRemoteDescriptionSet()
+            }
+        ),
         SessionDescription(SessionDescription.Type.OFFER, offerSdp)
     )
 
