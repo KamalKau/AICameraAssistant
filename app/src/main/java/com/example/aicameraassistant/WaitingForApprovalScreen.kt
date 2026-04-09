@@ -17,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -123,8 +122,6 @@ fun WaitingForApprovalScreen(
         WebRtcSessionManager.renderRemoteTrack(track, renderer)
     }
 
-    val streamZoom = firebaseZoomLevel.toFloat().coerceAtLeast(1f)
-
     if (roomStatus != "connected") {
         Column(
             modifier = Modifier
@@ -174,16 +171,12 @@ fun WaitingForApprovalScreen(
                             renderer.init(WebRtcSessionManager.eglBase.eglBaseContext, null)
                             renderer.setMirror(false)
                             renderer.setEnableHardwareScaler(true)
+                            // Match CameraScreen's FIT_CENTER to show exact hardware frame
                             renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                             rendererRef = renderer
                         }
                     },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer(
-                            scaleX = streamZoom,
-                            scaleY = streamZoom
-                        )
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 

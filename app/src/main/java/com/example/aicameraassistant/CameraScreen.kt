@@ -5,7 +5,6 @@ import android.content.Context
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
-import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -62,7 +61,8 @@ fun CameraScreen(
     var camera by remember { mutableStateOf<Camera?>(null) }
     
     val previewView = remember { PreviewView(context).apply {
-        scaleType = PreviewView.ScaleType.FILL_CENTER
+        // Use FIT_CENTER to ensure the entire camera frame is visible without cropping
+        scaleType = PreviewView.ScaleType.FIT_CENTER
     } }
 
     var flashAlpha by remember { mutableFloatStateOf(0f) }
@@ -167,10 +167,11 @@ fun CameraScreen(
 
         delay(300)
 
+        // Set resolution strategy to match 1080p Portrait (1080x1920)
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
                 ResolutionStrategy(
-                    Size(1920, 1080),
+                    Size(1080, 1920),
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
                 )
             )
@@ -251,7 +252,7 @@ fun CameraScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize()
