@@ -5,6 +5,7 @@ import android.content.Context
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.view.Surface
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -16,26 +17,51 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.webrtc.*
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.SessionDescription
 
 @Composable
 fun CameraScreen(
@@ -59,17 +85,20 @@ fun CameraScreen(
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
-    
-    val previewView = remember { PreviewView(context).apply {
-        // Use FIT_CENTER to ensure the entire camera frame is visible without cropping
-        scaleType = PreviewView.ScaleType.FIT_CENTER
-    } }
+
+    var resolvedWidth by remember { mutableIntStateOf(0) }
+    var resolvedHeight by remember { mutableIntStateOf(0) }
+
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
 
     var flashAlpha by remember { mutableFloatStateOf(0f) }
     val isStreaming = roomStatus == "connected"
     var answerCreated by remember { mutableStateOf(false) }
 
-    // Buffer ICE candidates until PeerConnection is ready
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
 
@@ -82,17 +111,16 @@ fun CameraScreen(
                 pendingCandidates.add(candidate)
             }
         }
-        onDispose {
-            registration.remove()
-        }
+        onDispose { registration.remove() }
     }
 
     LaunchedEffect(offerSdp, isStreaming) {
-        if (isStreaming && offerSdp != null && !answerCreated) {
+        val currentOfferSdp = offerSdp
+        if (isStreaming && currentOfferSdp != null && !answerCreated) {
             createAnswer(
                 context = context,
                 roomCode = roomCode,
-                offerSdp = offerSdp!!,
+                offerSdp = currentOfferSdp,
                 repository = repository,
                 onRemoteDescriptionSet = {
                     isRemoteDescriptionSet = true
@@ -121,7 +149,8 @@ fun CameraScreen(
             return
         }
 
-        currentCapture.flashMode = if (firebaseFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+        currentCapture.flashMode =
+            if (firebaseFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
         val contentValues = ContentValues().apply {
@@ -136,7 +165,6 @@ fun CameraScreen(
             contentValues
         ).build()
 
-        Log.d("AICameraAssistant", "Taking picture...")
         currentCapture.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(context),
@@ -144,6 +172,7 @@ fun CameraScreen(
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
                 }
+
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("AICameraAssistant", "Photo capture failed", exception)
                 }
@@ -163,15 +192,21 @@ fun CameraScreen(
 
     LaunchedEffect(lensFacing, isStreaming) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        val cameraProvider = try { cameraProviderFuture.get() } catch (e: Exception) { return@LaunchedEffect }
+        val cameraProvider = try {
+            cameraProviderFuture.get()
+        } catch (_: Exception) {
+            return@LaunchedEffect
+        }
 
         delay(300)
 
-        // Set resolution strategy to match 1080p Portrait (1080x1920)
+        val targetSize = Size(1080, 1920)
+        val targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
                 ResolutionStrategy(
-                    Size(1080, 1920),
+                    targetSize,
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
                 )
             )
@@ -179,30 +214,16 @@ fun CameraScreen(
 
         val localPreview = Preview.Builder()
             .setResolutionSelector(resolutionSelector)
+            .setTargetRotation(targetRotation)
             .build()
+
         localPreview.setSurfaceProvider(previewView.surfaceProvider)
 
         val newImageCapture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
             .setResolutionSelector(resolutionSelector)
+            .setTargetRotation(targetRotation)
             .build()
-
-        val useCases = mutableListOf<UseCase>(localPreview, newImageCapture)
-
-        if (isStreaming) {
-            val webRtcSurface = WebRtcSessionManager.startWebRtcCameraSource(context)
-            if (webRtcSurface != null) {
-                val streamingPreview = Preview.Builder()
-                    .setResolutionSelector(resolutionSelector)
-                    .build()
-                streamingPreview.setSurfaceProvider { request ->
-                    request.provideSurface(webRtcSurface, ContextCompat.getMainExecutor(context)) {}
-                }
-                useCases.add(streamingPreview)
-            }
-        } else {
-            WebRtcSessionManager.stopLocalCamera()
-        }
 
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
@@ -210,13 +231,86 @@ fun CameraScreen(
 
         try {
             cameraProvider.unbindAll()
-            val boundCamera = cameraProvider.bindToLifecycle(
+
+            val firstCamera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                *useCases.toTypedArray()
+                localPreview,
+                newImageCapture
             )
 
-            camera = boundCamera
+            camera = firstCamera
+            imageCapture = newImageCapture
+
+            val rawSize =
+                newImageCapture.resolutionInfo?.resolution
+                    ?: localPreview.resolutionInfo?.resolution
+                    ?: targetSize
+
+            val rotationDegrees =
+                newImageCapture.resolutionInfo?.rotationDegrees
+                    ?: localPreview.resolutionInfo?.rotationDegrees
+                    ?: 0
+
+            val displayedWidth =
+                if (rotationDegrees == 90 || rotationDegrees == 270) rawSize.height else rawSize.width
+            val displayedHeight =
+                if (rotationDegrees == 90 || rotationDegrees == 270) rawSize.width else rawSize.height
+
+            resolvedWidth = displayedWidth
+            resolvedHeight = displayedHeight
+
+            Log.d(
+                "CAMERA_SIZE",
+                "CameraX raw=${rawSize.width}x${rawSize.height}, rotation=$rotationDegrees, displayed=${resolvedWidth}x${resolvedHeight}"
+            )
+            Log.w(
+                "PREVIEW_MATCH",
+                "camera_publish room=$roomCode raw=${rawSize.width}x${rawSize.height} rotation=$rotationDegrees published=${resolvedWidth}x${resolvedHeight}"
+            )
+
+            scope.launch {
+                repository.updatePreviewSize(roomCode, resolvedWidth, resolvedHeight)
+            }
+
+            cameraProvider.unbindAll()
+
+            val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
+
+            if (isStreaming) {
+                val webRtcSurface = WebRtcSessionManager.startWebRtcCameraSource(
+                    context = context,
+                    width = rawSize.width,
+                    height = rawSize.height,
+                    rotationDegrees = rotationDegrees
+                )
+
+                if (webRtcSurface != null) {
+                    val streamingPreview = Preview.Builder()
+                        .setResolutionSelector(resolutionSelector)
+                        .setTargetRotation(targetRotation)
+                        .build()
+
+                    streamingPreview.setSurfaceProvider { request ->
+                        request.provideSurface(
+                            webRtcSurface,
+                            ContextCompat.getMainExecutor(context)
+                        ) {}
+                    }
+
+                    finalUseCases.add(streamingPreview)
+                }
+            } else {
+                WebRtcSessionManager.stopLocalCamera()
+            }
+
+            val finalCamera = cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                *finalUseCases.toTypedArray()
+            )
+
+            camera = finalCamera
             imageCapture = newImageCapture
         } catch (e: Exception) {
             Log.e("CAMERA_BIND", "Camera bind failed", e)
@@ -229,7 +323,6 @@ fun CameraScreen(
         val maxZoom = zoomState?.maxZoomRatio ?: 1f
         val minZoom = zoomState?.minZoomRatio ?: 1f
         val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
-        
         currentCamera.cameraControl.setZoomRatio(clampedZoom)
     }
 
@@ -252,7 +345,11 @@ fun CameraScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize()
@@ -282,10 +379,7 @@ fun CameraScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Back",
-                        color = Color.White
-                    )
+                    Text("Back", color = Color.White)
                 }
             }
 
@@ -348,17 +442,31 @@ fun CameraScreen(
                         )
                     }
 
-                    Text(
-                        text = buildString {
-                            append(if (firebaseLensFacing == "front") "Front" else "Back")
-                            append(" • ")
-                            append("${firebaseZoomLevel}x")
-                            append(" • ")
-                            append(if (firebaseFlashEnabled) "Flash On" else "Flash Off")
-                        },
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontWeight = FontWeight.Medium
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = buildString {
+                                append(if (firebaseLensFacing == "front") "Front" else "Back")
+                                append(" | ")
+                                append("${firebaseZoomLevel}x")
+                                append(" | ")
+                                append(if (firebaseFlashEnabled) "Flash On" else "Flash Off")
+                            },
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = if (resolvedWidth > 0 && resolvedHeight > 0) {
+                                "Hardware: ${resolvedWidth} x ${resolvedHeight}"
+                            } else {
+                                "Hardware: Detecting..."
+                            },
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
 
@@ -369,9 +477,7 @@ fun CameraScreen(
                 ) {
                     Button(
                         onClick = {
-                            scope.launch {
-                                repository.updateApproval(roomCode, true)
-                            }
+                            scope.launch { repository.updateApproval(roomCode, true) }
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -380,12 +486,12 @@ fun CameraScreen(
 
                     Button(
                         onClick = {
-                            scope.launch {
-                                repository.updateApproval(roomCode, false)
-                            }
+                            scope.launch { repository.updateApproval(roomCode, false) }
                         },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
                     ) {
                         Text("Deny")
                     }
@@ -412,9 +518,7 @@ fun createAnswer(
 
     pc.setRemoteDescription(
         WebRtcSessionManager.sessionDescriptionObserver(
-            onSetSuccess = {
-                onRemoteDescriptionSet()
-            }
+            onSetSuccess = { onRemoteDescriptionSet() }
         ),
         SessionDescription(SessionDescription.Type.OFFER, offerSdp)
     )

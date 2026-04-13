@@ -24,14 +24,22 @@ object WebRtcSessionManager {
     var localAudioTrack: AudioTrack? = null
     var remoteVideoTrack: VideoTrack? = null
 
+    private var videoSource: VideoSource? = null
+    private var audioSource: AudioSource? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private var cachedSurface: Surface? = null
+
+    private var captureWidth: Int = 0
+    private var captureHeight: Int = 0
+
     @Synchronized
     fun initialize(context: Context) {
         if (initialized && _factory != null) return
-        
+
         Log.d("WEBRTC_LOG", "Initializing WebRtcSessionManager...")
         try {
             val appContext = context.applicationContext
-            
+
             if (_eglBase == null) {
                 _eglBase = EglBase.create()
             }
@@ -44,8 +52,12 @@ object WebRtcSessionManager {
             val options = PeerConnectionFactory.Options()
             _factory = PeerConnectionFactory.builder()
                 .setOptions(options)
-                .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
-                .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
+                .setVideoEncoderFactory(
+                    DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
+                )
+                .setVideoDecoderFactory(
+                    DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+                )
                 .createPeerConnectionFactory()
 
             initialized = true
@@ -63,10 +75,15 @@ object WebRtcSessionManager {
             PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80?transport=udp")
-                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+                .setUsername("openrelayproject")
+                .setPassword("openrelayproject")
+                .createIceServer(),
             PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
-                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer()
+                .setUsername("openrelayproject")
+                .setPassword("openrelayproject")
+                .createIceServer()
         )
+
         return PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
@@ -75,16 +92,41 @@ object WebRtcSessionManager {
     }
 
     @Synchronized
-    fun startWebRtcCameraSource(context: Context): Surface? {
+    fun startWebRtcCameraSource(
+        context: Context,
+        width: Int,
+        height: Int,
+        rotationDegrees: Int = 0
+    ): Surface? {
         initialize(context)
         val f = factory ?: return null
-        if (surfaceTextureHelper != null) return cachedSurface
+
+        val safeWidth = width.coerceAtLeast(1)
+        val safeHeight = height.coerceAtLeast(1)
+
+        if (
+            surfaceTextureHelper != null &&
+            cachedSurface != null &&
+            captureWidth == safeWidth &&
+            captureHeight == safeHeight
+        ) {
+            return cachedSurface
+        }
+
+        if (
+            surfaceTextureHelper != null &&
+            (captureWidth != safeWidth || captureHeight != safeHeight)
+        ) {
+            stopLocalCamera()
+        }
 
         return try {
-            val helper = SurfaceTextureHelper.create("WebRtcCaptureThread", eglBase.eglBaseContext)
-            // Force 1080p Portrait texture size for exact camera quality matching
-            helper.setTextureSize(1080, 1920)
-            
+            val helper = SurfaceTextureHelper.create(
+                "WebRtcCaptureThread",
+                eglBase.eglBaseContext
+            )
+            helper.setTextureSize(safeWidth, safeHeight)
+
             val vSource = f.createVideoSource(false)
             val aSource = f.createAudioSource(MediaConstraints())
 
@@ -97,13 +139,21 @@ object WebRtcSessionManager {
             videoSource = vSource
             audioSource = aSource
             surfaceTextureHelper = helper
-            
+
             localVideoTrack = f.createVideoTrack("LOCAL_VIDEO", vSource)
             localAudioTrack = f.createAudioTrack("LOCAL_AUDIO", aSource)
-            
+
+            captureWidth = safeWidth
+            captureHeight = safeHeight
+
             val surface = Surface(helper.surfaceTexture)
             cachedSurface = surface
-            
+
+            Log.d(
+                "WEBRTC_LOG",
+                "WebRTC source started with size: ${captureWidth}x${captureHeight}, rotation=$rotationDegrees"
+            )
+
             attachLocalTracksToCameraPeer()
             surface
         } catch (t: Throwable) {
@@ -120,14 +170,21 @@ object WebRtcSessionManager {
             cachedSurface?.release()
             cachedSurface = null
             videoSource?.capturerObserver?.onCapturerStopped()
+
             localVideoTrack = null
             localAudioTrack = null
+
             surfaceTextureHelper?.dispose()
             surfaceTextureHelper = null
+
             videoSource?.dispose()
             videoSource = null
+
             audioSource?.dispose()
             audioSource = null
+
+            captureWidth = 0
+            captureHeight = 0
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Error during cleanup", t)
         }
@@ -154,20 +211,17 @@ object WebRtcSessionManager {
                 sender = pc.addTrack(video, listOf("STREAM"))
                 Log.d("WEBRTC_LOG", "Video track attached to peer connection")
             }
-            
-            // FORCE HIGH QUALITY PARAMETERS
+
             val params = sender.parameters
-            // 1. Never drop resolution, even if network is slow
-            params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
-            
+            params.degradationPreference =
+                RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+
             if (params.encodings.isNotEmpty()) {
-                // 2. Set high bitrate (5 Mbps to 20 Mbps)
                 params.encodings[0].minBitrateBps = 5_000_000
                 params.encodings[0].maxBitrateBps = 20_000_000
                 params.encodings[0].maxFramerate = 30
             }
             sender.parameters = params
-
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Failed to attach tracks", t)
         }
@@ -220,6 +274,7 @@ object WebRtcSessionManager {
                 buildRtcConfig(),
                 object : PeerConnection.Observer {
                     override fun onIceCandidate(candidate: IceCandidate) = onIceCandidate(candidate)
+
                     override fun onTrack(transceiver: RtpTransceiver) {
                         val track = transceiver.receiver.track()
                         if (track is VideoTrack) {
@@ -227,9 +282,11 @@ object WebRtcSessionManager {
                             onRemoteTrack(track)
                         }
                     }
+
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
                         Log.d("WEBRTC_LOG", "Controller ICE state: $s")
                     }
+
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
                     override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
                     override fun onIceConnectionReceivingChange(b: Boolean) {
@@ -243,20 +300,19 @@ object WebRtcSessionManager {
                     override fun onAddTrack(r: RtpReceiver?, ms: Array<out MediaStream>?) {}
                 }
             )
+
             controllerPeerConnection?.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+                RtpTransceiver.RtpTransceiverInit(
+                    RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+                )
             )
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Failed to create controller peer connection", t)
         }
+
         return controllerPeerConnection
     }
-
-    private var videoSource: VideoSource? = null
-    private var audioSource: AudioSource? = null
-    private var surfaceTextureHelper: SurfaceTextureHelper? = null
-    private var cachedSurface: Surface? = null
 
     fun sessionDescriptionObserver(
         onCreateSuccess: (SessionDescription) -> Unit = {},

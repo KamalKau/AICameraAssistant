@@ -28,6 +28,8 @@ class FirebaseRoomRepository {
                 "flashEnabled" to false,
                 "offer" to null,
                 "answer" to null,
+                "previewWidth" to 0L,
+                "previewHeight" to 0L,
                 "createdAt" to System.currentTimeMillis()
             )
 
@@ -83,6 +85,18 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .update("flashEnabled", flashEnabled)
+            .await()
+    }
+
+    suspend fun updatePreviewSize(roomCode: String, width: Int, height: Int) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "previewWidth" to width,
+                    "previewHeight" to height
+                )
+            )
             .await()
     }
 
@@ -163,6 +177,24 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 snapshot?.getBoolean("flashEnabled")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPreviewWidth(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val width = snapshot?.getLong("previewWidth")?.toInt() ?: 0
+                trySend(width)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPreviewHeight(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val height = snapshot?.getLong("previewHeight")?.toInt() ?: 0
+                trySend(height)
             }
         awaitClose { listener.remove() }
     }
