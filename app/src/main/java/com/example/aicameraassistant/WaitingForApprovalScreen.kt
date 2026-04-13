@@ -111,21 +111,6 @@ fun WaitingForApprovalScreen(
     val controllerDisplayWidth = normalizedRemoteFrameWidth
     val controllerDisplayHeight = normalizedRemoteFrameHeight
 
-    LaunchedEffect(
-        cameraPreviewWidth,
-        cameraPreviewHeight,
-        remoteFrameWidth,
-        remoteFrameHeight,
-        remoteFrameRotation,
-        controllerDisplayWidth,
-        controllerDisplayHeight
-    ) {
-        Log.w(
-            "PREVIEW_MATCH",
-            "controller_state room=$roomCode camera=${cameraPreviewWidth}x${cameraPreviewHeight} remote=${remoteFrameWidth}x${remoteFrameHeight} rotation=$remoteFrameRotation normalized=${normalizedRemoteFrameWidth}x${normalizedRemoteFrameHeight} display=${controllerDisplayWidth}x${controllerDisplayHeight}"
-        )
-    }
-
     DisposableEffect(roomCode) {
         val registration = repository.listenToCameraIceCandidates(roomCode) { candidate ->
             scope.launch(Dispatchers.Main) {
@@ -263,15 +248,14 @@ fun WaitingForApprovalScreen(
                                         videoHeight: Int,
                                         rotation: Int
                                     ) {
-                                        Log.d(
-                                            "WEBRTC_LOG",
-                                            "Controller remote frame changed: ${videoWidth}x${videoHeight}, rotation=$rotation"
-                                        )
-                                        Log.w(
-                                            "PREVIEW_MATCH",
-                                            "controller_remote_frame room=$roomCode frame=${videoWidth}x${videoHeight} rotation=$rotation"
-                                        )
                                         scope.launch(Dispatchers.Main) {
+                                            val frameChanged =
+                                                remoteFrameWidth != videoWidth ||
+                                                    remoteFrameHeight != videoHeight ||
+                                                    remoteFrameRotation != rotation
+
+                                            if (!frameChanged) return@launch
+
                                             remoteFrameWidth = videoWidth
                                             remoteFrameHeight = videoHeight
                                             remoteFrameRotation = rotation

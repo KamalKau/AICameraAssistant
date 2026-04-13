@@ -278,10 +278,16 @@ fun CameraScreen(
             val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
 
             if (isStreaming) {
+                val streamMaxLongEdge = 1280
+                val streamScale =
+                    (streamMaxLongEdge.toFloat() / maxOf(rawSize.width, rawSize.height)).coerceAtMost(1f)
+                val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
+                val streamHeight = (rawSize.height * streamScale).toInt().coerceAtLeast(1)
+
                 val webRtcSurface = WebRtcSessionManager.startWebRtcCameraSource(
                     context = context,
-                    width = rawSize.width,
-                    height = rawSize.height,
+                    width = streamWidth,
+                    height = streamHeight,
                     rotationDegrees = rotationDegrees
                 )
 

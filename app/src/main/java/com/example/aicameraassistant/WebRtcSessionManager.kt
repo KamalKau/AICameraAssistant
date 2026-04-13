@@ -214,11 +214,11 @@ object WebRtcSessionManager {
 
             val params = sender.parameters
             params.degradationPreference =
-                RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
 
             if (params.encodings.isNotEmpty()) {
-                params.encodings[0].minBitrateBps = 5_000_000
-                params.encodings[0].maxBitrateBps = 20_000_000
+                params.encodings[0].minBitrateBps = 500_000
+                params.encodings[0].maxBitrateBps = 2_500_000
                 params.encodings[0].maxFramerate = 30
             }
             sender.parameters = params
