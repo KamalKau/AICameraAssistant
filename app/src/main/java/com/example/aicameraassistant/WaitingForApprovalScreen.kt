@@ -1,6 +1,7 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -40,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,6 +62,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -80,6 +84,7 @@ fun WaitingForApprovalScreen(
     val scope = rememberCoroutineScope()
 
     val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
+    val connectionState by WebRtcSessionManager.controllerConnectionState.collectAsState()
     val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
     val firebaseMinZoom by repository.getMinZoom(roomCode).collectAsState(initial = 1.0)
@@ -101,6 +106,8 @@ fun WaitingForApprovalScreen(
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
     var remoteFrameRotation by remember { mutableIntStateOf(0) }
+    var lastFrameTimestampMs by remember(roomCode) { mutableLongStateOf(0L) }
+    var uiNowMs by remember(roomCode) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
 
@@ -131,6 +138,39 @@ fun WaitingForApprovalScreen(
     val controllerDisplayHeight = normalizedRemoteFrameHeight
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
+    val connectionBadgeText = when (connectionState) {
+        AppConnectionState.IDLE,
+        AppConnectionState.CONNECTING -> "Connecting..."
+        AppConnectionState.CONNECTED -> "Connected"
+        AppConnectionState.WEAK_NETWORK -> "Weak network"
+        AppConnectionState.RETRYING -> "Reconnecting..."
+        AppConnectionState.DISCONNECTED -> "Disconnected"
+    }
+    val connectionBadgeColor = when (connectionState) {
+        AppConnectionState.CONNECTED -> Color(0xFF4CAF50)
+        AppConnectionState.WEAK_NETWORK -> Color(0xFFFFB300)
+        AppConnectionState.RETRYING,
+        AppConnectionState.CONNECTING,
+        AppConnectionState.IDLE -> Color(0xFFFF9800)
+        AppConnectionState.DISCONNECTED -> Color(0xFFF44336)
+    }
+    val connectionWarningText = when (connectionState) {
+        AppConnectionState.WEAK_NETWORK -> "Weak network"
+        AppConnectionState.RETRYING -> "Reconnecting..."
+        AppConnectionState.DISCONNECTED -> "Connection lost"
+        else -> null
+    }
+    val isVideoStalled =
+        roomStatus == "connected" &&
+            lastFrameTimestampMs > 0L &&
+            uiNowMs - lastFrameTimestampMs > 2_500L
+    val stalledVideoText = when (connectionState) {
+        AppConnectionState.WEAK_NETWORK -> "Video paused. Weak network"
+        AppConnectionState.RETRYING -> "Reconnecting video..."
+        AppConnectionState.DISCONNECTED -> "Connection lost"
+        AppConnectionState.CONNECTED -> "Video paused. Network unstable"
+        else -> "Connecting video..."
+    }
     val zoomPresets = remember(minZoom, maxZoom) {
         listOf(1.0, 2.0, 3.0, 5.0)
             .filter { it in minZoom..maxZoom }
@@ -273,6 +313,13 @@ fun WaitingForApprovalScreen(
         }
     }
 
+    LaunchedEffect(roomStatus) {
+        while (roomStatus == "connected" && isActive) {
+            uiNowMs = SystemClock.elapsedRealtime()
+            delay(750)
+        }
+    }
+
     if (roomStatus != "connected") {
         Column(
             modifier = Modifier
@@ -370,6 +417,7 @@ fun WaitingForApprovalScreen(
                                 object : RendererCommon.RendererEvents {
                                     override fun onFirstFrameRendered() {
                                         Log.d("WEBRTC_LOG", "Controller first remote frame rendered")
+                                        lastFrameTimestampMs = SystemClock.elapsedRealtime()
                                     }
 
                                     override fun onFrameResolutionChanged(
@@ -388,6 +436,7 @@ fun WaitingForApprovalScreen(
                                             remoteFrameWidth = videoWidth
                                             remoteFrameHeight = videoHeight
                                             remoteFrameRotation = rotation
+                                            lastFrameTimestampMs = SystemClock.elapsedRealtime()
 
                                             val fittedWidth =
                                                 if (rotation == 90 || rotation == 270) {
@@ -444,6 +493,42 @@ fun WaitingForApprovalScreen(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+
+                if (isVideoStalled) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF111111).copy(alpha = 0.34f))
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(22.dp))
+                            .padding(horizontal = 18.dp, vertical = 14.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(connectionBadgeColor)
+                            )
+                            Text(
+                                text = stalledVideoText,
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Preview will resume when connection improves",
+                                color = Color.White.copy(alpha = 0.78f),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
             }
 
             Row(
@@ -523,6 +608,47 @@ fun WaitingForApprovalScreen(
                     .padding(top = 88.dp, start = 16.dp, end = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Box(
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(connectionBadgeColor)
+                        )
+                        Text(
+                            text = connectionBadgeText,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                if (connectionWarningText != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(18.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = connectionWarningText,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Box(
                     modifier = Modifier
                         .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(20.dp))

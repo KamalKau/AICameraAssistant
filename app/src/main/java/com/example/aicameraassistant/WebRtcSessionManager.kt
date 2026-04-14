@@ -3,11 +3,34 @@ package com.example.aicameraassistant
 import android.content.Context
 import android.util.Log
 import android.view.Surface
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.webrtc.*
 
+enum class AppConnectionState {
+    IDLE,
+    CONNECTING,
+    CONNECTED,
+    WEAK_NETWORK,
+    RETRYING,
+    DISCONNECTED
+}
+
 object WebRtcSessionManager {
+    private enum class ConnectionSide {
+        CAMERA,
+        CONTROLLER
+    }
 
     private var initialized = false
+    private val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var _eglBase: EglBase? = null
     val eglBase: EglBase
@@ -31,6 +54,18 @@ object WebRtcSessionManager {
 
     private var captureWidth: Int = 0
     private var captureHeight: Int = 0
+
+    private val _cameraConnectionState = MutableStateFlow(AppConnectionState.IDLE)
+    val cameraConnectionState: StateFlow<AppConnectionState> = _cameraConnectionState.asStateFlow()
+
+    private val _controllerConnectionState = MutableStateFlow(AppConnectionState.IDLE)
+    val controllerConnectionState: StateFlow<AppConnectionState> =
+        _controllerConnectionState.asStateFlow()
+
+    private var cameraDisconnectJob: Job? = null
+    private var controllerDisconnectJob: Job? = null
+    private var cameraWeakNetworkJob: Job? = null
+    private var controllerWeakNetworkJob: Job? = null
 
     @Synchronized
     fun initialize(context: Context) {
@@ -232,6 +267,8 @@ object WebRtcSessionManager {
         val f = factory ?: return null
         cameraPeerConnection?.dispose()
         cameraPeerConnection = null
+        cancelConnectionJobs(ConnectionSide.CAMERA)
+        updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.CONNECTING)
 
         try {
             cameraPeerConnection = f.createPeerConnection(
@@ -240,6 +277,7 @@ object WebRtcSessionManager {
                     override fun onIceCandidate(candidate: IceCandidate) = onIceCandidate(candidate)
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
                         Log.d("WEBRTC_LOG", "Camera ICE state: $s")
+                        handleIceConnectionChange(ConnectionSide.CAMERA, s)
                     }
                     override fun onTrack(transceiver: RtpTransceiver) {}
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
@@ -268,6 +306,8 @@ object WebRtcSessionManager {
         val f = factory ?: return null
         controllerPeerConnection?.dispose()
         controllerPeerConnection = null
+        cancelConnectionJobs(ConnectionSide.CONTROLLER)
+        updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.CONNECTING)
 
         try {
             controllerPeerConnection = f.createPeerConnection(
@@ -285,6 +325,7 @@ object WebRtcSessionManager {
 
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
                         Log.d("WEBRTC_LOG", "Controller ICE state: $s")
+                        handleIceConnectionChange(ConnectionSide.CONTROLLER, s)
                     }
 
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
@@ -328,13 +369,134 @@ object WebRtcSessionManager {
     @Synchronized
     fun clearConnections() {
         try {
+            cancelConnectionJobs(ConnectionSide.CAMERA)
+            cancelConnectionJobs(ConnectionSide.CONTROLLER)
             controllerPeerConnection?.dispose()
             controllerPeerConnection = null
             cameraPeerConnection?.dispose()
             cameraPeerConnection = null
             remoteVideoTrack = null
+            updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.DISCONNECTED)
+            updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.DISCONNECTED)
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Error clearing connections", t)
+        }
+    }
+
+    private fun handleIceConnectionChange(
+        side: ConnectionSide,
+        state: PeerConnection.IceConnectionState?
+    ) {
+        when (state) {
+            PeerConnection.IceConnectionState.NEW,
+            PeerConnection.IceConnectionState.CHECKING -> {
+                if (getConnectionStateFlow(side).value != AppConnectionState.CONNECTED) {
+                    updateConnectionState(side, AppConnectionState.CONNECTING)
+                }
+            }
+
+            PeerConnection.IceConnectionState.CONNECTED,
+            PeerConnection.IceConnectionState.COMPLETED -> {
+                val wasRetrying =
+                    getConnectionStateFlow(side).value == AppConnectionState.RETRYING
+                cancelDisconnectJob(side)
+                if (wasRetrying) {
+                    updateConnectionState(side, AppConnectionState.WEAK_NETWORK)
+                    scheduleWeakNetworkReset(side)
+                } else {
+                    cancelWeakNetworkJob(side)
+                    updateConnectionState(side, AppConnectionState.CONNECTED)
+                }
+            }
+
+            PeerConnection.IceConnectionState.DISCONNECTED -> {
+                cancelWeakNetworkJob(side)
+                updateConnectionState(side, AppConnectionState.RETRYING)
+                scheduleDisconnectTimeout(side)
+            }
+
+            PeerConnection.IceConnectionState.FAILED,
+            PeerConnection.IceConnectionState.CLOSED -> {
+                cancelConnectionJobs(side)
+                updateConnectionState(side, AppConnectionState.DISCONNECTED)
+            }
+
+            null -> Unit
+        }
+    }
+
+    private fun scheduleDisconnectTimeout(side: ConnectionSide) {
+        if (getDisconnectJob(side)?.isActive == true) return
+
+        val job = connectionScope.launch {
+            delay(5_000)
+            updateConnectionState(side, AppConnectionState.DISCONNECTED)
+        }
+        setDisconnectJob(side, job)
+    }
+
+    private fun scheduleWeakNetworkReset(side: ConnectionSide) {
+        cancelWeakNetworkJob(side)
+        val job = connectionScope.launch {
+            delay(2_500)
+            if (getConnectionStateFlow(side).value == AppConnectionState.WEAK_NETWORK) {
+                updateConnectionState(side, AppConnectionState.CONNECTED)
+            }
+        }
+        setWeakNetworkJob(side, job)
+    }
+
+    private fun cancelConnectionJobs(side: ConnectionSide) {
+        cancelDisconnectJob(side)
+        cancelWeakNetworkJob(side)
+    }
+
+    private fun cancelDisconnectJob(side: ConnectionSide) {
+        getDisconnectJob(side)?.cancel()
+        setDisconnectJob(side, null)
+    }
+
+    private fun cancelWeakNetworkJob(side: ConnectionSide) {
+        getWeakNetworkJob(side)?.cancel()
+        setWeakNetworkJob(side, null)
+    }
+
+    private fun updateConnectionState(side: ConnectionSide, state: AppConnectionState) {
+        val flow = getConnectionStateFlow(side)
+        if (flow.value != state) {
+            flow.value = state
+        }
+    }
+
+    private fun getConnectionStateFlow(side: ConnectionSide): MutableStateFlow<AppConnectionState> =
+        when (side) {
+            ConnectionSide.CAMERA -> _cameraConnectionState
+            ConnectionSide.CONTROLLER -> _controllerConnectionState
+        }
+
+    private fun getDisconnectJob(side: ConnectionSide): Job? =
+        when (side) {
+            ConnectionSide.CAMERA -> cameraDisconnectJob
+            ConnectionSide.CONTROLLER -> controllerDisconnectJob
+        }
+
+    private fun setDisconnectJob(side: ConnectionSide, job: Job?) {
+        when (side) {
+            ConnectionSide.CAMERA -> cameraDisconnectJob = job
+            ConnectionSide.CONTROLLER -> controllerDisconnectJob = job
+        }
+    }
+
+    private fun getWeakNetworkJob(side: ConnectionSide): Job? =
+        when (side) {
+            ConnectionSide.CAMERA -> cameraWeakNetworkJob
+            ConnectionSide.CONTROLLER -> controllerWeakNetworkJob
+        }
+
+    private fun setWeakNetworkJob(side: ConnectionSide, job: Job?) {
+        when (side) {
+            ConnectionSide.CAMERA -> cameraWeakNetworkJob = job
+            ConnectionSide.CONTROLLER -> controllerWeakNetworkJob = job
         }
     }
 }

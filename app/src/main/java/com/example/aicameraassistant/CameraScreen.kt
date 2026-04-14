@@ -75,6 +75,7 @@ fun CameraScreen(
     val scope = rememberCoroutineScope()
 
     val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
+    val connectionState by WebRtcSessionManager.cameraConnectionState.collectAsState()
     val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashEnabled by repository.getFlashEnabled(roomCode).collectAsState(initial = false)
@@ -104,6 +105,45 @@ fun CameraScreen(
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
+    val sessionIsActive = roomStatus == "connected"
+    val statusText = when {
+        !sessionIsActive -> when (roomStatus) {
+            "request_received" -> "Connection request received"
+            "denied" -> "Request denied"
+            else -> "Waiting for controller"
+        }
+
+        else -> when (connectionState) {
+            AppConnectionState.IDLE,
+            AppConnectionState.CONNECTING -> "Connecting..."
+            AppConnectionState.CONNECTED -> "Controller connected"
+            AppConnectionState.WEAK_NETWORK -> "Weak network"
+            AppConnectionState.RETRYING -> "Reconnecting..."
+            AppConnectionState.DISCONNECTED -> "Controller disconnected"
+        }
+    }
+    val statusDotColor = when {
+        !sessionIsActive -> when (roomStatus) {
+            "request_received" -> Color(0xFFFF9800)
+            "denied" -> Color(0xFFF44336)
+            else -> Color(0xFFFFC107)
+        }
+
+        else -> when (connectionState) {
+            AppConnectionState.CONNECTED -> Color(0xFF4CAF50)
+            AppConnectionState.WEAK_NETWORK -> Color(0xFFFFB300)
+            AppConnectionState.RETRYING,
+            AppConnectionState.CONNECTING,
+            AppConnectionState.IDLE -> Color(0xFFFF9800)
+            AppConnectionState.DISCONNECTED -> Color(0xFFF44336)
+        }
+    }
+    val transientWarningText = when (connectionState) {
+        AppConnectionState.WEAK_NETWORK -> "Network unstable"
+        AppConnectionState.RETRYING -> "Reconnecting..."
+        AppConnectionState.DISCONNECTED -> "Connection lost"
+        else -> null
+    }
 
     fun shutdownHostSession(exitScreen: Boolean) {
         if (isEndingSession) return
@@ -422,6 +462,22 @@ fun CameraScreen(
             )
         }
 
+        if (sessionIsActive && transientWarningText != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 140.dp)
+                    .background(Color.Black.copy(alpha = 0.52f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 14.dp, vertical = 9.dp)
+            ) {
+                Text(
+                    text = transientWarningText,
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -468,23 +524,11 @@ fun CameraScreen(
                         modifier = Modifier
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(
-                                when (roomStatus) {
-                                    "connected" -> Color(0xFF4CAF50)
-                                    "request_received" -> Color(0xFFFF9800)
-                                    "denied" -> Color(0xFFF44336)
-                                    else -> Color(0xFFFFC107)
-                                }
-                            )
+                            .background(statusDotColor)
                     )
 
                     Text(
-                        text = when (roomStatus) {
-                            "connected" -> "Controller connected"
-                            "request_received" -> "Connection request received"
-                            "denied" -> "Request denied"
-                            else -> "Waiting for controller"
-                        },
+                        text = statusText,
                         color = Color.White,
                         fontWeight = FontWeight.Medium
                     )
