@@ -326,7 +326,7 @@ fun CameraScreen(
             val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
 
             if (isStreaming) {
-                val streamMaxLongEdge = 1280
+                val streamMaxLongEdge = 2560
                 val streamScale =
                     (streamMaxLongEdge.toFloat() / maxOf(rawSize.width, rawSize.height)).coerceAtMost(1f)
                 val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
