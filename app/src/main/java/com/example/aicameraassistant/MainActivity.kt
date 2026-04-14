@@ -84,7 +84,10 @@ fun MainContent() {
                 CameraScreen(
                     roomCode = cameraRoomCode,
                     repository = repository,
-                    onBack = { currentScreen = "home" }
+                    onBack = {
+                        currentScreen = "home"
+                        cameraRoomCode = generateRoomCode()
+                    }
                 )
             }
 
@@ -107,7 +110,10 @@ fun MainContent() {
                 WaitingForApprovalScreen(
                     roomCode = pendingRoomCode,
                     repository = repository,
-                    onBack = { currentScreen = "home" }
+                    onBack = {
+                        currentScreen = "home"
+                        pendingRoomCode = ""
+                    }
                 )
             }
 
@@ -115,6 +121,9 @@ fun MainContent() {
                 HomeScreen(
                     onStartCamera = {
                         scope.launch {
+                            if (cameraRoomCode.isBlank()) {
+                                cameraRoomCode = generateRoomCode()
+                            }
                             repository.createRoom(cameraRoomCode)
                             currentScreen = "camera"
                         }

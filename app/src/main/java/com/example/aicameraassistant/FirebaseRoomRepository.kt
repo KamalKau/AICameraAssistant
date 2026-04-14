@@ -25,6 +25,8 @@ class FirebaseRoomRepository {
                 "captureRequest" to false,
                 "lensFacing" to "back",
                 "zoomLevel" to 1.0,
+                "minZoom" to 1.0,
+                "maxZoom" to 1.0,
                 "flashEnabled" to false,
                 "offer" to null,
                 "answer" to null,
@@ -81,6 +83,18 @@ class FirebaseRoomRepository {
             .await()
     }
 
+    suspend fun updateZoomRange(roomCode: String, minZoom: Double, maxZoom: Double) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "minZoom" to minZoom,
+                    "maxZoom" to maxZoom
+                )
+            )
+            .await()
+    }
+
     suspend fun updateFlashEnabled(roomCode: String, flashEnabled: Boolean) {
         db.collection("rooms")
             .document(roomCode)
@@ -119,6 +133,36 @@ class FirebaseRoomRepository {
             .document(roomCode)
             .update("answer", answerSdp)
             .await()
+    }
+
+    suspend fun endSession(roomCode: String) {
+        val roomRef = db.collection("rooms").document(roomCode)
+
+        clearIceCandidates(roomCode)
+
+        roomRef.update(
+            mapOf(
+                "status" to "ended",
+                "requestReceived" to false,
+                "controllerApproved" to false,
+                "captureRequest" to false,
+                "lensFacing" to "back",
+                "zoomLevel" to 1.0,
+                "minZoom" to 1.0,
+                "maxZoom" to 1.0,
+                "flashEnabled" to false,
+                "offer" to null,
+                "answer" to null,
+                "previewWidth" to 0L,
+                "previewHeight" to 0L
+            )
+        ).await()
+    }
+
+    suspend fun clearIceCandidates(roomCode: String) {
+        val roomRef = db.collection("rooms").document(roomCode)
+        clearCollection(roomRef.collection("iceCandidatesController"))
+        clearCollection(roomRef.collection("iceCandidatesCamera"))
     }
 
     suspend fun addControllerIceCandidate(roomCode: String, candidate: IceCandidate) {
@@ -169,6 +213,22 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 snapshot?.getDouble("zoomLevel")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getMinZoom(roomCode: String): Flow<Double> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getDouble("minZoom") ?: 1.0)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getMaxZoom(roomCode: String): Flow<Double> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getDouble("maxZoom") ?: 1.0)
             }
         awaitClose { listener.remove() }
     }
@@ -279,5 +339,14 @@ class FirebaseRoomRepository {
                     }
                 }
             }
+    }
+
+    private suspend fun clearCollection(
+        collection: com.google.firebase.firestore.CollectionReference
+    ) {
+        val snapshot = collection.get().await()
+        snapshot.documents.forEach { document ->
+            document.reference.delete().await()
+        }
     }
 }

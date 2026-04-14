@@ -2,6 +2,7 @@ package com.example.aicameraassistant
 
 import android.content.Context
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,9 +27,12 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -43,8 +48,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,12 +61,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.RendererCommon
 import org.webrtc.SessionDescription
 import org.webrtc.VideoTrack
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun WaitingForApprovalScreen(
     roomCode: String,
@@ -70,6 +82,8 @@ fun WaitingForApprovalScreen(
     val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
     val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
+    val firebaseMinZoom by repository.getMinZoom(roomCode).collectAsState(initial = 1.0)
+    val firebaseMaxZoom by repository.getMaxZoom(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashEnabled by repository.getFlashEnabled(roomCode).collectAsState(initial = false)
     val firebaseAnswer by repository.getAnswerSdp(roomCode).collectAsState(initial = null)
     val cameraPreviewWidth by repository.getPreviewWidth(roomCode).collectAsState(initial = 0)
@@ -78,6 +92,11 @@ fun WaitingForApprovalScreen(
     var previewContainerRef by remember { mutableStateOf<ControllerPreviewContainer?>(null) }
     var remoteTrack by remember { mutableStateOf<VideoTrack?>(null) }
     var offerCreated by remember(roomCode) { mutableStateOf(false) }
+    var hasSeenConnectedState by remember(roomCode) { mutableStateOf(false) }
+    var isEndingSession by remember(roomCode) { mutableStateOf(false) }
+    var zoomUiValue by remember(roomCode) { mutableStateOf(1f) }
+    var isZoomDragging by remember(roomCode) { mutableStateOf(false) }
+    var lastSentZoom by remember(roomCode) { mutableStateOf(Double.NaN) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -110,6 +129,51 @@ fun WaitingForApprovalScreen(
 
     val controllerDisplayWidth = normalizedRemoteFrameWidth
     val controllerDisplayHeight = normalizedRemoteFrameHeight
+    val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
+    val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
+    val zoomPresets = remember(minZoom, maxZoom) {
+        listOf(1.0, 2.0, 3.0, 5.0)
+            .filter { it in minZoom..maxZoom }
+            .ifEmpty { listOf(minZoom) }
+    }
+
+    fun shutdownControllerSession(exitScreen: Boolean) {
+        if (isEndingSession) return
+
+        isEndingSession = true
+        remoteTrack?.removeSink(previewContainerRef?.renderer)
+        previewContainerRef?.renderer?.release()
+        previewContainerRef = null
+        remoteTrack = null
+        WebRtcSessionManager.stopLocalCamera()
+        WebRtcSessionManager.clearConnections()
+
+        if (exitScreen) {
+            onBack()
+        }
+    }
+
+    fun endControllerSession() {
+        if (isEndingSession) return
+
+        scope.launch {
+            runCatching { repository.endSession(roomCode) }
+                .onFailure { Log.e("SESSION_END", "Failed to end controller session", it) }
+            shutdownControllerSession(exitScreen = true)
+        }
+    }
+
+    fun sendZoomUpdate(zoom: Float, force: Boolean = false) {
+        val clampedZoom = zoom.toDouble().coerceIn(minZoom, maxZoom)
+        if (!force && !lastSentZoom.isNaN() && abs(lastSentZoom - clampedZoom) < 0.02) {
+            return
+        }
+
+        lastSentZoom = clampedZoom
+        scope.launch {
+            repository.updateZoomLevel(roomCode, clampedZoom)
+        }
+    }
 
     DisposableEffect(roomCode) {
         val registration = repository.listenToCameraIceCandidates(roomCode) { candidate ->
@@ -138,6 +202,21 @@ fun WaitingForApprovalScreen(
     }
 
     LaunchedEffect(roomStatus) {
+        if (roomStatus == "connected") {
+            hasSeenConnectedState = true
+        }
+
+        if (roomStatus == "ended") {
+            Toast.makeText(context, "Session ended by camera", Toast.LENGTH_SHORT).show()
+            shutdownControllerSession(exitScreen = true)
+            return@LaunchedEffect
+        }
+
+        if (hasSeenConnectedState && roomStatus == "waiting") {
+            shutdownControllerSession(exitScreen = true)
+            return@LaunchedEffect
+        }
+
         if (roomStatus == "connected" && !offerCreated) {
             createOffer(
                 context = context,
@@ -188,6 +267,12 @@ fun WaitingForApprovalScreen(
         track.addSink(renderer)
     }
 
+    LaunchedEffect(firebaseZoomLevel, minZoom, maxZoom, isZoomDragging) {
+        if (!isZoomDragging) {
+            zoomUiValue = firebaseZoomLevel.toFloat().coerceIn(minZoom.toFloat(), maxZoom.toFloat())
+        }
+    }
+
     if (roomStatus != "connected") {
         Column(
             modifier = Modifier
@@ -216,8 +301,30 @@ fun WaitingForApprovalScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            Button(onClick = onBack) {
-                Text("Go Back")
+            Button(
+                onClick = {
+                    if (hasSeenConnectedState || roomStatus == "request_received") {
+                        endControllerSession()
+                    } else {
+                        onBack()
+                    }
+                },
+                enabled = !isEndingSession,
+                colors = if (hasSeenConnectedState || roomStatus == "request_received") {
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    ButtonDefaults.buttonColors()
+                }
+            ) {
+                Text(
+                    if (hasSeenConnectedState || roomStatus == "request_received") {
+                        if (isEndingSession) "Ending..." else "End Session"
+                    } else {
+                        "Go Back"
+                    }
+                )
             }
         }
     } else {
@@ -229,7 +336,29 @@ fun WaitingForApprovalScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clipToBounds(),
+                    .clipToBounds()
+                    .pointerInput(minZoom, maxZoom) {
+                        detectTransformGestures { _, _, zoomChange, _ ->
+                            if (zoomChange == 1f) return@detectTransformGestures
+
+                            val nextZoom =
+                                (zoomUiValue * zoomChange).coerceIn(
+                                    minZoom.toFloat(),
+                                    maxZoom.toFloat()
+                                )
+
+                            isZoomDragging = true
+                            zoomUiValue = nextZoom
+                            sendZoomUpdate(nextZoom)
+                        }
+                    }
+                    .pointerInteropFilter { motionEvent ->
+                        if (motionEvent.pointerCount <= 1 && isZoomDragging) {
+                            isZoomDragging = false
+                            sendZoomUpdate(zoomUiValue, force = true)
+                        }
+                        false
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 AndroidView(
@@ -326,17 +455,30 @@ fun WaitingForApprovalScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = onBack,
+                    onClick = { endControllerSession() },
                     modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close",
+                        contentDescription = "End Session",
                         tint = Color.White
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { endControllerSession() },
+                        enabled = !isEndingSession,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(if (isEndingSession) "Ending..." else "End Session")
+                    }
+
                     IconButton(
                         onClick = {
                             scope.launch {
@@ -420,25 +562,87 @@ fun WaitingForApprovalScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = 32.dp),
+                    .padding(bottom = 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(30.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    ZoomButton(text = "1x", isSelected = firebaseZoomLevel == 1.0) {
-                        scope.launch { repository.updateZoomLevel(roomCode, 1.0) }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFFFFC83D).copy(alpha = 0.7f),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 7.dp)
+                    ) {
+                        Text(
+                            text = String.format(
+                                "%.1fx",
+                                zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat())
+                            ),
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
+                        )
                     }
-                    ZoomButton(text = "2x", isSelected = firebaseZoomLevel == 2.0) {
-                        scope.launch { repository.updateZoomLevel(roomCode, 2.0) }
+
+                    Row(
+                        modifier = Modifier
+                            .background(
+                                Color(0xFF111111).copy(alpha = 0.9f),
+                                RoundedCornerShape(24.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = Color.White.copy(alpha = 0.1f),
+                                shape = RoundedCornerShape(24.dp)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        zoomPresets.forEach { preset ->
+                            ZoomPresetPill(
+                                text = "${preset.roundToInt()}x",
+                                isSelected = abs(zoomUiValue - preset.toFloat()) < 0.15f,
+                                onClick = {
+                                    val presetValue = preset.toFloat()
+                                    zoomUiValue = presetValue
+                                    isZoomDragging = false
+                                    sendZoomUpdate(presetValue, force = true)
+                                }
+                            )
+                        }
                     }
-                    ZoomButton(text = "3x", isSelected = firebaseZoomLevel == 3.0) {
-                        scope.launch { repository.updateZoomLevel(roomCode, 3.0) }
-                    }
+
+                    Slider(
+                        value = zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat()),
+                        onValueChange = { newValue ->
+                            isZoomDragging = true
+                            zoomUiValue = newValue
+                            sendZoomUpdate(newValue)
+                        },
+                        valueRange = minZoom.toFloat()..maxZoom.toFloat(),
+                        onValueChangeFinished = {
+                            isZoomDragging = false
+                            sendZoomUpdate(zoomUiValue, force = true)
+                        },
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFFFFC83D),
+                            activeTrackColor = Color(0xFFFFC83D),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.16f)
+                        ),
+                        modifier = Modifier.width(292.dp)
+                    )
                 }
 
                 Box(
@@ -461,24 +665,35 @@ fun WaitingForApprovalScreen(
 }
 
 @Composable
-fun ZoomButton(
+fun ZoomPresetPill(
     text: String,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .size(36.dp)
             .clip(CircleShape)
-            .background(if (isSelected) Color.White else Color.Transparent)
-            .clickable(onClick = onClick),
+            .background(
+                if (isSelected) Color(0xFFFFC83D) else Color.Transparent
+            )
+            .border(
+                width = 1.dp,
+                color = if (isSelected) {
+                    Color(0xFFFFE082)
+                } else {
+                    Color.White.copy(alpha = 0.14f)
+                },
+                shape = CircleShape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
-            color = if (isSelected) Color.Black else Color.White,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold
+            color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.95f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }

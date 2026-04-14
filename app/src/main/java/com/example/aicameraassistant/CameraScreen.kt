@@ -6,6 +6,7 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import android.view.Surface
+import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -98,9 +99,33 @@ fun CameraScreen(
     var flashAlpha by remember { mutableFloatStateOf(0f) }
     val isStreaming = roomStatus == "connected"
     var answerCreated by remember { mutableStateOf(false) }
+    var hasSeenConnectedState by remember(roomCode) { mutableStateOf(false) }
+    var isEndingSession by remember(roomCode) { mutableStateOf(false) }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
+
+    fun shutdownHostSession(exitScreen: Boolean) {
+        if (isEndingSession) return
+
+        isEndingSession = true
+        WebRtcSessionManager.stopLocalCamera()
+        WebRtcSessionManager.clearConnections()
+
+        if (exitScreen) {
+            onBack()
+        }
+    }
+
+    fun endHostSession() {
+        if (isEndingSession) return
+
+        scope.launch {
+            runCatching { repository.endSession(roomCode) }
+                .onFailure { Log.e("SESSION_END", "Failed to end host session", it) }
+            shutdownHostSession(exitScreen = true)
+        }
+    }
 
     DisposableEffect(roomCode) {
         val registration = repository.listenToControllerIceCandidates(roomCode) { candidate ->
@@ -132,6 +157,19 @@ fun CameraScreen(
                 }
             )
             answerCreated = true
+        }
+    }
+
+    LaunchedEffect(roomStatus) {
+        if (roomStatus == "connected") {
+            hasSeenConnectedState = true
+        }
+
+        if (roomStatus == "ended") {
+            Toast.makeText(context, "Session ended", Toast.LENGTH_SHORT).show()
+            shutdownHostSession(exitScreen = true)
+        } else if (hasSeenConnectedState && roomStatus == "waiting") {
+            shutdownHostSession(exitScreen = true)
         }
     }
 
@@ -242,6 +280,16 @@ fun CameraScreen(
             camera = firstCamera
             imageCapture = newImageCapture
 
+            firstCamera.cameraInfo.zoomState.value?.let { zoomState ->
+                scope.launch {
+                    repository.updateZoomRange(
+                        roomCode = roomCode,
+                        minZoom = zoomState.minZoomRatio.toDouble(),
+                        maxZoom = zoomState.maxZoomRatio.toDouble()
+                    )
+                }
+            }
+
             val rawSize =
                 newImageCapture.resolutionInfo?.resolution
                     ?: localPreview.resolutionInfo?.resolution
@@ -330,6 +378,11 @@ fun CameraScreen(
         val minZoom = zoomState?.minZoomRatio ?: 1f
         val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
         currentCamera.cameraControl.setZoomRatio(clampedZoom)
+        if (clampedZoom.toDouble() != firebaseZoomLevel) {
+            scope.launch {
+                repository.updateZoomLevel(roomCode, clampedZoom.toDouble())
+            }
+        }
     }
 
     LaunchedEffect(camera, firebaseFlashEnabled) {
@@ -379,13 +432,26 @@ fun CameraScreen(
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = Color.Black.copy(alpha = 0.45f),
-                onClick = onBack
+                onClick = {
+                    if (hasSeenConnectedState || roomStatus == "request_received") {
+                        endHostSession()
+                    } else {
+                        onBack()
+                    }
+                }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Back", color = Color.White)
+                    Text(
+                        text = if (hasSeenConnectedState || roomStatus == "request_received") {
+                            if (isEndingSession) "Ending..." else "End Session"
+                        } else {
+                            "Back"
+                        },
+                        color = Color.White
+                    )
                 }
             }
 
@@ -501,6 +567,18 @@ fun CameraScreen(
                     ) {
                         Text("Deny")
                     }
+                }
+            }
+
+            if (roomStatus == "connected") {
+                Button(
+                    onClick = { endHostSession() },
+                    enabled = !isEndingSession,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(if (isEndingSession) "Ending..." else "Stop Camera Session")
                 }
             }
         }
