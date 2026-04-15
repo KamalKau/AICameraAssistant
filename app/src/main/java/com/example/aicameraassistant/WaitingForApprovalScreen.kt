@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.SwitchCamera
@@ -89,7 +90,8 @@ fun WaitingForApprovalScreen(
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
     val firebaseMinZoom by repository.getMinZoom(roomCode).collectAsState(initial = 1.0)
     val firebaseMaxZoom by repository.getMaxZoom(roomCode).collectAsState(initial = 1.0)
-    val firebaseFlashEnabled by repository.getFlashEnabled(roomCode).collectAsState(initial = false)
+    val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
+    val firebaseFlashSupported by repository.getFlashSupported(roomCode).collectAsState(initial = false)
     val firebaseAnswer by repository.getAnswerSdp(roomCode).collectAsState(initial = null)
     val cameraPreviewWidth by repository.getPreviewWidth(roomCode).collectAsState(initial = 0)
     val cameraPreviewHeight by repository.getPreviewHeight(roomCode).collectAsState(initial = 0)
@@ -176,6 +178,7 @@ fun WaitingForApprovalScreen(
             .filter { it in minZoom..maxZoom }
             .ifEmpty { listOf(minZoom) }
     }
+    val flashModes = listOf("off", "auto", "on")
 
     fun shutdownControllerSession(exitScreen: Boolean) {
         if (isEndingSession) return
@@ -564,41 +567,44 @@ fun WaitingForApprovalScreen(
                         Text(if (isEndingSession) "Ending..." else "End Session")
                     }
 
-                    IconButton(
-                        onClick = {
-                            scope.launch {
-                                repository.updateFlashEnabled(roomCode, !firebaseFlashEnabled)
-                            }
+                    CameraModeButton(
+                        icon = when {
+                            !firebaseFlashSupported -> Icons.Default.FlashOff
+                            firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
+                            firebaseFlashMode == "on" -> Icons.Default.FlashOn
+                            else -> Icons.Default.FlashOff
                         },
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = if (firebaseFlashEnabled) {
-                                Icons.Default.FlashOn
-                            } else {
-                                Icons.Default.FlashOff
-                            },
-                            contentDescription = "Flash",
-                            tint = if (firebaseFlashEnabled) Color.Yellow else Color.White
-                        )
-                    }
+                        label = when {
+                            !firebaseFlashSupported -> "Unsupported"
+                            firebaseFlashMode == "auto" -> "Auto"
+                            firebaseFlashMode == "on" -> "On"
+                            else -> "Off"
+                        },
+                        enabled = firebaseFlashSupported,
+                        onClick = {
+                            if (!firebaseFlashSupported) return@CameraModeButton
+                            val nextFlashMode = when (firebaseFlashMode) {
+                                "off" -> "auto"
+                                "auto" -> "on"
+                                else -> "off"
+                            }
+                            scope.launch {
+                                repository.updateFlashMode(roomCode, nextFlashMode)
+                            }
+                        }
+                    )
 
-                    IconButton(
+                    CameraModeButton(
+                        icon = Icons.Default.SwitchCamera,
+                        label = if (firebaseLensFacing == "back") "Rear" else "Front",
                         onClick = {
                             scope.launch {
                                 val nextFacing =
                                     if (firebaseLensFacing == "back") "front" else "back"
                                 repository.updateLensFacing(roomCode, nextFacing)
                             }
-                        },
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SwitchCamera,
-                            contentDescription = "Flip Camera",
-                            tint = Color.White
-                        )
-                    }
+                        }
+                    )
                 }
             }
 
@@ -820,6 +826,38 @@ fun ZoomPresetPill(
             color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.95f),
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+fun CameraModeButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f)
+            )
+        }
+
+        Text(
+            text = label,
+            color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
         )
     }
 }

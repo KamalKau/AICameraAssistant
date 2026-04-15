@@ -1,7 +1,11 @@
 package com.example.aicameraassistant
 
+import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
+import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -60,6 +64,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.max
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.SessionDescription
@@ -78,7 +83,7 @@ fun CameraScreen(
     val connectionState by WebRtcSessionManager.cameraConnectionState.collectAsState()
     val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
-    val firebaseFlashEnabled by repository.getFlashEnabled(roomCode).collectAsState(initial = false)
+    val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
     val firebaseCaptureRequest by repository.getCaptureRequest(roomCode).collectAsState(initial = false)
     val firebaseRequestReceived by repository.getRequestReceived(roomCode).collectAsState(initial = false)
     val firebaseControllerApproved by repository.getControllerApproved(roomCode).collectAsState(initial = false)
@@ -96,6 +101,7 @@ fun CameraScreen(
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
     }
+    val activity = context.findActivity()
 
     var flashAlpha by remember { mutableFloatStateOf(0f) }
     val isStreaming = roomStatus == "connected"
@@ -106,6 +112,15 @@ fun CameraScreen(
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
     val sessionIsActive = roomStatus == "connected"
+    val hasLedFlash = camera?.cameraInfo?.hasFlashUnit() == true
+    val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
+    val flashSupported = hasLedFlash || lensFacing == CameraSelector.LENS_FACING_FRONT
+    val captureFlashMode = when {
+        lensFacing == CameraSelector.LENS_FACING_FRONT -> ImageCapture.FLASH_MODE_OFF
+        firebaseFlashMode == "on" -> ImageCapture.FLASH_MODE_ON
+        firebaseFlashMode == "auto" -> ImageCapture.FLASH_MODE_AUTO
+        else -> ImageCapture.FLASH_MODE_OFF
+    }
     val statusText = when {
         !sessionIsActive -> when (roomStatus) {
             "request_received" -> "Connection request received"
@@ -221,14 +236,37 @@ fun CameraScreen(
         }
     }
 
-    fun takePhotoWithCameraX() {
+    fun shouldUseFrontScreenFlash(): Boolean {
+        if (!isFrontCamera) return false
+
+        return when (firebaseFlashMode) {
+            "on" -> true
+            "auto" -> isPreviewSceneDark(previewView)
+            else -> false
+        }
+    }
+
+    fun takePhotoWithCameraX(useFrontScreenFlash: Boolean) {
         val currentCapture = imageCapture ?: run {
             Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
             return
         }
 
-        currentCapture.flashMode =
-            if (firebaseFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+        val resolvedCaptureFlashMode = when {
+            useFrontScreenFlash -> ImageCapture.FLASH_MODE_SCREEN
+            isFrontCamera -> ImageCapture.FLASH_MODE_OFF
+            !hasLedFlash -> ImageCapture.FLASH_MODE_OFF
+            firebaseFlashMode == "on" -> ImageCapture.FLASH_MODE_ON
+            firebaseFlashMode == "auto" -> ImageCapture.FLASH_MODE_AUTO
+            else -> ImageCapture.FLASH_MODE_OFF
+        }
+
+        currentCapture.screenFlash = if (useFrontScreenFlash) {
+            previewView.screenFlash
+        } else {
+            null
+        }
+        currentCapture.flashMode = resolvedCaptureFlashMode
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
         val contentValues = ContentValues().apply {
@@ -260,13 +298,24 @@ fun CameraScreen(
 
     LaunchedEffect(firebaseCaptureRequest) {
         if (firebaseCaptureRequest) {
-            flashAlpha = 0.85f
-            takePhotoWithCameraX()
+            val useFrontScreenFlash = shouldUseFrontScreenFlash()
+
+            if (!useFrontScreenFlash && captureFlashMode != ImageCapture.FLASH_MODE_OFF) {
+                flashAlpha = 0.85f
+            }
+
+            takePhotoWithCameraX(useFrontScreenFlash = useFrontScreenFlash)
             scope.launch {
                 repository.resetCaptureRequest(roomCode)
             }
         }
     }
+
+    LaunchedEffect(activity) {
+        previewView.setScreenFlashOverlayColor(AndroidColor.WHITE)
+        previewView.setScreenFlashWindow(activity?.window)
+    }
+
 
     LaunchedEffect(lensFacing, isStreaming) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -320,6 +369,14 @@ fun CameraScreen(
             camera = firstCamera
             imageCapture = newImageCapture
 
+            scope.launch {
+                repository.updateFlashSupported(
+                    roomCode = roomCode,
+                    flashSupported = firstCamera.cameraInfo.hasFlashUnit() ||
+                        lensFacing == CameraSelector.LENS_FACING_FRONT
+                )
+            }
+
             firstCamera.cameraInfo.zoomState.value?.let { zoomState ->
                 scope.launch {
                     repository.updateZoomRange(
@@ -366,7 +423,7 @@ fun CameraScreen(
             val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
 
             if (isStreaming) {
-                val streamMaxLongEdge = 2560
+                val streamMaxLongEdge = 1920
                 val streamScale =
                     (streamMaxLongEdge.toFloat() / maxOf(rawSize.width, rawSize.height)).coerceAtMost(1f)
                 val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
@@ -425,14 +482,9 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(camera, firebaseFlashEnabled) {
-        val currentCamera = camera ?: return@LaunchedEffect
-        currentCamera.cameraControl.enableTorch(firebaseFlashEnabled)
-    }
-
     LaunchedEffect(flashAlpha) {
-        if (flashAlpha > 0f) {
-            delay(120)
+        if (flashAlpha > 0f && !(isFrontCamera && firebaseFlashMode != "off")) {
+            delay(220)
             flashAlpha = 0f
         }
     }
@@ -565,7 +617,16 @@ fun CameraScreen(
                                 append(" | ")
                                 append("${firebaseZoomLevel}x")
                                 append(" | ")
-                                append(if (firebaseFlashEnabled) "Flash On" else "Flash Off")
+                                append(
+                                    when {
+                                        isFrontCamera && firebaseFlashMode == "on" -> "Screen Flash On"
+                                        isFrontCamera && firebaseFlashMode == "auto" -> "Screen Flash Auto"
+                                        !flashSupported && firebaseFlashMode != "off" -> "Flash Unsupported"
+                                        firebaseFlashMode == "auto" -> "Flash Auto"
+                                        firebaseFlashMode == "on" -> "Flash On"
+                                        else -> "Flash Off"
+                                    }
+                                )
                             },
                             color = Color.White.copy(alpha = 0.85f),
                             fontWeight = FontWeight.Medium
@@ -626,6 +687,42 @@ fun CameraScreen(
                 }
             }
         }
+    }
+}
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private fun isPreviewSceneDark(previewView: PreviewView): Boolean {
+    val bitmap = previewView.bitmap ?: return true
+    return try {
+        val startX = bitmap.width / 4
+        val endX = bitmap.width - startX
+        val startY = bitmap.height / 4
+        val endY = bitmap.height - startY
+        val sampleX = max(1, (endX - startX) / 18)
+        val sampleY = max(1, (endY - startY) / 18)
+        var luminanceSum = 0.0
+        var samples = 0
+
+        for (x in startX until endX step sampleX) {
+            for (y in startY until endY step sampleY) {
+                val pixel = bitmap.getPixel(x, y)
+                val red = android.graphics.Color.red(pixel)
+                val green = android.graphics.Color.green(pixel)
+                val blue = android.graphics.Color.blue(pixel)
+                luminanceSum += (0.299 * red) + (0.587 * green) + (0.114 * blue)
+                samples++
+            }
+        }
+
+        val averageLuminance = if (samples == 0) 255.0 else luminanceSum / samples
+        averageLuminance < 60.0
+    } finally {
+        bitmap.recycle()
     }
 }
 

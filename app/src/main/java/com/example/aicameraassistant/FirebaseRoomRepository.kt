@@ -27,7 +27,8 @@ class FirebaseRoomRepository {
                 "zoomLevel" to 1.0,
                 "minZoom" to 1.0,
                 "maxZoom" to 1.0,
-                "flashEnabled" to false,
+                "flashMode" to "off",
+                "flashSupported" to false,
                 "offer" to null,
                 "answer" to null,
                 "previewWidth" to 0L,
@@ -95,10 +96,17 @@ class FirebaseRoomRepository {
             .await()
     }
 
-    suspend fun updateFlashEnabled(roomCode: String, flashEnabled: Boolean) {
+    suspend fun updateFlashMode(roomCode: String, flashMode: String) {
         db.collection("rooms")
             .document(roomCode)
-            .update("flashEnabled", flashEnabled)
+            .update("flashMode", flashMode)
+            .await()
+    }
+
+    suspend fun updateFlashSupported(roomCode: String, flashSupported: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("flashSupported", flashSupported)
             .await()
     }
 
@@ -150,7 +158,8 @@ class FirebaseRoomRepository {
                 "zoomLevel" to 1.0,
                 "minZoom" to 1.0,
                 "maxZoom" to 1.0,
-                "flashEnabled" to false,
+                "flashMode" to "off",
+                "flashSupported" to false,
                 "offer" to null,
                 "answer" to null,
                 "previewWidth" to 0L,
@@ -233,10 +242,18 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
-    fun getFlashEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+    fun getFlashMode(roomCode: String): Flow<String> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                snapshot?.getBoolean("flashEnabled")?.let { trySend(it) }
+                trySend(snapshot?.getString("flashMode") ?: "off")
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFlashSupported(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("flashSupported") ?: false)
             }
         awaitClose { listener.remove() }
     }
