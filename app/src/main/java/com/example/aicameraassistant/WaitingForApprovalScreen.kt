@@ -157,13 +157,20 @@ fun WaitingForApprovalScreen(
         AppConnectionState.DISCONNECTED -> Color(0xFFF44336)
     }
     val connectionWarningText = when (connectionState) {
-        AppConnectionState.WEAK_NETWORK -> "Weak network"
+        AppConnectionState.WEAK_NETWORK -> "Network unstable"
         AppConnectionState.RETRYING -> "Reconnecting..."
         AppConnectionState.DISCONNECTED -> "Connection lost"
         else -> null
     }
+    val connectionWarningDetailText = when (connectionState) {
+        AppConnectionState.WEAK_NETWORK,
+        AppConnectionState.RETRYING -> "Video quality may be affected"
+        AppConnectionState.DISCONNECTED -> "Unable to reconnect"
+        else -> null
+    }
     val isVideoStalled =
         roomStatus == "connected" &&
+            connectionState != AppConnectionState.CONNECTED &&
             lastFrameTimestampMs > 0L &&
             uiNowMs - lastFrameTimestampMs > 2_500L
     val stalledVideoText = when (connectionState) {
@@ -645,11 +652,22 @@ fun WaitingForApprovalScreen(
                             .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(18.dp))
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
-                        Text(
-                            text = connectionWarningText,
-                            color = Color.White,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = connectionWarningText,
+                                color = Color.White,
+                                fontWeight = FontWeight.Medium
+                            )
+                            connectionWarningDetailText?.let { detailText ->
+                                Text(
+                                    text = detailText,
+                                    color = Color.White.copy(alpha = 0.78f),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
                 }
 

@@ -159,6 +159,12 @@ fun CameraScreen(
         AppConnectionState.DISCONNECTED -> "Connection lost"
         else -> null
     }
+    val transientWarningDetailText = when (connectionState) {
+        AppConnectionState.WEAK_NETWORK,
+        AppConnectionState.RETRYING -> "Video quality may be affected"
+        AppConnectionState.DISCONNECTED -> "Unable to reconnect"
+        else -> null
+    }
 
     fun shutdownHostSession(exitScreen: Boolean) {
         if (isEndingSession) return
@@ -522,11 +528,21 @@ fun CameraScreen(
                     .background(Color.Black.copy(alpha = 0.52f), RoundedCornerShape(18.dp))
                     .padding(horizontal = 14.dp, vertical = 9.dp)
             ) {
-                Text(
-                    text = transientWarningText,
-                    color = Color.White,
-                    fontWeight = FontWeight.Medium
-                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = transientWarningText,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium
+                    )
+                    transientWarningDetailText?.let { detailText ->
+                        Text(
+                            text = detailText,
+                            color = Color.White.copy(alpha = 0.78f)
+                        )
+                    }
+                }
             }
         }
 

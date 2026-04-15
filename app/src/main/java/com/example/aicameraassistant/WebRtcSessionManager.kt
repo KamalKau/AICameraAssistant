@@ -1,6 +1,7 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import kotlinx.coroutines.CoroutineScope
@@ -24,10 +25,20 @@ enum class AppConnectionState {
 }
 
 object WebRtcSessionManager {
+    private data class ConnectionHealth(
+        var hasEverConnected: Boolean = false,
+        var lastConnectedAtMs: Long = 0L,
+        var lastDisconnectedAtMs: Long = 0L
+    )
+
     private enum class ConnectionSide {
         CAMERA,
         CONTROLLER
     }
+
+    private const val DISCONNECT_TIMEOUT_MS = 5_000L
+    private const val WEAK_NETWORK_HOLD_MS = 2_500L
+    private const val UNSTABLE_RECOVERY_WINDOW_MS = 5_000L
 
     private var initialized = false
     private val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -66,6 +77,8 @@ object WebRtcSessionManager {
     private var controllerDisconnectJob: Job? = null
     private var cameraWeakNetworkJob: Job? = null
     private var controllerWeakNetworkJob: Job? = null
+    private val cameraConnectionHealth = ConnectionHealth()
+    private val controllerConnectionHealth = ConnectionHealth()
 
     @Synchronized
     fun initialize(context: Context) {
@@ -267,6 +280,7 @@ object WebRtcSessionManager {
         val f = factory ?: return null
         cameraPeerConnection?.dispose()
         cameraPeerConnection = null
+        resetConnectionHealth(ConnectionSide.CAMERA)
         cancelConnectionJobs(ConnectionSide.CAMERA)
         updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.CONNECTING)
 
@@ -279,10 +293,13 @@ object WebRtcSessionManager {
                         Log.d("WEBRTC_LOG", "Camera ICE state: $s")
                         handleIceConnectionChange(ConnectionSide.CAMERA, s)
                     }
+                    override fun onIceConnectionReceivingChange(b: Boolean) {
+                        Log.d("WEBRTC_LOG", "Camera ICE receiving change: $b")
+                        handleIceReceivingChange(ConnectionSide.CAMERA, b)
+                    }
                     override fun onTrack(transceiver: RtpTransceiver) {}
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
                     override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-                    override fun onIceConnectionReceivingChange(b: Boolean) {}
                     override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
                     override fun onAddStream(s: MediaStream?) {}
                     override fun onRemoveStream(s: MediaStream?) {}
@@ -306,6 +323,7 @@ object WebRtcSessionManager {
         val f = factory ?: return null
         controllerPeerConnection?.dispose()
         controllerPeerConnection = null
+        resetConnectionHealth(ConnectionSide.CONTROLLER)
         cancelConnectionJobs(ConnectionSide.CONTROLLER)
         updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.CONNECTING)
 
@@ -332,6 +350,7 @@ object WebRtcSessionManager {
                     override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
                     override fun onIceConnectionReceivingChange(b: Boolean) {
                         Log.d("WEBRTC_LOG", "Controller ICE Receiving Change: $b")
+                        handleIceReceivingChange(ConnectionSide.CONTROLLER, b)
                     }
                     override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
                     override fun onAddStream(s: MediaStream?) {}
@@ -369,6 +388,14 @@ object WebRtcSessionManager {
     @Synchronized
     fun clearConnections() {
         try {
+            val cameraHadActiveSession =
+                cameraPeerConnection != null ||
+                    cameraConnectionHealth.hasEverConnected ||
+                    _cameraConnectionState.value != AppConnectionState.IDLE
+            val controllerHadActiveSession =
+                controllerPeerConnection != null ||
+                    controllerConnectionHealth.hasEverConnected ||
+                    _controllerConnectionState.value != AppConnectionState.IDLE
             cancelConnectionJobs(ConnectionSide.CAMERA)
             cancelConnectionJobs(ConnectionSide.CONTROLLER)
             controllerPeerConnection?.dispose()
@@ -376,8 +403,14 @@ object WebRtcSessionManager {
             cameraPeerConnection?.dispose()
             cameraPeerConnection = null
             remoteVideoTrack = null
-            updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.DISCONNECTED)
-            updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.DISCONNECTED)
+            resetConnectionState(
+                ConnectionSide.CAMERA,
+                if (cameraHadActiveSession) AppConnectionState.DISCONNECTED else AppConnectionState.IDLE
+            )
+            resetConnectionState(
+                ConnectionSide.CONTROLLER,
+                if (controllerHadActiveSession) AppConnectionState.DISCONNECTED else AppConnectionState.IDLE
+            )
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Error clearing connections", t)
         }
@@ -387,20 +420,31 @@ object WebRtcSessionManager {
         side: ConnectionSide,
         state: PeerConnection.IceConnectionState?
     ) {
+        val health = getConnectionHealth(side)
+        val currentState = getConnectionStateFlow(side).value
+        val now = SystemClock.elapsedRealtime()
+
         when (state) {
             PeerConnection.IceConnectionState.NEW,
             PeerConnection.IceConnectionState.CHECKING -> {
-                if (getConnectionStateFlow(side).value != AppConnectionState.CONNECTED) {
+                if (!health.hasEverConnected || currentState == AppConnectionState.IDLE) {
                     updateConnectionState(side, AppConnectionState.CONNECTING)
                 }
             }
 
             PeerConnection.IceConnectionState.CONNECTED,
             PeerConnection.IceConnectionState.COMPLETED -> {
-                val wasRetrying =
-                    getConnectionStateFlow(side).value == AppConnectionState.RETRYING
+                val recoveredFromDrop =
+                    health.lastDisconnectedAtMs > 0L &&
+                        now - health.lastDisconnectedAtMs <= UNSTABLE_RECOVERY_WINDOW_MS
+                health.hasEverConnected = true
+                health.lastConnectedAtMs = now
                 cancelDisconnectJob(side)
-                if (wasRetrying) {
+                if (
+                    currentState == AppConnectionState.RETRYING ||
+                    currentState == AppConnectionState.WEAK_NETWORK ||
+                    recoveredFromDrop
+                ) {
                     updateConnectionState(side, AppConnectionState.WEAK_NETWORK)
                     scheduleWeakNetworkReset(side)
                 } else {
@@ -410,6 +454,7 @@ object WebRtcSessionManager {
             }
 
             PeerConnection.IceConnectionState.DISCONNECTED -> {
+                health.lastDisconnectedAtMs = now
                 cancelWeakNetworkJob(side)
                 updateConnectionState(side, AppConnectionState.RETRYING)
                 scheduleDisconnectTimeout(side)
@@ -418,6 +463,7 @@ object WebRtcSessionManager {
             PeerConnection.IceConnectionState.FAILED,
             PeerConnection.IceConnectionState.CLOSED -> {
                 cancelConnectionJobs(side)
+                health.lastDisconnectedAtMs = now
                 updateConnectionState(side, AppConnectionState.DISCONNECTED)
             }
 
@@ -425,12 +471,25 @@ object WebRtcSessionManager {
         }
     }
 
+    private fun handleIceReceivingChange(side: ConnectionSide, isReceiving: Boolean) {
+        if (isReceiving) {
+            if (
+                getConnectionStateFlow(side).value == AppConnectionState.WEAK_NETWORK &&
+                getDisconnectJob(side)?.isActive != true
+            ) {
+                scheduleWeakNetworkReset(side)
+            }
+        }
+    }
+
     private fun scheduleDisconnectTimeout(side: ConnectionSide) {
         if (getDisconnectJob(side)?.isActive == true) return
 
         val job = connectionScope.launch {
-            delay(5_000)
-            updateConnectionState(side, AppConnectionState.DISCONNECTED)
+            delay(DISCONNECT_TIMEOUT_MS)
+            if (getConnectionStateFlow(side).value == AppConnectionState.RETRYING) {
+                updateConnectionState(side, AppConnectionState.DISCONNECTED)
+            }
         }
         setDisconnectJob(side, job)
     }
@@ -438,7 +497,7 @@ object WebRtcSessionManager {
     private fun scheduleWeakNetworkReset(side: ConnectionSide) {
         cancelWeakNetworkJob(side)
         val job = connectionScope.launch {
-            delay(2_500)
+            delay(WEAK_NETWORK_HOLD_MS)
             if (getConnectionStateFlow(side).value == AppConnectionState.WEAK_NETWORK) {
                 updateConnectionState(side, AppConnectionState.CONNECTED)
             }
@@ -466,6 +525,11 @@ object WebRtcSessionManager {
         if (flow.value != state) {
             flow.value = state
         }
+    }
+
+    private fun resetConnectionState(side: ConnectionSide, state: AppConnectionState) {
+        resetConnectionHealth(side)
+        updateConnectionState(side, state)
     }
 
     private fun getConnectionStateFlow(side: ConnectionSide): MutableStateFlow<AppConnectionState> =
@@ -498,5 +562,18 @@ object WebRtcSessionManager {
             ConnectionSide.CAMERA -> cameraWeakNetworkJob = job
             ConnectionSide.CONTROLLER -> controllerWeakNetworkJob = job
         }
+    }
+
+    private fun getConnectionHealth(side: ConnectionSide): ConnectionHealth =
+        when (side) {
+            ConnectionSide.CAMERA -> cameraConnectionHealth
+            ConnectionSide.CONTROLLER -> controllerConnectionHealth
+        }
+
+    private fun resetConnectionHealth(side: ConnectionSide) {
+        val health = getConnectionHealth(side)
+        health.hasEverConnected = false
+        health.lastConnectedAtMs = 0L
+        health.lastDisconnectedAtMs = 0L
     }
 }
