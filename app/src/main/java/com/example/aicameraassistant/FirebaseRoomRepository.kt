@@ -29,6 +29,12 @@ class FirebaseRoomRepository {
                 "maxZoom" to 1.0,
                 "flashMode" to "off",
                 "flashSupported" to false,
+                "focusRequestId" to 0L,
+                "focusPointX" to 0.5,
+                "focusPointY" to 0.5,
+                "exposureMinIndex" to 0L,
+                "exposureMaxIndex" to 0L,
+                "exposureIndex" to 0L,
                 "offer" to null,
                 "answer" to null,
                 "previewWidth" to 0L,
@@ -122,6 +128,49 @@ class FirebaseRoomRepository {
             .await()
     }
 
+    suspend fun updateFocusRequest(
+        roomCode: String,
+        normalizedX: Double,
+        normalizedY: Double,
+        requestId: Long
+    ) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "focusPointX" to normalizedX.coerceIn(0.0, 1.0),
+                    "focusPointY" to normalizedY.coerceIn(0.0, 1.0),
+                    "focusRequestId" to requestId
+                )
+            )
+            .await()
+    }
+
+    suspend fun updateExposureState(
+        roomCode: String,
+        minIndex: Int,
+        maxIndex: Int,
+        currentIndex: Int
+    ) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "exposureMinIndex" to minIndex.toLong(),
+                    "exposureMaxIndex" to maxIndex.toLong(),
+                    "exposureIndex" to currentIndex.toLong()
+                )
+            )
+            .await()
+    }
+
+    suspend fun updateExposureIndex(roomCode: String, exposureIndex: Int) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("exposureIndex", exposureIndex.toLong())
+            .await()
+    }
+
     suspend fun resetCaptureRequest(roomCode: String) {
         db.collection("rooms")
             .document(roomCode)
@@ -160,6 +209,12 @@ class FirebaseRoomRepository {
                 "maxZoom" to 1.0,
                 "flashMode" to "off",
                 "flashSupported" to false,
+                "focusRequestId" to 0L,
+                "focusPointX" to 0.5,
+                "focusPointY" to 0.5,
+                "exposureMinIndex" to 0L,
+                "exposureMaxIndex" to 0L,
+                "exposureIndex" to 0L,
                 "offer" to null,
                 "answer" to null,
                 "previewWidth" to 0L,
@@ -272,6 +327,54 @@ class FirebaseRoomRepository {
             .addSnapshotListener { snapshot, _ ->
                 val height = snapshot?.getLong("previewHeight")?.toInt() ?: 0
                 trySend(height)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFocusRequestId(roomCode: String): Flow<Long> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("focusRequestId") ?: 0L)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFocusPointX(roomCode: String): Flow<Double> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getDouble("focusPointX") ?: 0.5)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFocusPointY(roomCode: String): Flow<Double> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getDouble("focusPointY") ?: 0.5)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getExposureMinIndex(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("exposureMinIndex")?.toInt() ?: 0)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getExposureMaxIndex(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("exposureMaxIndex")?.toInt() ?: 0)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getExposureIndex(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("exposureIndex")?.toInt() ?: 0)
             }
         awaitClose { listener.remove() }
     }

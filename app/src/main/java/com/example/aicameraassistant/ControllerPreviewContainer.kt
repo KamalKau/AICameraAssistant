@@ -1,6 +1,7 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
@@ -15,6 +16,9 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
     private var videoAspectRatio = 9f / 16f
     private var rotateContent = false
+    private var displayWidthPx = 0
+    private var displayHeightPx = 0
+    var onVideoRectChanged: ((RectF) -> Unit)? = null
 
     init {
         clipChildren = true
@@ -60,6 +64,9 @@ class ControllerPreviewContainer @JvmOverloads constructor(
             displayWidth = (availableHeight * videoAspectRatio).toInt()
         }
 
+        displayWidthPx = displayWidth
+        displayHeightPx = displayHeight
+
         val childWidth: Int
         val childHeight: Int
 
@@ -93,6 +100,17 @@ class ControllerPreviewContainer @JvmOverloads constructor(
             childTop,
             childLeft + childWidth,
             childTop + childHeight
+        )
+
+        val visibleLeft = (measuredWidth - displayWidthPx) / 2f
+        val visibleTop = (measuredHeight - displayHeightPx) / 2f
+        onVideoRectChanged?.invoke(
+            RectF(
+                visibleLeft,
+                visibleTop,
+                visibleLeft + displayWidthPx,
+                visibleTop + displayHeightPx
+            )
         )
     }
 }

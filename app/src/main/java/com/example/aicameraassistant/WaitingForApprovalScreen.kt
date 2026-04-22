@@ -4,11 +4,15 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +33,7 @@ import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.SwitchCamera
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -41,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -52,12 +59,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -92,9 +105,13 @@ fun WaitingForApprovalScreen(
     val firebaseMaxZoom by repository.getMaxZoom(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
     val firebaseFlashSupported by repository.getFlashSupported(roomCode).collectAsState(initial = false)
+    val firebaseExposureMinIndex by repository.getExposureMinIndex(roomCode).collectAsState(initial = 0)
+    val firebaseExposureMaxIndex by repository.getExposureMaxIndex(roomCode).collectAsState(initial = 0)
+    val firebaseExposureIndex by repository.getExposureIndex(roomCode).collectAsState(initial = 0)
     val firebaseAnswer by repository.getAnswerSdp(roomCode).collectAsState(initial = null)
     val cameraPreviewWidth by repository.getPreviewWidth(roomCode).collectAsState(initial = 0)
     val cameraPreviewHeight by repository.getPreviewHeight(roomCode).collectAsState(initial = 0)
+    val firebaseFocusRequestId by repository.getFocusRequestId(roomCode).collectAsState(initial = 0L)
 
     var previewContainerRef by remember { mutableStateOf<ControllerPreviewContainer?>(null) }
     var remoteTrack by remember { mutableStateOf<VideoTrack?>(null) }
@@ -104,6 +121,10 @@ fun WaitingForApprovalScreen(
     var zoomUiValue by remember(roomCode) { mutableStateOf(1f) }
     var isZoomDragging by remember(roomCode) { mutableStateOf(false) }
     var lastSentZoom by remember(roomCode) { mutableStateOf(Double.NaN) }
+    var focusPoint by remember(roomCode) { mutableStateOf<Offset?>(null) }
+    var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
+    var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
+    var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -140,6 +161,7 @@ fun WaitingForApprovalScreen(
     val controllerDisplayHeight = normalizedRemoteFrameHeight
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
+    val exposureSupported = firebaseExposureMinIndex != firebaseExposureMaxIndex
     val connectionBadgeText = when (connectionState) {
         AppConnectionState.IDLE,
         AppConnectionState.CONNECTING -> "Connecting..."
@@ -222,6 +244,51 @@ fun WaitingForApprovalScreen(
         lastSentZoom = clampedZoom
         scope.launch {
             repository.updateZoomLevel(roomCode, clampedZoom)
+        }
+    }
+
+    fun sendFocusRequest(tapOffset: Offset, previewRect: Rect) {
+        if (!previewRect.contains(tapOffset)) return
+
+        val clampedPoint = tapOffset.clampTo(previewRect)
+        val previewWidth = previewRect.width
+        val previewHeight = previewRect.height
+        if (previewWidth <= 0f || previewHeight <= 0f) return
+
+        val normalizedX = (clampedPoint.x - previewRect.left) / previewWidth
+        val normalizedY = (clampedPoint.y - previewRect.top) / previewHeight
+
+        focusPoint = clampedPoint
+        focusSucceeded = null
+        focusUiToken++
+
+        scope.launch {
+            repository.updateFocusRequest(
+                roomCode = roomCode,
+                normalizedX = normalizedX.toDouble(),
+                normalizedY = normalizedY.toDouble(),
+                requestId = firebaseFocusRequestId + 1L
+            )
+        }
+    }
+
+    fun updateExposureFromProgress(progress: Float) {
+        if (!exposureSupported) return
+
+        val clampedProgress = progress.coerceIn(0f, 1f)
+        val targetIndex = (
+            firebaseExposureMinIndex +
+                ((1f - clampedProgress) * (firebaseExposureMaxIndex - firebaseExposureMinIndex))
+        ).roundToInt().coerceIn(firebaseExposureMinIndex, firebaseExposureMaxIndex)
+
+        if (targetIndex == firebaseExposureIndex) {
+            focusUiToken++
+            return
+        }
+
+        focusUiToken++
+        scope.launch {
+            repository.updateExposureIndex(roomCode, targetIndex)
         }
     }
 
@@ -323,6 +390,13 @@ fun WaitingForApprovalScreen(
         }
     }
 
+    LaunchedEffect(focusUiToken) {
+        if (focusUiToken == 0) return@LaunchedEffect
+        delay(2600)
+        focusPoint = null
+        focusSucceeded = null
+    }
+
     LaunchedEffect(roomStatus) {
         while (roomStatus == "connected" && isActive) {
             uiNowMs = SystemClock.elapsedRealtime()
@@ -385,11 +459,25 @@ fun WaitingForApprovalScreen(
             }
         }
     } else {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        ) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        val density = LocalDensity.current
+        val boxMaxWidthPx = with(density) { maxWidth.toPx() }
+        val boxMaxHeightPx = with(density) { maxHeight.toPx() }
+        val previewContentRect =
+            remember(boxMaxWidthPx, boxMaxHeightPx, controllerDisplayWidth, controllerDisplayHeight) {
+                calculateFittedPreviewRect(
+                    containerWidth = boxMaxWidthPx,
+                    containerHeight = boxMaxHeightPx,
+                    contentWidth = controllerDisplayWidth.toFloat(),
+                    contentHeight = controllerDisplayHeight.toFloat()
+                )
+            }
+        val activePreviewRect = previewOverlayRect ?: previewContentRect
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -415,6 +503,16 @@ fun WaitingForApprovalScreen(
                             sendZoomUpdate(zoomUiValue, force = true)
                         }
                         false
+                    }
+                    .pointerInput(roomCode) {
+                        detectTapGestures { offset ->
+                            activePreviewRect?.let { previewRect ->
+                                sendFocusRequest(
+                                    tapOffset = offset,
+                                    previewRect = previewRect
+                                )
+                            }
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -471,7 +569,7 @@ fun WaitingForApprovalScreen(
                                 }
                             )
                             renderer.setMirror(false)
-                            renderer.setEnableHardwareScaler(false)
+                            renderer.setEnableHardwareScaler(true)
                             renderer.setScalingType(
                                 RendererCommon.ScalingType.SCALE_ASPECT_FIT,
                                 RendererCommon.ScalingType.SCALE_ASPECT_FIT
@@ -483,12 +581,15 @@ fun WaitingForApprovalScreen(
                                     shouldRotatePreviewContent
                                 )
                             }
+                            container.onVideoRectChanged = { rect ->
+                                previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
+                            }
                             previewContainerRef = container
                         }
                     },
                     update = { container ->
                         val renderer = container.renderer
-                        renderer.setEnableHardwareScaler(false)
+                        renderer.setEnableHardwareScaler(true)
                         renderer.setScalingType(
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT,
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT
@@ -499,6 +600,9 @@ fun WaitingForApprovalScreen(
                                 controllerDisplayHeight,
                                 shouldRotatePreviewContent
                             )
+                        }
+                        container.onVideoRectChanged = { rect ->
+                            previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
                         }
                     },
                     modifier = Modifier.fillMaxSize()
@@ -535,6 +639,88 @@ fun WaitingForApprovalScreen(
                                 text = "Preview will resume when connection improves",
                                 color = Color.White.copy(alpha = 0.78f),
                                 fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                focusPoint?.let { rawPoint ->
+                    val previewRect =
+                        activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+                    val point = rawPoint.clampTo(previewRect)
+                    val localPoint = Offset(
+                        x = point.x - previewRect.left,
+                        y = point.y - previewRect.top
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    previewRect.left.roundToInt(),
+                                    previewRect.top.roundToInt()
+                                )
+                            }
+                            .size(
+                                width = with(density) { previewRect.width.toDp() },
+                                height = with(density) { previewRect.height.toDp() }
+                            )
+                    ) {
+                        FocusReticle(
+                            point = localPoint,
+                            success = focusSucceeded,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        if (exposureSupported) {
+                            val sliderOffset = with(density) {
+                                val sliderWidthPx = 44.dp.toPx()
+                                val sliderHeightPx = 168.dp.toPx()
+                                val reticleHalfPx = 34.dp.toPx()
+                                val horizontalGapPx = 12.dp.toPx()
+                                val minX = 12.dp.toPx()
+                                val maxX = previewRect.width - sliderWidthPx - 12.dp.toPx()
+                                val desiredRightX = localPoint.x + reticleHalfPx + horizontalGapPx
+                                val desiredLeftX =
+                                    localPoint.x - reticleHalfPx - horizontalGapPx - sliderWidthPx
+                                val desiredX = when {
+                                    localPoint.x <= previewRect.width / 2f && desiredRightX <= maxX -> desiredRightX
+                                    localPoint.x > previewRect.width / 2f && desiredLeftX >= minX -> desiredLeftX
+                                    desiredRightX <= maxX -> desiredRightX
+                                    else -> desiredLeftX
+                                }
+                                val desiredY = localPoint.y - (sliderHeightPx / 2f)
+                                val minY = 12.dp.toPx()
+                                val maxY = previewRect.height - sliderHeightPx - 12.dp.toPx()
+                                IntOffset(
+                                    x = desiredX.coerceIn(minX, maxX).roundToInt(),
+                                    y = desiredY.coerceIn(minY, maxY).roundToInt()
+                                )
+                            }
+                            val exposureProgress =
+                                (firebaseExposureMaxIndex - firebaseExposureIndex).toFloat() /
+                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex)
+                                        .toFloat()
+                                        .coerceAtLeast(1f)
+                            val neutralExposureProgress =
+                                (firebaseExposureMaxIndex - 0.coerceIn(
+                                    firebaseExposureMinIndex,
+                                    firebaseExposureMaxIndex
+                                )).toFloat() /
+                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex)
+                                        .toFloat()
+                                        .coerceAtLeast(1f)
+
+                            ExposureSliderOverlay(
+                                progress = exposureProgress,
+                                neutralProgress = neutralExposureProgress,
+                                modifier = Modifier
+                                    .offset { sliderOffset }
+                                    .size(width = 44.dp, height = 168.dp),
+                                onProgressChange = { progress ->
+                                    updateExposureFromProgress(progress)
+                                }
                             )
                         }
                     }
@@ -876,6 +1062,152 @@ fun CameraModeButton(
             color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+private fun calculateFittedPreviewRect(
+    containerWidth: Float,
+    containerHeight: Float,
+    contentWidth: Float,
+    contentHeight: Float
+): Rect? {
+    if (containerWidth <= 0f || containerHeight <= 0f || contentWidth <= 0f || contentHeight <= 0f) {
+        return null
+    }
+
+    val scale = minOf(containerWidth / contentWidth, containerHeight / contentHeight)
+    val fittedWidth = contentWidth * scale
+    val fittedHeight = contentHeight * scale
+    val left = (containerWidth - fittedWidth) / 2f
+    val top = (containerHeight - fittedHeight) / 2f
+    return Rect(left, top, left + fittedWidth, top + fittedHeight)
+}
+
+private fun Offset.clampTo(rect: Rect): Offset =
+    Offset(
+        x = x.coerceIn(rect.left, rect.right),
+        y = y.coerceIn(rect.top, rect.bottom)
+    )
+
+@Composable
+private fun FocusReticle(
+    point: Offset,
+    success: Boolean?,
+    modifier: Modifier = Modifier
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (success == null) 1.12f else 1f,
+        label = "controller_focus_reticle_scale"
+    )
+    val ringColor = when (success) {
+        true -> Color(0xFFFFD54F)
+        false -> Color.White.copy(alpha = 0.72f)
+        null -> Color.White
+    }
+
+    Canvas(modifier = modifier) {
+        val reticleSize = 68.dp.toPx() * scale
+        drawRoundRect(
+            color = ringColor,
+            topLeft = Offset(point.x - reticleSize / 2f, point.y - reticleSize / 2f),
+            size = androidx.compose.ui.geometry.Size(reticleSize, reticleSize),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(18.dp.toPx(), 18.dp.toPx()),
+            style = Stroke(width = 2.dp.toPx())
+        )
+
+        drawCircle(
+            color = ringColor,
+            radius = 3.dp.toPx(),
+            center = point
+        )
+    }
+}
+
+@Composable
+private fun ExposureSliderOverlay(
+    progress: Float,
+    neutralProgress: Float,
+    modifier: Modifier = Modifier,
+    onProgressChange: (Float) -> Unit
+) {
+    var dragProgress by remember { mutableFloatStateOf(progress.coerceIn(0f, 1f)) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    LaunchedEffect(progress) {
+        if (!isDragging) {
+            dragProgress = progress.coerceIn(0f, 1f)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.Black.copy(alpha = 0.42f))
+            .pointerInput(progress) {
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        isDragging = true
+                        dragProgress = progress.coerceIn(0f, 1f)
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        val nextProgress =
+                            (dragProgress + (dragAmount / size.height.toFloat())).coerceIn(0f, 1f)
+                        dragProgress = nextProgress
+                        onProgressChange(nextProgress)
+                    },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false }
+                )
+            }
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            val trackX = size.width / 2f
+            val trackTop = 14.dp.toPx()
+            val trackBottom = size.height - 14.dp.toPx()
+            val trackHeight = trackBottom - trackTop
+            val clampedNeutralProgress = neutralProgress.coerceIn(0f, 1f)
+            val thumbY = trackTop + (trackHeight * dragProgress.coerceIn(0f, 1f))
+            val neutralY = trackTop + (trackHeight * clampedNeutralProgress)
+
+            drawLine(
+                color = Color.White.copy(alpha = 0.22f),
+                start = Offset(trackX, trackTop),
+                end = Offset(trackX, trackBottom),
+                strokeWidth = 2.dp.toPx()
+            )
+            drawLine(
+                color = Color(0xFFFFD54F),
+                start = Offset(trackX, minOf(thumbY, neutralY)),
+                end = Offset(trackX, maxOf(thumbY, neutralY)),
+                strokeWidth = 2.dp.toPx()
+            )
+            drawLine(
+                color = Color.White.copy(alpha = 0.48f),
+                start = Offset(trackX - 6.dp.toPx(), neutralY),
+                end = Offset(trackX + 6.dp.toPx(), neutralY),
+                strokeWidth = 2.dp.toPx()
+            )
+            drawCircle(
+                color = Color(0xFFFFD54F),
+                radius = 6.dp.toPx(),
+                center = Offset(trackX, thumbY)
+            )
+        }
+
+        Icon(
+            imageVector = Icons.Default.WbSunny,
+            contentDescription = "Exposure",
+            tint = Color(0xFFFFD54F),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 8.dp)
+                .size(14.dp)
         )
     }
 }
