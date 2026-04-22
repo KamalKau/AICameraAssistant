@@ -125,6 +125,7 @@ fun WaitingForApprovalScreen(
     var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
     var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
     var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
+    var showGridOverlay by remember(roomCode) { mutableStateOf(false) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -644,6 +645,27 @@ fun WaitingForApprovalScreen(
                     }
                 }
 
+                if (showGridOverlay) {
+                    val previewRect =
+                        activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    previewRect.left.roundToInt(),
+                                    previewRect.top.roundToInt()
+                                )
+                            }
+                            .size(
+                                width = with(density) { previewRect.width.toDp() },
+                                height = with(density) { previewRect.height.toDp() }
+                            )
+                    ) {
+                        CameraGridOverlay(modifier = Modifier.fillMaxSize())
+                    }
+                }
+
                 focusPoint?.let { rawPoint ->
                     val previewRect =
                         activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
@@ -797,6 +819,11 @@ fun WaitingForApprovalScreen(
                                 repository.updateLensFacing(roomCode, nextFacing)
                             }
                         }
+                    )
+
+                    GridToggleButton(
+                        isActive = showGridOverlay,
+                        onClick = { showGridOverlay = !showGridOverlay }
                     )
                 }
             }

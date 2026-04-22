@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -136,6 +137,7 @@ fun CameraScreen(
     var exposureMinIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureMaxIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureIndex by remember(roomCode) { mutableIntStateOf(0) }
+    var showGridOverlay by remember(roomCode) { mutableStateOf(false) }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
@@ -713,6 +715,27 @@ fun CameraScreen(
             }
         }
 
+        if (showGridOverlay) {
+            val previewRect =
+                previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            previewRect.left.roundToInt(),
+                            previewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { previewRect.width.toDp() },
+                        height = with(density) { previewRect.height.toDp() }
+                    )
+            ) {
+                CameraGridOverlay(modifier = Modifier.fillMaxSize())
+            }
+        }
+
         if (sessionIsActive) {
             focusPoint?.let { rawPoint ->
                 val point = previewContentRect?.let(rawPoint::clampTo) ?: rawPoint
@@ -780,30 +803,41 @@ fun CameraScreen(
                 .padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.Black.copy(alpha = 0.45f),
-                onClick = {
-                    if (hasSeenConnectedState || roomStatus == "request_received") {
-                        endHostSession()
-                    } else {
-                        onBack()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color.Black.copy(alpha = 0.45f),
+                    onClick = {
+                        if (hasSeenConnectedState || roomStatus == "request_received") {
+                            endHostSession()
+                        } else {
+                            onBack()
+                        }
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (hasSeenConnectedState || roomStatus == "request_received") {
+                                if (isEndingSession) "Ending..." else "End Session"
+                            } else {
+                                "Back"
+                            },
+                            color = Color.White
+                        )
                     }
                 }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (hasSeenConnectedState || roomStatus == "request_received") {
-                            if (isEndingSession) "Ending..." else "End Session"
-                        } else {
-                            "Back"
-                        },
-                        color = Color.White
-                    )
-                }
+
+                GridToggleButton(
+                    isActive = showGridOverlay,
+                    onClick = { showGridOverlay = !showGridOverlay }
+                )
             }
 
             Surface(
@@ -927,6 +961,81 @@ fun CameraScreen(
                     )
                 ) {
                     Text(if (isEndingSession) "Ending..." else "Stop Camera Session")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CameraGridOverlay(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val lineColor = Color.White.copy(alpha = 0.34f)
+        val strokeWidth = 1.dp.toPx()
+        val thirdWidth = size.width / 3f
+        val thirdHeight = size.height / 3f
+
+        repeat(2) { index ->
+            val verticalX = thirdWidth * (index + 1)
+            drawLine(
+                color = lineColor,
+                start = Offset(verticalX, 0f),
+                end = Offset(verticalX, size.height),
+                strokeWidth = strokeWidth
+            )
+
+            val horizontalY = thirdHeight * (index + 1)
+            drawLine(
+                color = lineColor,
+                start = Offset(0f, horizontalY),
+                end = Offset(size.width, horizontalY),
+                strokeWidth = strokeWidth
+            )
+        }
+    }
+}
+
+@Composable
+fun GridToggleButton(
+    isActive: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.size(44.dp),
+        shape = CircleShape,
+        color = if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.45f),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        border = if (isActive) {
+            androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
+        } else {
+            null
+        }
+    ) {
+        IconButton(onClick = onClick) {
+            Canvas(modifier = Modifier.size(18.dp)) {
+                val iconColor = Color.White
+                val strokeWidth = 1.4.dp.toPx()
+                val thirdWidth = size.width / 3f
+                val thirdHeight = size.height / 3f
+
+                repeat(2) { index ->
+                    val verticalX = thirdWidth * (index + 1)
+                    drawLine(
+                        color = iconColor,
+                        start = Offset(verticalX, 0f),
+                        end = Offset(verticalX, size.height),
+                        strokeWidth = strokeWidth
+                    )
+
+                    val horizontalY = thirdHeight * (index + 1)
+                    drawLine(
+                        color = iconColor,
+                        start = Offset(0f, horizontalY),
+                        end = Offset(size.width, horizontalY),
+                        strokeWidth = strokeWidth
+                    )
                 }
             }
         }
