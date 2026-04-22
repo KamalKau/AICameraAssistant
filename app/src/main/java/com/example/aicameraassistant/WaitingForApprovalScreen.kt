@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
@@ -780,60 +781,74 @@ fun WaitingForApprovalScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
+                    IconButton(
                         onClick = { endControllerSession() },
                         enabled = !isEndingSession,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
+                        modifier = Modifier.background(
+                            MaterialTheme.colorScheme.error,
+                            CircleShape
                         )
                     ) {
-                        Text(if (isEndingSession) "Ending..." else "End Session")
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = if (isEndingSession) "Ending session" else "End session",
+                            tint = Color.White
+                        )
                     }
-
-                    CameraModeButton(
-                        icon = when {
-                            !firebaseFlashSupported -> Icons.Default.FlashOff
-                            firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
-                            firebaseFlashMode == "on" -> Icons.Default.FlashOn
-                            else -> Icons.Default.FlashOff
-                        },
-                        label = when {
-                            !firebaseFlashSupported -> "Unsupported"
-                            firebaseFlashMode == "auto" -> "Auto"
-                            firebaseFlashMode == "on" -> "On"
-                            else -> "Off"
-                        },
-                        enabled = firebaseFlashSupported,
-                        onClick = {
-                            if (!firebaseFlashSupported) return@CameraModeButton
-                            val nextFlashMode = when (firebaseFlashMode) {
-                                "off" -> "auto"
-                                "auto" -> "on"
-                                else -> "off"
-                            }
-                            scope.launch {
-                                repository.updateFlashMode(roomCode, nextFlashMode)
-                            }
-                        }
-                    )
-
-                    CameraModeButton(
-                        icon = Icons.Default.SwitchCamera,
-                        label = if (firebaseLensFacing == "back") "Rear" else "Front",
-                        onClick = {
-                            scope.launch {
-                                val nextFacing =
-                                    if (firebaseLensFacing == "back") "front" else "back"
-                                repository.updateLensFacing(roomCode, nextFacing)
-                            }
-                        }
-                    )
-
-                    GridToggleButton(
-                        isActive = showGridOverlay,
-                        onClick = { showGridOverlay = !showGridOverlay }
-                    )
                 }
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .statusBarsPadding()
+                    .padding(end = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                CameraModeButton(
+                    icon = when {
+                        !firebaseFlashSupported -> Icons.Default.FlashOff
+                        firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
+                        firebaseFlashMode == "on" -> Icons.Default.FlashOn
+                        else -> Icons.Default.FlashOff
+                    },
+                    label = when {
+                        !firebaseFlashSupported -> "Unsupported"
+                        firebaseFlashMode == "auto" -> "Auto"
+                        firebaseFlashMode == "on" -> "On"
+                        else -> "Off"
+                    },
+                    enabled = firebaseFlashSupported,
+                    onClick = {
+                        if (!firebaseFlashSupported) return@CameraModeButton
+                        val nextFlashMode = when (firebaseFlashMode) {
+                            "off" -> "auto"
+                            "auto" -> "on"
+                            else -> "off"
+                        }
+                        scope.launch {
+                            repository.updateFlashMode(roomCode, nextFlashMode)
+                        }
+                    }
+                )
+
+                CameraModeButton(
+                    icon = Icons.Default.SwitchCamera,
+                    label = if (firebaseLensFacing == "back") "Rear" else "Front",
+                    onClick = {
+                        scope.launch {
+                            val nextFacing =
+                                if (firebaseLensFacing == "back") "front" else "back"
+                            repository.updateLensFacing(roomCode, nextFacing)
+                        }
+                    }
+                )
+
+                GridToggleButton(
+                    isActive = showGridOverlay,
+                    onClick = { showGridOverlay = !showGridOverlay }
+                )
             }
 
             Column(
@@ -1177,24 +1192,27 @@ fun CameraModeButton(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         IconButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f)
+                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+                modifier = Modifier.size(18.dp)
             )
         }
 
         Text(
             text = label,
             color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )
     }

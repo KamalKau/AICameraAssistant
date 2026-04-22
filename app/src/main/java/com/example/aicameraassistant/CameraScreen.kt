@@ -41,6 +41,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FlashAuto
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -808,36 +814,38 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color.Black.copy(alpha = 0.45f),
+                IconButton(
                     onClick = {
                         if (hasSeenConnectedState || roomStatus == "request_received") {
                             endHostSession()
                         } else {
                             onBack()
                         }
-                    }
+                    },
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (hasSeenConnectedState || roomStatus == "request_received") {
-                                if (isEndingSession) "Ending..." else "End Session"
-                            } else {
-                                "Back"
-                            },
-                            color = Color.White
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = if (hasSeenConnectedState || roomStatus == "request_received") {
+                            if (isEndingSession) "Ending session" else "End session"
+                        } else {
+                            "Back"
+                        },
+                        tint = Color.White
+                    )
                 }
 
-                GridToggleButton(
-                    isActive = showGridOverlay,
-                    onClick = { showGridOverlay = !showGridOverlay }
-                )
+                IconButton(
+                    onClick = { endHostSession() },
+                    enabled = !isEndingSession,
+                    modifier = Modifier.background(MaterialTheme.colorScheme.error, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CallEnd,
+                        contentDescription = if (isEndingSession) "Ending session" else "End session",
+                        tint = Color.White
+                    )
+                }
             }
 
             Surface(
@@ -964,6 +972,58 @@ fun CameraScreen(
                 }
             }
         }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            HostCameraModeButton(
+                icon = when {
+                    !flashSupported -> Icons.Default.FlashOff
+                    firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
+                    firebaseFlashMode == "on" -> Icons.Default.FlashOn
+                    else -> Icons.Default.FlashOff
+                },
+                label = when {
+                    !flashSupported -> "Unsupported"
+                    firebaseFlashMode == "auto" -> "Auto"
+                    firebaseFlashMode == "on" -> "On"
+                    else -> "Off"
+                },
+                enabled = flashSupported,
+                onClick = {
+                    if (!flashSupported) return@HostCameraModeButton
+                    val nextFlashMode = when (firebaseFlashMode) {
+                        "off" -> "auto"
+                        "auto" -> "on"
+                        else -> "off"
+                    }
+                    scope.launch {
+                        repository.updateFlashMode(roomCode, nextFlashMode)
+                    }
+                }
+            )
+
+            HostCameraModeButton(
+                icon = Icons.Default.SwitchCamera,
+                label = if (firebaseLensFacing == "back") "Rear" else "Front",
+                onClick = {
+                    scope.launch {
+                        val nextFacing =
+                            if (firebaseLensFacing == "back") "front" else "back"
+                        repository.updateLensFacing(roomCode, nextFacing)
+                    }
+                }
+            )
+
+            GridToggleButton(
+                isActive = showGridOverlay,
+                onClick = { showGridOverlay = !showGridOverlay }
+            )
+        }
     }
 }
 
@@ -1039,6 +1099,41 @@ fun GridToggleButton(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun HostCameraModeButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
+        Text(
+            text = label,
+            color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
