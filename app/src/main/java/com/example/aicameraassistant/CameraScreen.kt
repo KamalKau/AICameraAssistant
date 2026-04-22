@@ -970,8 +970,8 @@ fun CameraScreen(
 @Composable
 fun CameraGridOverlay(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
-        val lineColor = Color.White.copy(alpha = 0.34f)
-        val strokeWidth = 1.dp.toPx()
+        val lineColor = Color.White.copy(alpha = 0.24f)
+        val strokeWidth = 0.9.dp.toPx()
         val thirdWidth = size.width / 3f
         val thirdHeight = size.height / 3f
 
@@ -1002,21 +1002,21 @@ fun GridToggleButton(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.size(44.dp),
+        modifier = modifier.size(40.dp),
         shape = CircleShape,
-        color = if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.45f),
+        color = if (isActive) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.32f),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         border = if (isActive) {
-            androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
+            androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.22f))
         } else {
             null
         }
     ) {
-        IconButton(onClick = onClick) {
-            Canvas(modifier = Modifier.size(18.dp)) {
-                val iconColor = Color.White
-                val strokeWidth = 1.4.dp.toPx()
+        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+            Canvas(modifier = Modifier.size(16.dp)) {
+                val iconColor = Color.White.copy(alpha = if (isActive) 0.96f else 0.88f)
+                val strokeWidth = 1.2.dp.toPx()
                 val thirdWidth = size.width / 3f
                 val thirdHeight = size.height / 3f
 

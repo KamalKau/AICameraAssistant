@@ -6,9 +6,12 @@ import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,8 +26,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -62,6 +65,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -80,7 +84,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.RendererCommon
@@ -120,6 +127,7 @@ fun WaitingForApprovalScreen(
     var isEndingSession by remember(roomCode) { mutableStateOf(false) }
     var zoomUiValue by remember(roomCode) { mutableStateOf(1f) }
     var isZoomDragging by remember(roomCode) { mutableStateOf(false) }
+    var showZoomRing by remember(roomCode) { mutableStateOf(false) }
     var lastSentZoom by remember(roomCode) { mutableStateOf(Double.NaN) }
     var focusPoint by remember(roomCode) { mutableStateOf<Offset?>(null) }
     var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
@@ -203,10 +211,10 @@ fun WaitingForApprovalScreen(
         AppConnectionState.CONNECTED -> "Video paused. Network unstable"
         else -> "Connecting video..."
     }
-    val zoomPresets = remember(minZoom, maxZoom) {
-        listOf(1.0, 2.0, 3.0, 5.0)
-            .filter { it in minZoom..maxZoom }
-            .ifEmpty { listOf(minZoom) }
+    val commonZoomOptions = remember(minZoom, maxZoom) {
+        listOf(0.6f, 1f, 2f, 3f)
+            .filter { it.toDouble() in minZoom..maxZoom }
+            .ifEmpty { listOf(minZoom.toFloat()) }
     }
     val flashModes = listOf("off", "auto", "on")
 
@@ -882,44 +890,7 @@ fun WaitingForApprovalScreen(
                             }
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Box(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                ) {
-                    Text(
-                        text = if (controllerDisplayWidth > 0 && controllerDisplayHeight > 0) {
-                            "Controller frame: $controllerDisplayWidth x $controllerDisplayHeight"
-                        } else {
-                            "Controller frame: Detecting..."
-                        },
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Box(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                ) {
-                    Text(
-                        text = if (cameraPreviewWidth > 0 && cameraPreviewHeight > 0) {
-                            "Camera hardware: $cameraPreviewWidth × $cameraPreviewHeight"
-                        } else {
-                            "Camera hardware: Detecting..."
-                        },
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
+                }            }
 
             Column(
                 modifier = Modifier
@@ -929,84 +900,35 @@ fun WaitingForApprovalScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(30.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .border(
-                                width = 1.dp,
-                                color = Color(0xFFFFC83D).copy(alpha = 0.7f),
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            .padding(horizontal = 16.dp, vertical = 7.dp)
-                    ) {
-                        Text(
-                            text = String.format(
-                                "%.1fx",
-                                zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat())
-                            ),
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 16.sp
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .background(
-                                Color(0xFF111111).copy(alpha = 0.9f),
-                                RoundedCornerShape(24.dp)
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = Color.White.copy(alpha = 0.1f),
-                                shape = RoundedCornerShape(24.dp)
-                            )
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        zoomPresets.forEach { preset ->
-                            ZoomPresetPill(
-                                text = "${preset.roundToInt()}x",
-                                isSelected = abs(zoomUiValue - preset.toFloat()) < 0.15f,
-                                onClick = {
-                                    val presetValue = preset.toFloat()
-                                    zoomUiValue = presetValue
-                                    isZoomDragging = false
-                                    sendZoomUpdate(presetValue, force = true)
-                                }
-                            )
-                        }
-                    }
-
-                    Slider(
+                if (showZoomRing) {
+                    AndroidZoomBar(
                         value = zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat()),
+                        minZoom = minZoom.toFloat(),
+                        maxZoom = maxZoom.toFloat(),
                         onValueChange = { newValue ->
                             isZoomDragging = true
                             zoomUiValue = newValue
                             sendZoomUpdate(newValue)
                         },
-                        valueRange = minZoom.toFloat()..maxZoom.toFloat(),
                         onValueChangeFinished = {
                             isZoomDragging = false
                             sendZoomUpdate(zoomUiValue, force = true)
-                        },
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFFFC83D),
-                            activeTrackColor = Color(0xFFFFC83D),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.16f)
-                        ),
-                        modifier = Modifier.width(292.dp)
+                            showZoomRing = false
+                        }
                     )
                 }
+
+                ZoomPresetSelector(
+                    options = commonZoomOptions,
+                    currentValue = zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat()),
+                    onOptionClick = { selectedZoom ->
+                        zoomUiValue = selectedZoom
+                        isZoomDragging = false
+                        sendZoomUpdate(selectedZoom, force = true)
+                        showZoomRing = false
+                    },
+                    onLongPress = { showZoomRing = true }
+                )
 
                 Box(
                     modifier = Modifier
@@ -1027,39 +949,224 @@ fun WaitingForApprovalScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ZoomPresetPill(
-    text: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
+fun ZoomPresetSelector(
+    options: List<Float>,
+    currentValue: Float,
+    modifier: Modifier = Modifier,
+    onOptionClick: (Float) -> Unit,
+    onLongPress: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(
-                if (isSelected) Color(0xFFFFC83D) else Color.Transparent
-            )
-            .border(
-                width = 1.dp,
-                color = if (isSelected) {
-                    Color(0xFFFFE082)
-                } else {
-                    Color.White.copy(alpha = 0.14f)
-                },
-                shape = CircleShape
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center
+    Row(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(26.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(26.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = text,
-            color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.95f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+        options.forEach { option ->
+            val isSelected = abs(currentValue - option) < 0.16f
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(
+                        if (isSelected) Color.White.copy(alpha = 0.16f) else Color.Transparent
+                    )
+                    .combinedClickable(
+                        onClick = { onOptionClick(option) },
+                        onLongClick = onLongPress
+                    )
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "${formatZoomLabel(option)}x",
+                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.78f),
+                    fontSize = 15.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                )
+            }
+        }
     }
 }
+
+@Composable
+fun AndroidZoomBar(
+    value: Float,
+    minZoom: Float,
+    maxZoom: Float,
+    modifier: Modifier = Modifier,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit
+) {
+    val clampedValue = value.coerceIn(minZoom, maxZoom)
+    val normalizedValue =
+        ((clampedValue - minZoom) / (maxZoom - minZoom).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
+    val startAngle = 135f
+    val sweepAngle = 270f
+
+    fun updateFromPoint(point: Offset, sizePx: Float) {
+        val center = Offset(sizePx / 2f, sizePx / 2f)
+        val rawAngle = ((Math.toDegrees(
+            atan2(
+                (point.y - center.y).toDouble(),
+                (point.x - center.x).toDouble()
+            )
+        ) + 360.0) % 360.0).toFloat()
+        val extendedAngle = if (rawAngle < startAngle) rawAngle + 360f else rawAngle
+        val normalized =
+            ((extendedAngle.coerceIn(startAngle, startAngle + sweepAngle) - startAngle) /
+                sweepAngle)
+                .coerceIn(0f, 1f)
+        onValueChange(minZoom + ((maxZoom - minZoom) * normalized))
+    }
+
+    Box(
+        modifier = modifier
+            .size(196.dp)
+            .background(Color.Black.copy(alpha = 0.2f), CircleShape)
+            .border(0.8.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+            .pointerInput(minZoom, maxZoom) {
+                detectDragGestures(
+                    onDragStart = { point -> updateFromPoint(point, size.width.toFloat()) },
+                    onDragEnd = {
+                        onValueChangeFinished()
+                    },
+                    onDragCancel = {
+                        onValueChangeFinished()
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        updateFromPoint(
+                            change.position,
+                            size.width.toFloat()
+                        )
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val ringInset = 24.dp.toPx()
+            val ringStroke = 8.dp.toPx()
+            val ringSize = androidx.compose.ui.geometry.Size(
+                width = size.width - (ringInset * 2f),
+                height = size.height - (ringInset * 2f)
+            )
+            val ringTopLeft = Offset(ringInset, ringInset)
+            val ringRadius = ringSize.width / 2f
+
+            drawArc(
+                color = Color.White.copy(alpha = 0.13f),
+                startAngle = startAngle,
+                sweepAngle = sweepAngle,
+                useCenter = false,
+                topLeft = ringTopLeft,
+                size = ringSize,
+                style = Stroke(width = ringStroke, cap = StrokeCap.Round)
+            )
+            drawArc(
+                color = Color.White.copy(alpha = 0.96f),
+                startAngle = startAngle,
+                sweepAngle = sweepAngle * normalizedValue,
+                useCenter = false,
+                topLeft = ringTopLeft,
+                size = ringSize,
+                style = Stroke(width = ringStroke, cap = StrokeCap.Round)
+            )
+
+            val centerPoint = Offset(size.width / 2f, size.height / 2f)
+            repeat(19) { index ->
+                val tickNormalized = index / 18f
+                val angleRadians =
+                    Math.toRadians((startAngle + (sweepAngle * tickNormalized)).toDouble())
+                val outerRadius = ringRadius + (ringStroke / 2f) + 8.dp.toPx()
+                val innerRadius = outerRadius - 6.dp.toPx()
+                val outer = Offset(
+                    x = centerPoint.x + (cos(angleRadians).toFloat() * outerRadius),
+                    y = centerPoint.y + (sin(angleRadians).toFloat() * outerRadius)
+                )
+                val inner = Offset(
+                    x = centerPoint.x + (cos(angleRadians).toFloat() * innerRadius),
+                    y = centerPoint.y + (sin(angleRadians).toFloat() * innerRadius)
+                )
+                drawLine(
+                    color = Color.White.copy(alpha = 0.12f),
+                    start = inner,
+                    end = outer,
+                    strokeWidth = 1.4.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+
+            val thumbAngleRadians =
+                Math.toRadians((startAngle + (sweepAngle * normalizedValue)).toDouble())
+            val thumbCenter = Offset(
+                x = centerPoint.x + (cos(thumbAngleRadians).toFloat() * ringRadius),
+                y = centerPoint.y + (sin(thumbAngleRadians).toFloat() * ringRadius)
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 6.dp.toPx(),
+                center = thumbCenter
+            )
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.46f),
+                radius = 2.2.dp.toPx(),
+                center = thumbCenter
+            )
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "${formatZoomLabel(clampedValue)}x",
+                color = Color.White,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Zoom",
+                color = Color.White.copy(alpha = 0.48f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 18.dp)
+                .fillMaxWidth(0.6f),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${formatZoomLabel(minZoom)}x",
+                color = Color.White.copy(alpha = 0.42f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "${formatZoomLabel(maxZoom)}x",
+                color = Color.White.copy(alpha = 0.42f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+private fun formatZoomLabel(value: Float): String =
+    if (value % 1f == 0f) {
+        value.roundToInt().toString()
+    } else {
+        String.format("%.1f", value)
+    }
 
 @Composable
 fun CameraModeButton(
@@ -1275,3 +1382,4 @@ fun createOffer(
         MediaConstraints()
     )
 }
+
