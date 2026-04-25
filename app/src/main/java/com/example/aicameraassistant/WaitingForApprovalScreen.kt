@@ -113,6 +113,7 @@ fun WaitingForApprovalScreen(
     val firebaseMaxZoom by repository.getMaxZoom(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
     val firebaseFlashSupported by repository.getFlashSupported(roomCode).collectAsState(initial = false)
+    val firebaseGridEnabled by repository.getGridEnabled(roomCode).collectAsState(initial = false)
     val firebaseExposureMinIndex by repository.getExposureMinIndex(roomCode).collectAsState(initial = 0)
     val firebaseExposureMaxIndex by repository.getExposureMaxIndex(roomCode).collectAsState(initial = 0)
     val firebaseExposureIndex by repository.getExposureIndex(roomCode).collectAsState(initial = 0)
@@ -134,7 +135,6 @@ fun WaitingForApprovalScreen(
     var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
     var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
     var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
-    var showGridOverlay by remember(roomCode) { mutableStateOf(false) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -654,7 +654,7 @@ fun WaitingForApprovalScreen(
                     }
                 }
 
-                if (showGridOverlay) {
+                if (firebaseGridEnabled) {
                     val previewRect =
                         activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
                     Box(
@@ -763,20 +763,9 @@ fun WaitingForApprovalScreen(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = { endControllerSession() },
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "End Session",
-                        tint = Color.White
-                    )
-                }
-
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -785,7 +774,7 @@ fun WaitingForApprovalScreen(
                         onClick = { endControllerSession() },
                         enabled = !isEndingSession,
                         modifier = Modifier.background(
-                            MaterialTheme.colorScheme.error,
+                            Color(0xFFE53935),
                             CircleShape
                         )
                     ) {
@@ -846,8 +835,12 @@ fun WaitingForApprovalScreen(
                 )
 
                 GridToggleButton(
-                    isActive = showGridOverlay,
-                    onClick = { showGridOverlay = !showGridOverlay }
+                    isActive = firebaseGridEnabled,
+                    onClick = {
+                        scope.launch {
+                            repository.updateGridEnabled(roomCode, !firebaseGridEnabled)
+                        }
+                    }
                 )
             }
 

@@ -108,6 +108,7 @@ fun CameraScreen(
     val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
+    val firebaseGridEnabled by repository.getGridEnabled(roomCode).collectAsState(initial = false)
     val firebaseCaptureRequest by repository.getCaptureRequest(roomCode).collectAsState(initial = false)
     val firebaseRequestReceived by repository.getRequestReceived(roomCode).collectAsState(initial = false)
     val firebaseControllerApproved by repository.getControllerApproved(roomCode).collectAsState(initial = false)
@@ -143,7 +144,6 @@ fun CameraScreen(
     var exposureMinIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureMaxIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureIndex by remember(roomCode) { mutableIntStateOf(0) }
-    var showGridOverlay by remember(roomCode) { mutableStateOf(false) }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by remember { mutableStateOf(false) }
@@ -721,7 +721,7 @@ fun CameraScreen(
             }
         }
 
-        if (showGridOverlay) {
+        if (firebaseGridEnabled) {
             val previewRect =
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
             Box(
@@ -811,30 +811,9 @@ fun CameraScreen(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = {
-                        if (hasSeenConnectedState || roomStatus == "request_received") {
-                            endHostSession()
-                        } else {
-                            onBack()
-                        }
-                    },
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = if (hasSeenConnectedState || roomStatus == "request_received") {
-                            if (isEndingSession) "Ending session" else "End session"
-                        } else {
-                            "Back"
-                        },
-                        tint = Color.White
-                    )
-                }
-
                 IconButton(
                     onClick = { endHostSession() },
                     enabled = !isEndingSession,
@@ -848,86 +827,93 @@ fun CameraScreen(
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.Black.copy(alpha = 0.45f)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color.Black.copy(alpha = 0.45f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(statusDotColor)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(statusDotColor)
+                        )
 
-                    Text(
-                        text = statusText,
-                        color = Color.White,
-                        fontWeight = FontWeight.Medium
-                    )
+                        Text(
+                            text = statusText,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = Color.Black.copy(alpha = 0.45f)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            if (!sessionIsActive) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = Color.Black.copy(alpha = 0.45f)
                 ) {
-                    Column {
-                        Text(
-                            text = "Room Code",
-                            color = Color.White.copy(alpha = 0.75f)
-                        )
-                        Text(
-                            text = roomCode,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Room Code",
+                                color = Color.White.copy(alpha = 0.75f)
+                            )
+                            Text(
+                                text = roomCode,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
 
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = buildString {
-                                append(if (firebaseLensFacing == "front") "Front" else "Back")
-                                append(" | ")
-                                append("${firebaseZoomLevel}x")
-                                append(" | ")
-                                append(
-                                    when {
-                                        isFrontCamera && firebaseFlashMode == "on" -> "Screen Flash On"
-                                        isFrontCamera && firebaseFlashMode == "auto" -> "Screen Flash Auto"
-                                        !flashSupported && firebaseFlashMode != "off" -> "Flash Unsupported"
-                                        firebaseFlashMode == "auto" -> "Flash Auto"
-                                        firebaseFlashMode == "on" -> "Flash On"
-                                        else -> "Flash Off"
-                                    }
-                                )
-                            },
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontWeight = FontWeight.Medium
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = buildString {
+                                    append(if (firebaseLensFacing == "front") "Front" else "Back")
+                                    append(" | ")
+                                    append("${firebaseZoomLevel}x")
+                                    append(" | ")
+                                    append(
+                                        when {
+                                            isFrontCamera && firebaseFlashMode == "on" -> "Screen Flash On"
+                                            isFrontCamera && firebaseFlashMode == "auto" -> "Screen Flash Auto"
+                                            !flashSupported && firebaseFlashMode != "off" -> "Flash Unsupported"
+                                            firebaseFlashMode == "auto" -> "Flash Auto"
+                                            firebaseFlashMode == "on" -> "Flash On"
+                                            else -> "Flash Off"
+                                        }
+                                    )
+                                },
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.Medium
+                            )
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
 
-                        Text(
-                            text = if (resolvedWidth > 0 && resolvedHeight > 0) {
-                                "Hardware: ${resolvedWidth} x ${resolvedHeight}"
-                            } else {
-                                "Hardware: Detecting..."
-                            },
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontWeight = FontWeight.SemiBold
-                        )
+                            Text(
+                                text = if (resolvedWidth > 0 && resolvedHeight > 0) {
+                                    "Hardware: ${resolvedWidth} x ${resolvedHeight}"
+                                } else {
+                                    "Hardware: Detecting..."
+                                },
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
@@ -960,17 +946,6 @@ fun CameraScreen(
                 }
             }
 
-            if (roomStatus == "connected") {
-                Button(
-                    onClick = { endHostSession() },
-                    enabled = !isEndingSession,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text(if (isEndingSession) "Ending..." else "Stop Camera Session")
-                }
-            }
         }
 
         Column(
@@ -1020,8 +995,12 @@ fun CameraScreen(
             )
 
             GridToggleButton(
-                isActive = showGridOverlay,
-                onClick = { showGridOverlay = !showGridOverlay }
+                isActive = firebaseGridEnabled,
+                onClick = {
+                    scope.launch {
+                        repository.updateGridEnabled(roomCode, !firebaseGridEnabled)
+                    }
+                }
             )
         }
     }

@@ -29,6 +29,7 @@ class FirebaseRoomRepository {
                 "maxZoom" to 1.0,
                 "flashMode" to "off",
                 "flashSupported" to false,
+                "gridEnabled" to false,
                 "focusRequestId" to 0L,
                 "focusPointX" to 0.5,
                 "focusPointY" to 0.5,
@@ -113,6 +114,13 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .update("flashSupported", flashSupported)
+            .await()
+    }
+
+    suspend fun updateGridEnabled(roomCode: String, gridEnabled: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("gridEnabled", gridEnabled)
             .await()
     }
 
@@ -209,6 +217,7 @@ class FirebaseRoomRepository {
                 "maxZoom" to 1.0,
                 "flashMode" to "off",
                 "flashSupported" to false,
+                "gridEnabled" to false,
                 "focusRequestId" to 0L,
                 "focusPointX" to 0.5,
                 "focusPointY" to 0.5,
@@ -309,6 +318,14 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getBoolean("flashSupported") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getGridEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("gridEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }
