@@ -220,8 +220,14 @@ fun CameraScreen(
 
         scope.launch {
             runCatching { repository.endSession(roomCode) }
-                .onFailure { Log.e("SESSION_END", "Failed to end host session", it) }
-            shutdownHostSession(exitScreen = true)
+                .onSuccess {
+                    shutdownHostSession(exitScreen = true)
+                }
+                .onFailure {
+                    isEndingSession = false
+                    Log.e("SESSION_END", "Failed to end host session", it)
+                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
+                }
         }
     }
 

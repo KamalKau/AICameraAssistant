@@ -240,8 +240,14 @@ fun WaitingForApprovalScreen(
 
         scope.launch {
             runCatching { repository.endSession(roomCode) }
-                .onFailure { Log.e("SESSION_END", "Failed to end controller session", it) }
-            shutdownControllerSession(exitScreen = true)
+                .onSuccess {
+                    shutdownControllerSession(exitScreen = true)
+                }
+                .onFailure {
+                    isEndingSession = false
+                    Log.e("SESSION_END", "Failed to end controller session", it)
+                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
+                }
         }
     }
 

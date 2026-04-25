@@ -14,37 +14,7 @@ class FirebaseRoomRepository {
 
     suspend fun createRoom(roomCode: String) {
         val docRef = db.collection("rooms").document(roomCode)
-        val snapshot = docRef.get().await()
-
-        if (!snapshot.exists()) {
-            val roomData = mapOf(
-                "roomCode" to roomCode,
-                "status" to "waiting",
-                "requestReceived" to false,
-                "controllerApproved" to false,
-                "captureRequest" to false,
-                "lensFacing" to "back",
-                "zoomLevel" to 1.0,
-                "minZoom" to 1.0,
-                "maxZoom" to 1.0,
-                "flashMode" to "off",
-                "flashSupported" to false,
-                "gridEnabled" to false,
-                "focusRequestId" to 0L,
-                "focusPointX" to 0.5,
-                "focusPointY" to 0.5,
-                "exposureMinIndex" to 0L,
-                "exposureMaxIndex" to 0L,
-                "exposureIndex" to 0L,
-                "offer" to null,
-                "answer" to null,
-                "previewWidth" to 0L,
-                "previewHeight" to 0L,
-                "createdAt" to System.currentTimeMillis()
-            )
-
-            docRef.set(roomData).await()
-        }
+        docRef.set(defaultRoomData(roomCode)).await()
     }
 
     suspend fun sendConnectionRequest(roomCode: String): Boolean {
@@ -205,32 +175,37 @@ class FirebaseRoomRepository {
 
         clearIceCandidates(roomCode)
 
-        roomRef.update(
-            mapOf(
-                "status" to "ended",
-                "requestReceived" to false,
-                "controllerApproved" to false,
-                "captureRequest" to false,
-                "lensFacing" to "back",
-                "zoomLevel" to 1.0,
-                "minZoom" to 1.0,
-                "maxZoom" to 1.0,
-                "flashMode" to "off",
-                "flashSupported" to false,
-                "gridEnabled" to false,
-                "focusRequestId" to 0L,
-                "focusPointX" to 0.5,
-                "focusPointY" to 0.5,
-                "exposureMinIndex" to 0L,
-                "exposureMaxIndex" to 0L,
-                "exposureIndex" to 0L,
-                "offer" to null,
-                "answer" to null,
-                "previewWidth" to 0L,
-                "previewHeight" to 0L
-            )
+        roomRef.set(
+            defaultRoomData(roomCode) + ("status" to "ended")
         ).await()
     }
+
+    private fun defaultRoomData(roomCode: String): Map<String, Any?> =
+        mapOf(
+            "roomCode" to roomCode,
+            "status" to "waiting",
+            "requestReceived" to false,
+            "controllerApproved" to false,
+            "captureRequest" to false,
+            "lensFacing" to "back",
+            "zoomLevel" to 1.0,
+            "minZoom" to 1.0,
+            "maxZoom" to 1.0,
+            "flashMode" to "off",
+            "flashSupported" to false,
+            "gridEnabled" to false,
+            "focusRequestId" to 0L,
+            "focusPointX" to 0.5,
+            "focusPointY" to 0.5,
+            "exposureMinIndex" to 0L,
+            "exposureMaxIndex" to 0L,
+            "exposureIndex" to 0L,
+            "offer" to null,
+            "answer" to null,
+            "previewWidth" to 0L,
+            "previewHeight" to 0L,
+            "createdAt" to System.currentTimeMillis()
+        )
 
     suspend fun clearIceCandidates(roomCode: String) {
         val roomRef = db.collection("rooms").document(roomCode)
