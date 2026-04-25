@@ -750,7 +750,18 @@ fun CameraScreen(
 
         if (sessionIsActive) {
             focusPoint?.let { rawPoint ->
-                val point = previewContentRect?.let(rawPoint::clampTo) ?: rawPoint
+                val previewRect =
+                    previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+                val focusUiBounds = with(density) {
+                    calculateFocusUiBounds(
+                        previewRect = previewRect,
+                        topInsetPx = 132.dp.toPx(),
+                        rightInsetPx = 116.dp.toPx(),
+                        edgePaddingPx = 12.dp.toPx(),
+                        reticleRadiusPx = 34.dp.toPx()
+                    )
+                }
+                val point = rawPoint.clampTo(previewRect)
                 FocusReticle(
                     point = point,
                     success = focusSucceeded,
@@ -759,29 +770,18 @@ fun CameraScreen(
 
                 if (exposureSupported) {
                     val sliderOffset = with(density) {
-                        val previewRect =
-                            previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
-                        val sliderWidthPx = 44.dp.toPx()
-                        val sliderHeightPx = 168.dp.toPx()
-                        val reticleHalfPx = 34.dp.toPx()
-                        val horizontalGapPx = 12.dp.toPx()
-                        val minX = previewRect.left + 12.dp.toPx()
-                        val maxX = previewRect.right - sliderWidthPx - 12.dp.toPx()
-                        val desiredRightX = point.x + reticleHalfPx + horizontalGapPx
-                        val desiredLeftX = point.x - reticleHalfPx - horizontalGapPx - sliderWidthPx
-                        val desiredX = when {
-                            point.x <= previewRect.center.x && desiredRightX <= maxX -> desiredRightX
-                            point.x > previewRect.center.x && desiredLeftX >= minX -> desiredLeftX
-                            desiredRightX <= maxX -> desiredRightX
-                            else -> desiredLeftX
-                        }
-                        val desiredY = point.y - (sliderHeightPx / 2f)
-                        val minY = previewRect.top + 12.dp.toPx()
-                        val maxY = previewRect.bottom - sliderHeightPx - 12.dp.toPx()
-                        IntOffset(
-                            x = desiredX.coerceIn(minX, maxX).roundToInt(),
-                            y = desiredY.coerceIn(minY, maxY).roundToInt()
+                        calculateExposureSliderOffset(
+                            point = point,
+                            previewRect = previewRect,
+                            safeBounds = focusUiBounds,
+                            sliderWidthPx = 44.dp.toPx(),
+                            sliderHeightPx = 168.dp.toPx(),
+                            reticleHalfPx = 34.dp.toPx(),
+                                horizontalGapPx = 12.dp.toPx()
                         )
+                    }
+                    val sliderSize = with(density) {
+                        androidx.compose.ui.geometry.Size(44.dp.toPx(), 168.dp.toPx())
                     }
                     val exposureProgress =
                         (exposureMaxIndex - firebaseExposureIndex).toFloat() /
@@ -793,6 +793,13 @@ fun CameraScreen(
                             (exposureMaxIndex - exposureMinIndex)
                                 .toFloat()
                                 .coerceAtLeast(1f)
+
+                    FocusExposureConnector(
+                        focusPoint = point,
+                        sliderTopLeft = Offset(sliderOffset.x.toFloat(), sliderOffset.y.toFloat()),
+                        sliderSize = sliderSize,
+                        modifier = Modifier.fillMaxSize()
+                    )
 
                     ExposureSliderOverlay(
                         progress = exposureProgress,
@@ -1244,6 +1251,32 @@ private fun ExposureSliderOverlay(
     }
 }
 
+@Composable
+private fun FocusExposureConnector(
+    focusPoint: Offset,
+    sliderTopLeft: Offset,
+    sliderSize: androidx.compose.ui.geometry.Size,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val sliderOnRight = sliderTopLeft.x > focusPoint.x
+        val reticleHalf = 34.dp.toPx()
+        val startX = if (sliderOnRight) focusPoint.x + reticleHalf else focusPoint.x - reticleHalf
+        val endX = if (sliderOnRight) sliderTopLeft.x else sliderTopLeft.x + sliderSize.width
+        val connectorY = focusPoint.y.coerceIn(
+            sliderTopLeft.y + 18.dp.toPx(),
+            sliderTopLeft.y + sliderSize.height - 18.dp.toPx()
+        )
+
+        drawLine(
+            color = Color.White.copy(alpha = 0.28f),
+            start = Offset(startX, connectorY),
+            end = Offset(endX, connectorY),
+            strokeWidth = 1.5.dp.toPx()
+        )
+    }
+}
+
 private fun calculateFittedPreviewRect(
     containerWidth: Float,
     containerHeight: Float,
@@ -1339,5 +1372,70 @@ fun createAnswer(
             }
         ),
         MediaConstraints()
+    )
+}
+
+private fun calculateFocusUiBounds(
+    previewRect: Rect,
+    topInsetPx: Float,
+    rightInsetPx: Float,
+    edgePaddingPx: Float,
+    reticleRadiusPx: Float
+): Rect {
+    val left = previewRect.left + edgePaddingPx + reticleRadiusPx
+    val top = previewRect.top + topInsetPx + reticleRadiusPx
+    val right = previewRect.right - rightInsetPx - edgePaddingPx
+    val bottom = previewRect.bottom - edgePaddingPx - reticleRadiusPx
+
+    return if (right > left && bottom > top) {
+        Rect(left, top, right, bottom)
+    } else {
+        previewRect
+    }
+}
+
+private fun calculateExposureSliderOffset(
+    point: Offset,
+    previewRect: Rect,
+    safeBounds: Rect,
+    sliderWidthPx: Float,
+    sliderHeightPx: Float,
+    reticleHalfPx: Float,
+    horizontalGapPx: Float
+): IntOffset {
+    val rightAnchorX = point.x + reticleHalfPx + horizontalGapPx
+    val leftAnchorX = point.x - reticleHalfPx - horizontalGapPx - sliderWidthPx
+    val minX = safeBounds.left
+    val maxX = safeBounds.right - sliderWidthPx
+    val rightFits = rightAnchorX in minX..maxX
+    val leftFits = leftAnchorX in minX..maxX
+    val desiredX = when {
+        point.x < previewRect.center.x && rightFits -> rightAnchorX
+        point.x >= previewRect.center.x && leftFits -> leftAnchorX
+        point.x < previewRect.center.x && leftFits -> leftAnchorX
+        point.x >= previewRect.center.x && rightFits -> rightAnchorX
+        else -> {
+            val clampedRightX = rightAnchorX.coerceIn(minX, maxX)
+            val clampedLeftX = leftAnchorX.coerceIn(minX, maxX)
+            val rightDelta = kotlin.math.abs(clampedRightX - rightAnchorX)
+            val leftDelta = kotlin.math.abs(clampedLeftX - leftAnchorX)
+            if (rightDelta <= leftDelta) clampedRightX else clampedLeftX
+        }
+    }
+
+    val minY = safeBounds.top
+    val maxY = safeBounds.bottom - sliderHeightPx
+    val centeredY = point.y - (sliderHeightPx / 2f)
+    val attachedTopY = point.y - reticleHalfPx
+    val attachedBottomY = point.y + reticleHalfPx - sliderHeightPx
+    val desiredY = when {
+        centeredY < minY -> attachedTopY.coerceAtLeast(minY)
+        centeredY > maxY -> attachedBottomY.coerceAtMost(maxY)
+        else -> centeredY
+    }
+
+    return IntOffset(
+        x = desiredX.coerceIn(minX, maxX).roundToInt(),
+        y = desiredY.coerceIn(minY, maxY).roundToInt()
     )
 }
