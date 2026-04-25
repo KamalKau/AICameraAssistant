@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
@@ -121,6 +123,7 @@ fun WaitingForApprovalScreen(
     val cameraPreviewWidth by repository.getPreviewWidth(roomCode).collectAsState(initial = 0)
     val cameraPreviewHeight by repository.getPreviewHeight(roomCode).collectAsState(initial = 0)
     val firebaseFocusRequestId by repository.getFocusRequestId(roomCode).collectAsState(initial = 0L)
+    val firebaseFocusLockEnabled by repository.getFocusLockEnabled(roomCode).collectAsState(initial = false)
 
     var previewContainerRef by remember { mutableStateOf<ControllerPreviewContainer?>(null) }
     var remoteTrack by remember { mutableStateOf<VideoTrack?>(null) }
@@ -133,6 +136,7 @@ fun WaitingForApprovalScreen(
     var lastSentZoom by remember(roomCode) { mutableStateOf(Double.NaN) }
     var focusPoint by remember(roomCode) { mutableStateOf<Offset?>(null) }
     var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
+    var focusLocked by remember(roomCode) { mutableStateOf(false) }
     var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
     var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
 
@@ -263,7 +267,7 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    fun sendFocusRequest(tapOffset: Offset, previewRect: Rect) {
+    fun sendFocusRequest(tapOffset: Offset, previewRect: Rect, lockFocus: Boolean = false) {
         if (!previewRect.contains(tapOffset)) return
 
         val clampedPoint = tapOffset.clampTo(previewRect)
@@ -276,6 +280,7 @@ fun WaitingForApprovalScreen(
 
         focusPoint = clampedPoint
         focusSucceeded = null
+        focusLocked = lockFocus
         focusUiToken++
 
         scope.launch {
@@ -283,7 +288,8 @@ fun WaitingForApprovalScreen(
                 roomCode = roomCode,
                 normalizedX = normalizedX.toDouble(),
                 normalizedY = normalizedY.toDouble(),
-                requestId = firebaseFocusRequestId + 1L
+                requestId = firebaseFocusRequestId + 1L,
+                lockEnabled = lockFocus
             )
         }
     }
@@ -408,6 +414,7 @@ fun WaitingForApprovalScreen(
 
     LaunchedEffect(focusUiToken) {
         if (focusUiToken == 0) return@LaunchedEffect
+        if (focusLocked) return@LaunchedEffect
         delay(2600)
         focusPoint = null
         focusSucceeded = null
@@ -521,14 +528,26 @@ fun WaitingForApprovalScreen(
                         false
                     }
                     .pointerInput(roomCode) {
-                        detectTapGestures { offset ->
-                            activePreviewRect?.let { previewRect ->
-                                sendFocusRequest(
-                                    tapOffset = offset,
-                                    previewRect = previewRect
-                                )
+                        detectTapGestures(
+                            onTap = { offset ->
+                                activePreviewRect?.let { previewRect ->
+                                    sendFocusRequest(
+                                        tapOffset = offset,
+                                        previewRect = previewRect,
+                                        lockFocus = false
+                                    )
+                                }
+                            },
+                            onLongPress = { offset ->
+                                activePreviewRect?.let { previewRect ->
+                                    sendFocusRequest(
+                                        tapOffset = offset,
+                                        previewRect = previewRect,
+                                        lockFocus = true
+                                    )
+                                }
                             }
-                        }
+                        )
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -719,67 +738,30 @@ fun WaitingForApprovalScreen(
                                 height = with(density) { previewRect.height.toDp() }
                             )
                     ) {
-                        FocusReticle(
+                        FocusReticleSamsung(
                             point = localPoint,
                             success = focusSucceeded,
+                            showExposureHandle = exposureSupported,
+                            isLocked = focusLocked || firebaseFocusLockEnabled,
+                            exposureProgress = (
+                                (firebaseExposureMaxIndex - firebaseExposureIndex).toFloat() /
+                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex).toFloat()
+                                        .coerceAtLeast(1f)
+                                ),
+                            onToggleLock = {
+                                sendFocusRequest(
+                                    tapOffset = point,
+                                    previewRect = previewRect,
+                                    lockFocus = !(focusLocked || firebaseFocusLockEnabled)
+                                )
+                            },
+                            onExposureProgressChange = if (exposureSupported) {
+                                { progress -> updateExposureFromProgress(progress) }
+                            } else {
+                                null
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
-
-                        if (exposureSupported) {
-                            val sliderOffset = with(density) {
-                                calculateExposureSliderOffset(
-                                    point = localPoint,
-                                    previewRect = Rect(
-                                        0f,
-                                        0f,
-                                        previewRect.width,
-                                        previewRect.height
-                                    ),
-                                    safeBounds = localFocusUiBounds,
-                                    sliderWidthPx = 44.dp.toPx(),
-                                    sliderHeightPx = 168.dp.toPx(),
-                                    reticleHalfPx = 34.dp.toPx(),
-                                    horizontalGapPx = 6.dp.toPx()
-                                )
-                            }
-                            val sliderSize = with(density) {
-                                androidx.compose.ui.geometry.Size(44.dp.toPx(), 168.dp.toPx())
-                            }
-                            val exposureProgress =
-                                (firebaseExposureMaxIndex - firebaseExposureIndex).toFloat() /
-                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex)
-                                        .toFloat()
-                                        .coerceAtLeast(1f)
-                            val neutralExposureProgress =
-                                (firebaseExposureMaxIndex - 0.coerceIn(
-                                    firebaseExposureMinIndex,
-                                    firebaseExposureMaxIndex
-                                )).toFloat() /
-                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex)
-                                        .toFloat()
-                                        .coerceAtLeast(1f)
-
-                            FocusExposureConnector(
-                                focusPoint = localPoint,
-                                sliderTopLeft = Offset(
-                                    sliderOffset.x.toFloat(),
-                                    sliderOffset.y.toFloat()
-                                ),
-                                sliderSize = sliderSize,
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            ExposureSliderOverlay(
-                                progress = exposureProgress,
-                                neutralProgress = neutralExposureProgress,
-                                modifier = Modifier
-                                    .offset { sliderOffset }
-                                    .size(width = 44.dp, height = 168.dp),
-                                onProgressChange = { progress ->
-                                    updateExposureFromProgress(progress)
-                                }
-                            )
-                        }
                     }
                 }
             }
@@ -1237,6 +1219,187 @@ fun CameraModeButton(
     }
 }
 
+@Composable
+private fun FocusReticleSamsung(
+    point: Offset,
+    success: Boolean?,
+    showExposureHandle: Boolean,
+    isLocked: Boolean,
+    exposureProgress: Float,
+    onToggleLock: () -> Unit,
+    onExposureProgressChange: ((Float) -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (success == null) 1.12f else 1f,
+        label = "controller_focus_reticle_samsung_scale"
+    )
+    val density = LocalDensity.current
+    val ringColor = when {
+        isLocked -> Color(0xFFFFC400)
+        true -> Color(0xFFFFD54F)
+        false -> Color.White.copy(alpha = 0.72f)
+        else -> Color.White
+    }
+
+    Box(modifier = modifier) {
+        val reticleRadiusPx = with(density) { 25.dp.toPx() * scale }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawCircle(
+                color = ringColor,
+                radius = reticleRadiusPx,
+                center = point,
+                style = Stroke(width = 2.dp.toPx())
+            )
+
+        }
+
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = (point.x - 16.dp.toPx()).roundToInt(),
+                        y = (point.y - reticleRadiusPx - 16.dp.toPx()).roundToInt()
+                    )
+                }
+                .size(32.dp)
+                .pointerInput(isLocked) {
+                    detectTapGestures(onTap = { onToggleLock() })
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                contentDescription = null,
+                tint = if (isLocked) ringColor else Color.White.copy(alpha = 0.92f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        if (showExposureHandle) {
+            FocusExposureHandleSamsung(
+                center = point,
+                ringRadiusPx = reticleRadiusPx,
+                isLocked = isLocked,
+                progress = exposureProgress,
+                onProgressChange = onExposureProgressChange
+            )
+        }
+    }
+}
+
+@Composable
+private fun FocusExposureHandleSamsung(
+    center: Offset,
+    ringRadiusPx: Float,
+    isLocked: Boolean,
+    progress: Float,
+    onProgressChange: ((Float) -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val controlWidth = 42.dp
+    val controlHeight = 14.dp
+    val trackWidth = 32.dp
+    var dragProgress by remember(progress) { mutableFloatStateOf(progress.coerceIn(0f, 1f)) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    LaunchedEffect(progress) {
+        if (!isDragging) {
+            dragProgress = progress.coerceIn(0f, 1f)
+        }
+    }
+
+    val controlWidthPx = with(density) { controlWidth.toPx() }
+    val trackWidthPx = with(density) { trackWidth.toPx() }
+    val trackStartX = (controlWidthPx - trackWidthPx) / 2f
+
+    fun progressFromTouchX(x: Float): Float =
+        ((x - trackStartX) / trackWidthPx).coerceIn(0f, 1f)
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = (center.x - (controlWidthPx / 2f)).roundToInt(),
+                        y = (center.y + ringRadiusPx + 2.dp.toPx()).roundToInt()
+                    )
+                }
+                .width(controlWidth)
+                .height(controlHeight)
+                .pointerInput(onProgressChange) {
+                    if (onProgressChange == null) return@pointerInput
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            isDragging = true
+                            val nextProgress = progressFromTouchX(offset.x)
+                            dragProgress = nextProgress
+                            onProgressChange(nextProgress)
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            val nextProgress = progressFromTouchX(change.position.x)
+                            dragProgress = nextProgress
+                            onProgressChange(nextProgress)
+                        },
+                        onDragEnd = { isDragging = false },
+                        onDragCancel = { isDragging = false }
+                    )
+                },
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Canvas(modifier = Modifier.size(width = trackWidth, height = controlHeight)) {
+                val centerX = size.width / 2f
+                val centerY = size.height / 2f
+                val halfLine = trackWidthPx / 2f
+                val lineGap = 5.dp.toPx()
+                val iconCenterX =
+                    (centerX - halfLine + ((halfLine * 2f) * dragProgress.coerceIn(0f, 1f)))
+                        .coerceIn(4.5.dp.toPx(), size.width - 4.5.dp.toPx())
+                val accentColor = if (isLocked) Color(0xFFFFC400) else Color(0xFFFFD54F)
+
+                drawLine(
+                    color = Color.White.copy(alpha = 0.68f),
+                    start = Offset(centerX - halfLine, centerY),
+                    end = Offset(iconCenterX - lineGap, centerY),
+                    strokeWidth = 1.1.dp.toPx()
+                )
+                drawLine(
+                    color = Color.White.copy(alpha = 0.68f),
+                    start = Offset(iconCenterX + lineGap, centerY),
+                    end = Offset(centerX + halfLine, centerY),
+                    strokeWidth = 1.1.dp.toPx()
+                )
+                drawCircle(
+                    color = accentColor,
+                    radius = 2.3.dp.toPx(),
+                    center = Offset(iconCenterX, centerY)
+                )
+
+                val rayStart = 4.6.dp.toPx()
+                val rayLength = 2.8.dp.toPx()
+                val rayStroke = 0.8.dp.toPx()
+                repeat(8) { index ->
+                    val angle = (index * 45f) * (Math.PI.toFloat() / 180f)
+                    val dx = kotlin.math.cos(angle)
+                    val dy = kotlin.math.sin(angle)
+                    drawLine(
+                        color = accentColor,
+                        start = Offset(iconCenterX + (dx * rayStart), centerY + (dy * rayStart)),
+                        end = Offset(
+                            iconCenterX + (dx * (rayStart + rayLength)),
+                            centerY + (dy * (rayStart + rayLength))
+                        ),
+                        strokeWidth = rayStroke
+                    )
+                }
+            }
+        }
+    }
+}
+
 private fun calculateFittedPreviewRect(
     containerWidth: Float,
     containerHeight: Float,
@@ -1265,33 +1428,105 @@ private fun Offset.clampTo(rect: Rect): Offset =
 private fun FocusReticle(
     point: Offset,
     success: Boolean?,
+    showExposureHandle: Boolean,
+    isLocked: Boolean,
+    onToggleLock: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scale by animateFloatAsState(
         targetValue = if (success == null) 1.12f else 1f,
         label = "controller_focus_reticle_scale"
     )
-    val ringColor = when (success) {
+    val ringColor = when {
+        isLocked -> Color(0xFFFFC400)
         true -> Color(0xFFFFD54F)
         false -> Color.White.copy(alpha = 0.72f)
-        null -> Color.White
+        else -> Color.White
     }
 
-    Canvas(modifier = modifier) {
-        val reticleSize = 68.dp.toPx() * scale
-        drawRoundRect(
-            color = ringColor,
-            topLeft = Offset(point.x - reticleSize / 2f, point.y - reticleSize / 2f),
-            size = androidx.compose.ui.geometry.Size(reticleSize, reticleSize),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(18.dp.toPx(), 18.dp.toPx()),
-            style = Stroke(width = 2.dp.toPx())
+    Box(modifier = modifier) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val reticleRadius = 25.dp.toPx() * scale
+            drawCircle(
+                color = ringColor,
+                radius = reticleRadius,
+                center = point,
+                style = Stroke(width = 2.dp.toPx())
+            )
+
+            if (showExposureHandle) {
+                val handleY = point.y + reticleRadius + 16.dp.toPx()
+                val lineHalf = 14.dp.toPx()
+                drawLine(
+                    color = Color.White.copy(alpha = 0.84f),
+                    start = Offset(point.x - lineHalf, handleY),
+                    end = Offset(point.x + lineHalf, handleY),
+                    strokeWidth = 1.6.dp.toPx()
+                )
+            }
+        }
+
+        if (isLocked) {
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = null,
+                tint = ringColor,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = (point.x - 8.dp.toPx()).roundToInt(),
+                            y = (point.y - 38.dp.toPx()).roundToInt()
+                        )
+                    }
+                    .size(16.dp)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = (point.x - 18.dp.toPx()).roundToInt(),
+                        y = (point.y - 44.dp.toPx()).roundToInt()
+                    )
+                }
+                .size(36.dp)
+                .pointerInput(isLocked) {
+                    detectTapGestures(onTap = { onToggleLock() })
+                }
         )
 
-        drawCircle(
-            color = ringColor,
-            radius = 3.dp.toPx(),
-            center = point
-        )
+        if (showExposureHandle) {
+            Row(
+                modifier = Modifier.offset {
+                    IntOffset(
+                        x = (point.x - 16.dp.toPx()).roundToInt(),
+                        y = (point.y + 26.dp.toPx()).roundToInt()
+                    )
+                },
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "−",
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Icon(
+                    imageVector = Icons.Default.WbSunny,
+                    contentDescription = null,
+                    tint = if (isLocked) ringColor else Color.White.copy(alpha = 0.92f),
+                    modifier = Modifier.size(12.dp)
+                )
+                Text(
+                    text = "+",
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Light
+                )
+            }
+        }
     }
 }
 
@@ -1313,8 +1548,6 @@ private fun ExposureSliderOverlay(
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(Color.Black.copy(alpha = 0.42f))
             .pointerInput(progress) {
                 detectVerticalDragGestures(
                     onDragStart = {
@@ -1336,50 +1569,40 @@ private fun ExposureSliderOverlay(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(horizontal = 7.dp, vertical = 8.dp)
         ) {
             val trackX = size.width / 2f
-            val trackTop = 14.dp.toPx()
-            val trackBottom = size.height - 14.dp.toPx()
+            val trackTop = 10.dp.toPx()
+            val trackBottom = size.height - 10.dp.toPx()
             val trackHeight = trackBottom - trackTop
             val clampedNeutralProgress = neutralProgress.coerceIn(0f, 1f)
             val thumbY = trackTop + (trackHeight * dragProgress.coerceIn(0f, 1f))
             val neutralY = trackTop + (trackHeight * clampedNeutralProgress)
 
             drawLine(
-                color = Color.White.copy(alpha = 0.22f),
+                color = Color.White.copy(alpha = 0.18f),
                 start = Offset(trackX, trackTop),
                 end = Offset(trackX, trackBottom),
-                strokeWidth = 2.dp.toPx()
+                strokeWidth = 1.4.dp.toPx()
             )
             drawLine(
-                color = Color(0xFFFFD54F),
+                color = Color(0xFFFFC400),
                 start = Offset(trackX, minOf(thumbY, neutralY)),
                 end = Offset(trackX, maxOf(thumbY, neutralY)),
-                strokeWidth = 2.dp.toPx()
+                strokeWidth = 1.8.dp.toPx()
             )
             drawLine(
                 color = Color.White.copy(alpha = 0.48f),
-                start = Offset(trackX - 6.dp.toPx(), neutralY),
-                end = Offset(trackX + 6.dp.toPx(), neutralY),
-                strokeWidth = 2.dp.toPx()
+                start = Offset(trackX - 4.dp.toPx(), neutralY),
+                end = Offset(trackX + 4.dp.toPx(), neutralY),
+                strokeWidth = 1.2.dp.toPx()
             )
             drawCircle(
-                color = Color(0xFFFFD54F),
-                radius = 6.dp.toPx(),
+                color = Color(0xFFFFC400),
+                radius = 5.dp.toPx(),
                 center = Offset(trackX, thumbY)
             )
         }
-
-        Icon(
-            imageVector = Icons.Default.WbSunny,
-            contentDescription = "Exposure",
-            tint = Color(0xFFFFD54F),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 8.dp)
-                .size(14.dp)
-        )
     }
 }
 

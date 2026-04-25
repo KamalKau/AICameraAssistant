@@ -110,7 +110,8 @@ class FirebaseRoomRepository {
         roomCode: String,
         normalizedX: Double,
         normalizedY: Double,
-        requestId: Long
+        requestId: Long,
+        lockEnabled: Boolean
     ) {
         db.collection("rooms")
             .document(roomCode)
@@ -118,7 +119,8 @@ class FirebaseRoomRepository {
                 mapOf(
                     "focusPointX" to normalizedX.coerceIn(0.0, 1.0),
                     "focusPointY" to normalizedY.coerceIn(0.0, 1.0),
-                    "focusRequestId" to requestId
+                    "focusRequestId" to requestId,
+                    "focusLockEnabled" to lockEnabled
                 )
             )
             .await()
@@ -195,6 +197,7 @@ class FirebaseRoomRepository {
             "flashSupported" to false,
             "gridEnabled" to false,
             "focusRequestId" to 0L,
+            "focusLockEnabled" to false,
             "focusPointX" to 0.5,
             "focusPointY" to 0.5,
             "exposureMinIndex" to 0L,
@@ -335,6 +338,14 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getDouble("focusPointX") ?: 0.5)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFocusLockEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("focusLockEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }
