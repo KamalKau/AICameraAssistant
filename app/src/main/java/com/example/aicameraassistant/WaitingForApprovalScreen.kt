@@ -126,7 +126,7 @@ fun WaitingForApprovalScreen(
     val firebaseFocusLockEnabled by repository.getFocusLockEnabled(roomCode).collectAsState(initial = false)
 
     var previewContainerRef by remember { mutableStateOf<ControllerPreviewContainer?>(null) }
-    var remoteTrack by remember { mutableStateOf<VideoTrack?>(null) }
+    var remoteTrack by remember(roomCode) { mutableStateOf(WebRtcSessionManager.remoteVideoTrack) }
     var offerCreated by remember(roomCode) { mutableStateOf(false) }
     var hasSeenConnectedState by remember(roomCode) { mutableStateOf(false) }
     var isEndingSession by remember(roomCode) { mutableStateOf(false) }
@@ -365,6 +365,11 @@ fun WaitingForApprovalScreen(
                     scope.launch(Dispatchers.Main) {
                         Log.d("WEBRTC_LOG", "Controller received remote track")
                         remoteTrack = track
+                        previewContainerRef?.renderer?.let { renderer ->
+                            track.setEnabled(true)
+                            runCatching { track.removeSink(renderer) }
+                            track.addSink(renderer)
+                        }
                     }
                 }
             )
@@ -397,13 +402,30 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    LaunchedEffect(previewContainerRef, remoteTrack) {
-        val renderer = previewContainerRef?.renderer ?: return@LaunchedEffect
-        val track = remoteTrack ?: return@LaunchedEffect
+    LaunchedEffect(roomStatus) {
+        if (roomStatus == "connected" && remoteTrack == null) {
+            WebRtcSessionManager.remoteVideoTrack?.let { existingTrack ->
+                Log.d("WEBRTC_LOG", "Controller reusing existing remote track")
+                remoteTrack = existingTrack
+            }
+        }
+    }
 
-        Log.d("WEBRTC_LOG", "Controller rendering remote track")
-        track.setEnabled(true)
-        track.addSink(renderer)
+    DisposableEffect(previewContainerRef, remoteTrack) {
+        val renderer = previewContainerRef?.renderer
+        val track = remoteTrack
+        if (renderer == null || track == null) {
+            onDispose { }
+        } else {
+            Log.d("WEBRTC_LOG", "Controller rendering remote track")
+            track.setEnabled(true)
+            track.removeSink(renderer)
+            track.addSink(renderer)
+
+            onDispose {
+                runCatching { track.removeSink(renderer) }
+            }
+        }
     }
 
     LaunchedEffect(firebaseZoomLevel, minZoom, maxZoom, isZoomDragging) {
@@ -616,6 +638,11 @@ fun WaitingForApprovalScreen(
                                     shouldRotatePreviewContent
                                 )
                             }
+                            remoteTrack?.let { track ->
+                                track.setEnabled(true)
+                                runCatching { track.removeSink(renderer) }
+                                track.addSink(renderer)
+                            }
                             container.onVideoRectChanged = { rect ->
                                 previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
                             }
@@ -635,6 +662,11 @@ fun WaitingForApprovalScreen(
                                 controllerDisplayHeight,
                                 shouldRotatePreviewContent
                             )
+                        }
+                        remoteTrack?.let { track ->
+                            track.setEnabled(true)
+                            runCatching { track.removeSink(renderer) }
+                            track.addSink(renderer)
                         }
                         container.onVideoRectChanged = { rect ->
                             previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)

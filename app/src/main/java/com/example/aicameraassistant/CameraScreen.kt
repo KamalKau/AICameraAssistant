@@ -864,64 +864,20 @@ fun CameraScreen(
             }
 
             if (!sessionIsActive) {
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = Color.Black.copy(alpha = 0.45f)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = "Room Code",
-                                color = Color.White.copy(alpha = 0.75f)
-                            )
-                            Text(
-                                text = roomCode,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = buildString {
-                                    append(if (firebaseLensFacing == "front") "Front" else "Back")
-                                    append(" | ")
-                                    append("${firebaseZoomLevel}x")
-                                    append(" | ")
-                                    append(
-                                        when {
-                                            isFrontCamera && firebaseFlashMode == "on" -> "Screen Flash On"
-                                            isFrontCamera && firebaseFlashMode == "auto" -> "Screen Flash Auto"
-                                            !flashSupported && firebaseFlashMode != "off" -> "Flash Unsupported"
-                                            firebaseFlashMode == "auto" -> "Flash Auto"
-                                            firebaseFlashMode == "on" -> "Flash On"
-                                            else -> "Flash Off"
-                                        }
-                                    )
-                                },
-                                color = Color.White.copy(alpha = 0.85f),
-                                fontWeight = FontWeight.Medium
-                            )
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = if (resolvedWidth > 0 && resolvedHeight > 0) {
-                                    "Hardware: ${resolvedWidth} x ${resolvedHeight}"
-                                } else {
-                                    "Hardware: Detecting..."
-                                },
-                                color = Color.White.copy(alpha = 0.85f),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
+                    Text(
+                        text = "Room Code",
+                        color = Color.White.copy(alpha = 0.75f)
+                    )
+                    Text(
+                        text = roomCode,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
