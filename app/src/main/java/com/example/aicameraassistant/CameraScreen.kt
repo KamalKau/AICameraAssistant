@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -107,22 +108,26 @@ fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-
-    val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
-    val connectionState by WebRtcSessionManager.cameraConnectionState.collectAsState()
-    val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
-    val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
-    val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
-    val firebaseGridEnabled by repository.getGridEnabled(roomCode).collectAsState(initial = false)
-    val firebaseCaptureRequestId by repository.getCaptureRequestId(roomCode).collectAsState(initial = 0L)
-    val firebaseRequestReceived by repository.getRequestReceived(roomCode).collectAsState(initial = false)
-    val firebaseControllerApproved by repository.getControllerApproved(roomCode).collectAsState(initial = false)
-    val firebaseFocusRequestId by repository.getFocusRequestId(roomCode).collectAsState(initial = 0L)
-    val firebaseFocusPointX by repository.getFocusPointX(roomCode).collectAsState(initial = 0.5)
-    val firebaseFocusLockEnabled by repository.getFocusLockEnabled(roomCode).collectAsState(initial = false)
-    val firebaseFocusPointY by repository.getFocusPointY(roomCode).collectAsState(initial = 0.5)
-    val firebaseExposureIndex by repository.getExposureIndex(roomCode).collectAsState(initial = 0)
-    val offerSdp by repository.getOfferSdp(roomCode).collectAsState(initial = null)
+    val screenViewModel: CameraScreenViewModel = viewModel()
+    LaunchedEffect(roomCode) {
+        screenViewModel.bind(repository, roomCode)
+    }
+    val remoteUiState by screenViewModel.remoteUiState.collectAsState()
+    val roomStatus = remoteUiState.roomStatus
+    val connectionState = remoteUiState.connectionState
+    val firebaseLensFacing = remoteUiState.lensFacing
+    val firebaseZoomLevel = remoteUiState.zoomLevel
+    val firebaseFlashMode = remoteUiState.flashMode
+    val firebaseGridEnabled = remoteUiState.gridEnabled
+    val firebaseCaptureRequestId = remoteUiState.captureRequestId
+    val firebaseRequestReceived = remoteUiState.requestReceived
+    val firebaseControllerApproved = remoteUiState.controllerApproved
+    val firebaseFocusRequestId = remoteUiState.focusRequestId
+    val firebaseFocusPointX = remoteUiState.focusPointX
+    val firebaseFocusLockEnabled = remoteUiState.focusLockEnabled
+    val firebaseFocusPointY = remoteUiState.focusPointY
+    val firebaseExposureIndex = remoteUiState.exposureIndex
+    val offerSdp = remoteUiState.offerSdp
 
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
@@ -138,23 +143,23 @@ fun CameraScreen(
     }
     val activity = context.findActivity()
 
-    var flashAlpha by remember { mutableFloatStateOf(0f) }
+    var flashAlpha by screenViewModel::flashAlpha
     val isStreaming = roomStatus == "connected"
-    var answerCreated by remember { mutableStateOf(false) }
-    var hasSeenConnectedState by remember(roomCode) { mutableStateOf(false) }
-    var isEndingSession by remember(roomCode) { mutableStateOf(false) }
-    var focusPoint by remember(roomCode) { mutableStateOf<Offset?>(null) }
-    var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
-    var focusLocked by remember(roomCode) { mutableStateOf(false) }
-    var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
-    var lastAppliedRemoteFocusRequestId by remember(roomCode) { mutableStateOf(0L) }
-    var lastHandledCaptureRequestId by remember(roomCode) { mutableStateOf(0L) }
-    var exposureMinIndex by remember(roomCode) { mutableIntStateOf(0) }
-    var exposureMaxIndex by remember(roomCode) { mutableIntStateOf(0) }
-    var exposureIndex by remember(roomCode) { mutableIntStateOf(0) }
+    var answerCreated by screenViewModel::answerCreated
+    var hasSeenConnectedState by screenViewModel::hasSeenConnectedState
+    var isEndingSession by screenViewModel::isEndingSession
+    var focusPoint by screenViewModel::focusPoint
+    var focusSucceeded by screenViewModel::focusSucceeded
+    var focusLocked by screenViewModel::focusLocked
+    var focusUiToken by screenViewModel::focusUiToken
+    var lastAppliedRemoteFocusRequestId by screenViewModel::lastAppliedRemoteFocusRequestId
+    var lastHandledCaptureRequestId by screenViewModel::lastHandledCaptureRequestId
+    var exposureMinIndex by screenViewModel::exposureMinIndex
+    var exposureMaxIndex by screenViewModel::exposureMaxIndex
+    var exposureIndex by screenViewModel::exposureIndex
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
-    var isRemoteDescriptionSet by remember { mutableStateOf(false) }
+    var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
     val sessionIsActive = roomStatus == "connected"
     val hasLedFlash = camera?.cameraInfo?.hasFlashUnit() == true
     val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
@@ -811,34 +816,6 @@ fun CameraScreen(
 }
 
 @Composable
-fun CameraGridOverlay(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val lineColor = Color.White.copy(alpha = 0.24f)
-        val strokeWidth = 0.9.dp.toPx()
-        val thirdWidth = size.width / 3f
-        val thirdHeight = size.height / 3f
-
-        repeat(2) { index ->
-            val verticalX = thirdWidth * (index + 1)
-            drawLine(
-                color = lineColor,
-                start = Offset(verticalX, 0f),
-                end = Offset(verticalX, size.height),
-                strokeWidth = strokeWidth
-            )
-
-            val horizontalY = thirdHeight * (index + 1)
-            drawLine(
-                color = lineColor,
-                start = Offset(0f, horizontalY),
-                end = Offset(size.width, horizontalY),
-                strokeWidth = strokeWidth
-            )
-        }
-    }
-}
-
-@Composable
 fun GridToggleButton(
     isActive: Boolean,
     onClick: () -> Unit,
@@ -880,61 +857,6 @@ fun GridToggleButton(
                         strokeWidth = strokeWidth
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HostTopOverlay(
-    state: HostTopOverlayUiState,
-    actions: HostTopOverlayActions
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        FloatingEndSessionButton(
-            isEnding = state.isEndingSession,
-            onClick = actions.onEndSession
-        )
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center
-    ) {
-        SessionStatusChip(
-            text = state.status.text,
-            dotColor = state.status.dotColor
-        )
-    }
-
-    if (!state.sessionIsActive) {
-        RoomCodeBadge(roomCode = state.roomCode)
-    }
-
-    if (state.showApprovalPrompt) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Button(
-                onClick = actions.onAllowController,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Allow")
-            }
-
-            Button(
-                onClick = actions.onDenyController,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text("Deny")
             }
         }
     }
@@ -1319,39 +1241,4 @@ private fun FocusExposureHandleSamsung(
     }
 }
 
-private fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
-
-private fun isPreviewSceneDark(previewView: PreviewView): Boolean {
-    val bitmap = previewView.bitmap ?: return true
-    return try {
-        val startX = bitmap.width / 4
-        val endX = bitmap.width - startX
-        val startY = bitmap.height / 4
-        val endY = bitmap.height - startY
-        val sampleX = max(1, (endX - startX) / 18)
-        val sampleY = max(1, (endY - startY) / 18)
-        var luminanceSum = 0.0
-        var samples = 0
-
-        for (x in startX until endX step sampleX) {
-            for (y in startY until endY step sampleY) {
-                val pixel = bitmap.getPixel(x, y)
-                val red = android.graphics.Color.red(pixel)
-                val green = android.graphics.Color.green(pixel)
-                val blue = android.graphics.Color.blue(pixel)
-                luminanceSum += (0.299 * red) + (0.587 * green) + (0.114 * blue)
-                samples++
-            }
-        }
-
-        val averageLuminance = if (samples == 0) 255.0 else luminanceSum / samples
-        averageLuminance < 60.0
-    } finally {
-        bitmap.recycle()
-    }
-}
 

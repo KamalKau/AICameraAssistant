@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
@@ -115,6 +116,7 @@ fun WaitingForApprovalScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val screenViewModel: ControllerScreenViewModel = viewModel()
     val haptic = LocalHapticFeedback.current
     val vibrator = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -126,52 +128,56 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
-    val connectionState by WebRtcSessionManager.controllerConnectionState.collectAsState()
-    val firebaseLensFacing by repository.getLensFacing(roomCode).collectAsState(initial = "back")
-    val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
-    val firebaseMinZoom by repository.getMinZoom(roomCode).collectAsState(initial = 1.0)
-    val firebaseMaxZoom by repository.getMaxZoom(roomCode).collectAsState(initial = 1.0)
-    val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
-    val firebaseFlashSupported by repository.getFlashSupported(roomCode).collectAsState(initial = false)
-    val firebaseGridEnabled by repository.getGridEnabled(roomCode).collectAsState(initial = false)
-    val firebaseExposureMinIndex by repository.getExposureMinIndex(roomCode).collectAsState(initial = 0)
-    val firebaseExposureMaxIndex by repository.getExposureMaxIndex(roomCode).collectAsState(initial = 0)
-    val firebaseExposureIndex by repository.getExposureIndex(roomCode).collectAsState(initial = 0)
-    val firebaseAnswer by repository.getAnswerSdp(roomCode).collectAsState(initial = null)
-    val cameraPreviewWidth by repository.getPreviewWidth(roomCode).collectAsState(initial = 0)
-    val cameraPreviewHeight by repository.getPreviewHeight(roomCode).collectAsState(initial = 0)
-    val firebaseFocusRequestId by repository.getFocusRequestId(roomCode).collectAsState(initial = 0L)
-    val firebaseFocusLockEnabled by repository.getFocusLockEnabled(roomCode).collectAsState(initial = false)
+    LaunchedEffect(roomCode) {
+        screenViewModel.bind(repository, roomCode)
+    }
+    val remoteUiState by screenViewModel.remoteUiState.collectAsState()
+    val roomStatus = remoteUiState.roomStatus
+    val connectionState = remoteUiState.connectionState
+    val firebaseLensFacing = remoteUiState.lensFacing
+    val firebaseZoomLevel = remoteUiState.zoomLevel
+    val firebaseMinZoom = remoteUiState.minZoom
+    val firebaseMaxZoom = remoteUiState.maxZoom
+    val firebaseFlashMode = remoteUiState.flashMode
+    val firebaseFlashSupported = remoteUiState.flashSupported
+    val firebaseGridEnabled = remoteUiState.gridEnabled
+    val firebaseExposureMinIndex = remoteUiState.exposureMinIndex
+    val firebaseExposureMaxIndex = remoteUiState.exposureMaxIndex
+    val firebaseExposureIndex = remoteUiState.exposureIndex
+    val firebaseAnswer = remoteUiState.answerSdp
+    val cameraPreviewWidth = remoteUiState.previewWidth
+    val cameraPreviewHeight = remoteUiState.previewHeight
+    val firebaseFocusRequestId = remoteUiState.focusRequestId
+    val firebaseFocusLockEnabled = remoteUiState.focusLockEnabled
 
     var previewContainerRef by remember { mutableStateOf<ControllerPreviewContainer?>(null) }
-    var remoteTrack by remember(roomCode) { mutableStateOf(WebRtcSessionManager.remoteVideoTrack) }
-    var offerCreated by remember(roomCode) { mutableStateOf(false) }
-    var hasSeenConnectedState by remember(roomCode) { mutableStateOf(false) }
-    var isEndingSession by remember(roomCode) { mutableStateOf(false) }
-    var zoomUiValue by remember(roomCode) { mutableStateOf(1f) }
-    var isZoomDragging by remember(roomCode) { mutableStateOf(false) }
-    var showZoomRing by remember(roomCode) { mutableStateOf(false) }
-    var lastSentZoom by remember(roomCode) { mutableStateOf(Double.NaN) }
-    var focusPoint by remember(roomCode) { mutableStateOf<Offset?>(null) }
-    var focusSucceeded by remember(roomCode) { mutableStateOf<Boolean?>(null) }
-    var focusLocked by remember(roomCode) { mutableStateOf(false) }
-    var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
-    var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
-    var shutterFlashAlpha by remember(roomCode) { mutableFloatStateOf(0f) }
-    var shutterPressed by remember(roomCode) { mutableStateOf(false) }
-    var captureRequestSequence by remember(roomCode) { mutableLongStateOf(0L) }
-    var burstJob by remember(roomCode) { mutableStateOf<Job?>(null) }
-    var isBurstCapturing by remember(roomCode) { mutableStateOf(false) }
-    var burstCaptureCount by remember(roomCode) { mutableIntStateOf(0) }
+    var remoteTrack by screenViewModel::remoteTrack
+    var offerCreated by screenViewModel::offerCreated
+    var hasSeenConnectedState by screenViewModel::hasSeenConnectedState
+    var isEndingSession by screenViewModel::isEndingSession
+    var zoomUiValue by screenViewModel::zoomUiValue
+    var isZoomDragging by screenViewModel::isZoomDragging
+    var showZoomRing by screenViewModel::showZoomRing
+    var lastSentZoom by screenViewModel::lastSentZoom
+    var focusPoint by screenViewModel::focusPoint
+    var focusSucceeded by screenViewModel::focusSucceeded
+    var focusLocked by screenViewModel::focusLocked
+    var focusUiToken by screenViewModel::focusUiToken
+    var previewOverlayRect by screenViewModel::previewOverlayRect
+    var shutterFlashAlpha by screenViewModel::shutterFlashAlpha
+    var shutterPressed by screenViewModel::shutterPressed
+    var captureRequestSequence by screenViewModel::captureRequestSequence
+    var burstJob by screenViewModel::burstJob
+    var isBurstCapturing by screenViewModel::isBurstCapturing
+    var burstCaptureCount by screenViewModel::burstCaptureCount
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
     var remoteFrameRotation by remember { mutableIntStateOf(0) }
-    var lastFrameTimestampMs by remember(roomCode) { mutableLongStateOf(0L) }
-    var uiNowMs by remember(roomCode) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    var lastFrameTimestampMs by screenViewModel::lastFrameTimestampMs
+    var uiNowMs by screenViewModel::uiNowMs
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
-    var isRemoteDescriptionSet by remember { mutableStateOf(false) }
+    var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
 
     val shouldSwapRemoteFrame =
         (remoteFrameRotation == 90 || remoteFrameRotation == 270) ||
@@ -961,325 +967,6 @@ fun WaitingForApprovalScreen(
         }
     }
 }
-
-@Composable
-private fun ControllerTopActionBar(
-    isEndingSession: Boolean,
-    onEndSession: () -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        FloatingEndSessionButton(
-            isEnding = isEndingSession,
-            onClick = onEndSession,
-            containerColor = Color(0xFFE53935)
-        )
-    }
-}
-
-@Composable
-private fun ControllerStatusOverlay(
-    state: StatusUiState
-) {
-    SessionStatusChip(
-        text = state.text,
-        dotColor = state.dotColor
-    )
-
-    if (state.warningText != null) {
-        Spacer(modifier = Modifier.height(8.dp))
-        SessionWarningChip(
-            text = state.warningText,
-            detailText = state.warningDetailText
-        )
-    }
-}
-
-@Composable
-private fun ControllerBottomControls(
-    state: ControllerBottomControlsUiState,
-    actions: ControllerBottomControlsActions
-) {
-    if (state.showZoomRing) {
-        AndroidZoomBar(
-            value = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
-            minZoom = state.minZoom,
-            maxZoom = state.maxZoom,
-            onValueChange = actions.onZoomBarValueChange,
-            onValueChangeFinished = actions.onZoomBarFinished
-        )
-    }
-
-    ZoomPresetSelector(
-        options = state.commonZoomOptions,
-        currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
-        onOptionClick = actions.onZoomPresetClick,
-        onLongPress = actions.onZoomPresetLongPress
-    )
-
-    if (state.isBurstCapturing) {
-        Box(
-            modifier = Modifier
-                .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 7.dp)
-        ) {
-            Text(
-                text = state.burstCaptureCount.toString(),
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp
-            )
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .size(80.dp)
-            .graphicsLayer {
-                scaleX = state.shutterScale
-                scaleY = state.shutterScale
-            }
-            .border(4.dp, Color.White, CircleShape)
-            .padding(6.dp)
-            .clip(CircleShape)
-            .background(Color.White)
-            .pointerInput(state.roomCode) {
-                detectTapGestures(onPress = actions.onShutterPress)
-            }
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = state.shutterCoreScale
-                    scaleY = state.shutterCoreScale
-                }
-                .clip(if (state.isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
-                .background(Color.White)
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun ZoomPresetSelector(
-    options: List<Float>,
-    currentValue: Float,
-    modifier: Modifier = Modifier,
-    onOptionClick: (Float) -> Unit,
-    onLongPress: () -> Unit
-) {
-    Row(
-        modifier = modifier
-            .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(26.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(26.dp))
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        options.forEach { option ->
-            val isSelected = abs(currentValue - option) < 0.16f
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(
-                        if (isSelected) Color.White.copy(alpha = 0.16f) else Color.Transparent
-                    )
-                    .combinedClickable(
-                        onClick = { onOptionClick(option) },
-                        onLongClick = onLongPress
-                    )
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "${formatZoomLabel(option)}x",
-                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.78f),
-                    fontSize = 15.sp,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun AndroidZoomBar(
-    value: Float,
-    minZoom: Float,
-    maxZoom: Float,
-    modifier: Modifier = Modifier,
-    onValueChange: (Float) -> Unit,
-    onValueChangeFinished: () -> Unit
-) {
-    val clampedValue = value.coerceIn(minZoom, maxZoom)
-    val normalizedValue =
-        ((clampedValue - minZoom) / (maxZoom - minZoom).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
-    val startAngle = 135f
-    val sweepAngle = 270f
-
-    fun updateFromPoint(point: Offset, sizePx: Float) {
-        val center = Offset(sizePx / 2f, sizePx / 2f)
-        val rawAngle = ((Math.toDegrees(
-            atan2(
-                (point.y - center.y).toDouble(),
-                (point.x - center.x).toDouble()
-            )
-        ) + 360.0) % 360.0).toFloat()
-        val extendedAngle = if (rawAngle < startAngle) rawAngle + 360f else rawAngle
-        val normalized =
-            ((extendedAngle.coerceIn(startAngle, startAngle + sweepAngle) - startAngle) /
-                sweepAngle)
-                .coerceIn(0f, 1f)
-        onValueChange(minZoom + ((maxZoom - minZoom) * normalized))
-    }
-
-    Box(
-        modifier = modifier
-            .size(196.dp)
-            .background(Color.Black.copy(alpha = 0.2f), CircleShape)
-            .border(0.8.dp, Color.White.copy(alpha = 0.08f), CircleShape)
-            .pointerInput(minZoom, maxZoom) {
-                detectDragGestures(
-                    onDragStart = { point -> updateFromPoint(point, size.width.toFloat()) },
-                    onDragEnd = {
-                        onValueChangeFinished()
-                    },
-                    onDragCancel = {
-                        onValueChangeFinished()
-                    },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        updateFromPoint(
-                            change.position,
-                            size.width.toFloat()
-                        )
-                    }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val ringInset = 24.dp.toPx()
-            val ringStroke = 8.dp.toPx()
-            val ringSize = androidx.compose.ui.geometry.Size(
-                width = size.width - (ringInset * 2f),
-                height = size.height - (ringInset * 2f)
-            )
-            val ringTopLeft = Offset(ringInset, ringInset)
-            val ringRadius = ringSize.width / 2f
-
-            drawArc(
-                color = Color.White.copy(alpha = 0.13f),
-                startAngle = startAngle,
-                sweepAngle = sweepAngle,
-                useCenter = false,
-                topLeft = ringTopLeft,
-                size = ringSize,
-                style = Stroke(width = ringStroke, cap = StrokeCap.Round)
-            )
-            drawArc(
-                color = Color.White.copy(alpha = 0.96f),
-                startAngle = startAngle,
-                sweepAngle = sweepAngle * normalizedValue,
-                useCenter = false,
-                topLeft = ringTopLeft,
-                size = ringSize,
-                style = Stroke(width = ringStroke, cap = StrokeCap.Round)
-            )
-
-            val centerPoint = Offset(size.width / 2f, size.height / 2f)
-            repeat(19) { index ->
-                val tickNormalized = index / 18f
-                val angleRadians =
-                    Math.toRadians((startAngle + (sweepAngle * tickNormalized)).toDouble())
-                val outerRadius = ringRadius + (ringStroke / 2f) + 8.dp.toPx()
-                val innerRadius = outerRadius - 6.dp.toPx()
-                val outer = Offset(
-                    x = centerPoint.x + (cos(angleRadians).toFloat() * outerRadius),
-                    y = centerPoint.y + (sin(angleRadians).toFloat() * outerRadius)
-                )
-                val inner = Offset(
-                    x = centerPoint.x + (cos(angleRadians).toFloat() * innerRadius),
-                    y = centerPoint.y + (sin(angleRadians).toFloat() * innerRadius)
-                )
-                drawLine(
-                    color = Color.White.copy(alpha = 0.12f),
-                    start = inner,
-                    end = outer,
-                    strokeWidth = 1.4.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
-
-            val thumbAngleRadians =
-                Math.toRadians((startAngle + (sweepAngle * normalizedValue)).toDouble())
-            val thumbCenter = Offset(
-                x = centerPoint.x + (cos(thumbAngleRadians).toFloat() * ringRadius),
-                y = centerPoint.y + (sin(thumbAngleRadians).toFloat() * ringRadius)
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 6.dp.toPx(),
-                center = thumbCenter
-            )
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.46f),
-                radius = 2.2.dp.toPx(),
-                center = thumbCenter
-            )
-        }
-
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "${formatZoomLabel(clampedValue)}x",
-                color = Color.White,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "Zoom",
-                color = Color.White.copy(alpha = 0.48f),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 18.dp)
-                .fillMaxWidth(0.6f),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${formatZoomLabel(minZoom)}x",
-                color = Color.White.copy(alpha = 0.42f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "${formatZoomLabel(maxZoom)}x",
-                color = Color.White.copy(alpha = 0.42f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
-}
-
-private fun formatZoomLabel(value: Float): String =
-    if (value % 1f == 0f) {
-        value.roundToInt().toString()
-    } else {
-        String.format("%.1f", value)
-    }
 
 @Composable
 private fun FocusReticleSamsung(
