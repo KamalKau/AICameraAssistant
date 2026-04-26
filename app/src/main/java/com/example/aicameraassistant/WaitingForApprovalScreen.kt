@@ -201,34 +201,7 @@ fun WaitingForApprovalScreen(
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
     val exposureSupported = firebaseExposureMinIndex != firebaseExposureMaxIndex
-    val connectionBadgeText = when (connectionState) {
-        AppConnectionState.IDLE,
-        AppConnectionState.CONNECTING -> "Connecting..."
-        AppConnectionState.CONNECTED -> "Connected"
-        AppConnectionState.WEAK_NETWORK -> "Weak network"
-        AppConnectionState.RETRYING -> "Reconnecting..."
-        AppConnectionState.DISCONNECTED -> "Disconnected"
-    }
-    val connectionBadgeColor = when (connectionState) {
-        AppConnectionState.CONNECTED -> Color(0xFF4CAF50)
-        AppConnectionState.WEAK_NETWORK -> Color(0xFFFFB300)
-        AppConnectionState.RETRYING,
-        AppConnectionState.CONNECTING,
-        AppConnectionState.IDLE -> Color(0xFFFF9800)
-        AppConnectionState.DISCONNECTED -> Color(0xFFF44336)
-    }
-    val connectionWarningText = when (connectionState) {
-        AppConnectionState.WEAK_NETWORK -> "Network unstable"
-        AppConnectionState.RETRYING -> "Reconnecting..."
-        AppConnectionState.DISCONNECTED -> "Connection lost"
-        else -> null
-    }
-    val connectionWarningDetailText = when (connectionState) {
-        AppConnectionState.WEAK_NETWORK,
-        AppConnectionState.RETRYING -> "Video quality may be affected"
-        AppConnectionState.DISCONNECTED -> "Unable to reconnect"
-        else -> null
-    }
+    val controllerStatusUiState = buildControllerStatusUiState(connectionState)
     val isVideoStalled =
         roomStatus == "connected" &&
             connectionState != AppConnectionState.CONNECTED &&
@@ -242,9 +215,7 @@ fun WaitingForApprovalScreen(
         else -> "Connecting video..."
     }
     val commonZoomOptions = remember(minZoom, maxZoom) {
-        listOf(0.6f, 1f, 2f, 3f)
-            .filter { it.toDouble() in minZoom..maxZoom }
-            .ifEmpty { listOf(minZoom.toFloat()) }
+        buildControllerCommonZoomOptions(minZoom, maxZoom)
     }
     val flashModes = listOf("off", "auto", "on")
     val shutterScale by animateFloatAsState(
@@ -260,155 +231,138 @@ fun WaitingForApprovalScreen(
             load(MediaActionSound.SHUTTER_CLICK)
         }
     }
-
+    val controllerCoordinator = remember(
+        roomCode,
+        repository,
+        scope,
+        context,
+        onBack,
+        haptic,
+        vibrator,
+        shutterSound
+    ) {
+        ControllerSessionCoordinator(
+            repository = repository,
+            roomCode = roomCode,
+            scope = scope,
+            context = context,
+            onExit = onBack,
+            haptic = haptic,
+            vibrator = vibrator,
+            shutterSound = shutterSound
+        )
+    }
+    val controllerToolRailUiState = buildCameraToolRailUiState(
+        flashSupported = firebaseFlashSupported,
+        flashMode = firebaseFlashMode,
+        lensFacing = firebaseLensFacing,
+        gridEnabled = firebaseGridEnabled
+    )
+    val controllerToolRailActions = CameraToolRailActions(
+        onFlashClick = {
+            controllerCoordinator.updateFlashMode(firebaseFlashMode, firebaseFlashSupported)
+        },
+        onLensClick = {
+            controllerCoordinator.switchLens(firebaseLensFacing)
+        },
+        onGridClick = {
+            controllerCoordinator.updateGridEnabled(firebaseGridEnabled)
+        }
+    )
+    val controllerBottomControlsUiState = buildControllerBottomControlsUiState(
+        roomCode = roomCode,
+        showZoomRing = showZoomRing,
+        zoomUiValue = zoomUiValue,
+        minZoom = minZoom.toFloat(),
+        maxZoom = maxZoom.toFloat(),
+        commonZoomOptions = commonZoomOptions,
+        isBurstCapturing = isBurstCapturing,
+        burstCaptureCount = burstCaptureCount,
+        shutterScale = shutterScale,
+        shutterCoreScale = shutterCoreScale
+    )
     DisposableEffect(Unit) {
         onDispose {
             shutterSound.release()
         }
     }
 
-    fun shutdownControllerSession(exitScreen: Boolean) {
-        if (isEndingSession) return
-
-        isEndingSession = true
+    fun releaseControllerPreview() {
         remoteTrack?.removeSink(previewContainerRef?.renderer)
         previewContainerRef?.renderer?.release()
         previewContainerRef = null
         remoteTrack = null
-        WebRtcSessionManager.stopLocalCamera()
-        WebRtcSessionManager.clearConnections()
-
-        if (exitScreen) {
-            onBack()
-        }
-    }
-
-    fun endControllerSession() {
-        if (isEndingSession) return
-
-        scope.launch {
-            runCatching { repository.endSession(roomCode) }
-                .onSuccess {
-                    shutdownControllerSession(exitScreen = true)
-                }
-                .onFailure {
-                    isEndingSession = false
-                    Log.e("SESSION_END", "Failed to end controller session", it)
-                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
-                }
-        }
     }
 
     fun sendZoomUpdate(zoom: Float, force: Boolean = false) {
-        val clampedZoom = zoom.toDouble().coerceIn(minZoom, maxZoom)
-        if (!force && !lastSentZoom.isNaN() && abs(lastSentZoom - clampedZoom) < 0.02) {
-            return
-        }
-
-        lastSentZoom = clampedZoom
-        scope.launch {
-            repository.updateZoomLevel(roomCode, clampedZoom)
-        }
+        controllerCoordinator.sendZoomUpdate(
+            zoom = zoom,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            lastSentZoom = lastSentZoom,
+            force = force,
+            onLastSentZoomChanged = { lastSentZoom = it }
+        )
     }
 
     fun triggerShutterEffect() {
-        shutterPressed = true
-        shutterFlashAlpha = 0.15f
-        runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
-        runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
-        runCatching {
-            val deviceVibrator = vibrator
-            if (deviceVibrator?.hasVibrator() == true) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    deviceVibrator.vibrate(
-                        VibrationEffect.createOneShot(24L, 110)
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    deviceVibrator.vibrate(24L)
-                }
-            }
-        }
-        scope.launch {
-            delay(70)
-            shutterPressed = false
-            shutterFlashAlpha = 0f
-        }
+        controllerCoordinator.triggerShutterEffect(
+            setShutterPressed = { shutterPressed = it },
+            setShutterFlashAlpha = { shutterFlashAlpha = it }
+        )
     }
 
     fun triggerCaptureRequest() {
-        captureRequestSequence = maxOf(captureRequestSequence + 1L, System.currentTimeMillis())
-        triggerShutterEffect()
-        scope.launch {
-            repository.sendCaptureRequest(roomCode, captureRequestSequence)
-        }
+        controllerCoordinator.triggerCaptureRequest(
+            nextRequestId = nextCaptureRequestId(captureRequestSequence),
+            setCaptureRequestSequence = { captureRequestSequence = it },
+            setShutterPressed = { shutterPressed = it },
+            setShutterFlashAlpha = { shutterFlashAlpha = it }
+        )
     }
 
     fun startBurstCapture() {
-        if (isBurstCapturing) return
-        isBurstCapturing = true
-        burstCaptureCount = 0
         burstJob?.cancel()
-        burstJob = scope.launch {
-            while (isBurstCapturing) {
-                burstCaptureCount += 1
-                triggerCaptureRequest()
-                delay(220)
-            }
-        }
+        controllerCoordinator.startBurstCapture(
+            isBurstCapturing = isBurstCapturing,
+            setIsBurstCapturing = { isBurstCapturing = it },
+            setBurstCaptureCount = { burstCaptureCount = it },
+            setBurstJob = { burstJob = it },
+            triggerCapture = { triggerCaptureRequest() }
+        )
     }
 
     fun stopBurstCapture() {
-        isBurstCapturing = false
-        burstJob?.cancel()
-        burstJob = null
+        controllerCoordinator.stopBurstCapture(
+            setIsBurstCapturing = { isBurstCapturing = it },
+            burstJob = burstJob,
+            setBurstJob = { burstJob = it }
+        )
     }
 
     fun sendFocusRequest(tapOffset: Offset, previewRect: Rect, lockFocus: Boolean = false) {
-        if (!previewRect.contains(tapOffset)) return
-
-        val clampedPoint = tapOffset.clampOffsetTo(previewRect)
-        val previewWidth = previewRect.width
-        val previewHeight = previewRect.height
-        if (previewWidth <= 0f || previewHeight <= 0f) return
-
-        val normalizedX = (clampedPoint.x - previewRect.left) / previewWidth
-        val normalizedY = (clampedPoint.y - previewRect.top) / previewHeight
-
-        focusPoint = clampedPoint
-        focusSucceeded = null
-        focusLocked = lockFocus
-        focusUiToken++
-
-        scope.launch {
-            repository.updateFocusRequest(
-                roomCode = roomCode,
-                normalizedX = normalizedX.toDouble(),
-                normalizedY = normalizedY.toDouble(),
-                requestId = firebaseFocusRequestId + 1L,
-                lockEnabled = lockFocus
-            )
-        }
+        controllerCoordinator.sendFocusRequest(
+            tapOffset = tapOffset,
+            previewRect = previewRect,
+            currentFocusRequestId = firebaseFocusRequestId,
+            lockFocus = lockFocus,
+            onFocusUiUpdated = { point, locked ->
+                focusPoint = point
+                focusSucceeded = null
+                focusLocked = locked
+                focusUiToken++
+            }
+        )
     }
 
     fun updateExposureFromProgress(progress: Float) {
-        if (!exposureSupported) return
-
-        val clampedProgress = progress.coerceIn(0f, 1f)
-        val targetIndex = (
-            firebaseExposureMinIndex +
-                ((1f - clampedProgress) * (firebaseExposureMaxIndex - firebaseExposureMinIndex))
-        ).roundToInt().coerceIn(firebaseExposureMinIndex, firebaseExposureMaxIndex)
-
-        if (targetIndex == firebaseExposureIndex) {
-            focusUiToken++
-            return
-        }
-
-        focusUiToken++
-        scope.launch {
-            repository.updateExposureIndex(roomCode, targetIndex)
-        }
+        controllerCoordinator.updateExposureFromProgress(
+            progress = progress,
+            exposureMinIndex = firebaseExposureMinIndex,
+            exposureMaxIndex = firebaseExposureMaxIndex,
+            currentExposureIndex = firebaseExposureIndex,
+            onUiPulse = { focusUiToken++ }
+        )
     }
 
     DisposableEffect(roomCode) {
@@ -444,12 +398,22 @@ fun WaitingForApprovalScreen(
 
         if (roomStatus == "ended") {
             Toast.makeText(context, "Session ended by camera", Toast.LENGTH_SHORT).show()
-            shutdownControllerSession(exitScreen = true)
+            controllerCoordinator.shutdownSession(
+                isEndingSession = isEndingSession,
+                setIsEndingSession = { isEndingSession = it },
+                performCleanup = { releaseControllerPreview() },
+                exitScreen = true
+            )
             return@LaunchedEffect
         }
 
         if (hasSeenConnectedState && roomStatus == "waiting") {
-            shutdownControllerSession(exitScreen = true)
+            controllerCoordinator.shutdownSession(
+                isEndingSession = isEndingSession,
+                setIsEndingSession = { isEndingSession = it },
+                performCleanup = { releaseControllerPreview() },
+                exitScreen = true
+            )
             return@LaunchedEffect
         }
 
@@ -577,7 +541,11 @@ fun WaitingForApprovalScreen(
             Button(
                 onClick = {
                     if (hasSeenConnectedState || roomStatus == "request_received") {
-                        endControllerSession()
+                        controllerCoordinator.endSession(
+                            isEndingSession = isEndingSession,
+                            setIsEndingSession = { isEndingSession = it },
+                            performCleanup = { releaseControllerPreview() }
+                        )
                     } else {
                         onBack()
                     }
@@ -800,7 +768,7 @@ fun WaitingForApprovalScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(connectionBadgeColor)
+                                    .background(controllerStatusUiState.dotColor)
                             )
                             Text(
                                 text = stalledVideoText,
@@ -911,83 +879,26 @@ fun WaitingForApprovalScreen(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { endControllerSession() },
-                        enabled = !isEndingSession,
-                        modifier = Modifier.background(
-                            Color(0xFFE53935),
-                            CircleShape
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CallEnd,
-                            contentDescription = if (isEndingSession) "Ending session" else "End session",
-                            tint = Color.White
+                ControllerTopActionBar(
+                    isEndingSession = isEndingSession,
+                    onEndSession = {
+                        controllerCoordinator.endSession(
+                            isEndingSession = isEndingSession,
+                            setIsEndingSession = { isEndingSession = it },
+                            performCleanup = { releaseControllerPreview() }
                         )
                     }
-                }
+                )
             }
 
-            Column(
+            CameraToolRail(
+                state = controllerToolRailUiState,
+                actions = controllerToolRailActions,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .statusBarsPadding()
-                    .padding(end = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                CameraModeButton(
-                    icon = when {
-                        !firebaseFlashSupported -> Icons.Default.FlashOff
-                        firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
-                        firebaseFlashMode == "on" -> Icons.Default.FlashOn
-                        else -> Icons.Default.FlashOff
-                    },
-                    label = when {
-                        !firebaseFlashSupported -> "Unsupported"
-                        firebaseFlashMode == "auto" -> "Auto"
-                        firebaseFlashMode == "on" -> "On"
-                        else -> "Off"
-                    },
-                    enabled = firebaseFlashSupported,
-                    onClick = {
-                        if (!firebaseFlashSupported) return@CameraModeButton
-                        val nextFlashMode = when (firebaseFlashMode) {
-                            "off" -> "auto"
-                            "auto" -> "on"
-                            else -> "off"
-                        }
-                        scope.launch {
-                            repository.updateFlashMode(roomCode, nextFlashMode)
-                        }
-                    }
-                )
-
-                CameraModeButton(
-                    icon = Icons.Default.SwitchCamera,
-                    label = if (firebaseLensFacing == "back") "Rear" else "Front",
-                    onClick = {
-                        scope.launch {
-                            val nextFacing =
-                                if (firebaseLensFacing == "back") "front" else "back"
-                            repository.updateLensFacing(roomCode, nextFacing)
-                        }
-                    }
-                )
-
-                GridToggleButton(
-                    isActive = firebaseGridEnabled,
-                    onClick = {
-                        scope.launch {
-                            repository.updateGridEnabled(roomCode, !firebaseGridEnabled)
-                        }
-                    }
-                )
-            }
+                    .padding(end = 16.dp)
+            )
 
             Column(
                 modifier = Modifier
@@ -995,55 +906,10 @@ fun WaitingForApprovalScreen(
                     .padding(top = 88.dp, start = 16.dp, end = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Box(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(connectionBadgeColor)
-                        )
-                        Text(
-                            text = connectionBadgeText,
-                            color = Color.White,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                if (connectionWarningText != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(18.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = connectionWarningText,
-                                color = Color.White,
-                                fontWeight = FontWeight.Medium
-                            )
-                            connectionWarningDetailText?.let { detailText ->
-                                Text(
-                                    text = detailText,
-                                    color = Color.White.copy(alpha = 0.78f),
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-                    }
-                }            }
+                ControllerStatusOverlay(
+                    state = controllerStatusUiState
+                )
+            }
 
             Column(
                 modifier = Modifier
@@ -1053,97 +919,146 @@ fun WaitingForApprovalScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (showZoomRing) {
-                    AndroidZoomBar(
-                        value = zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat()),
-                        minZoom = minZoom.toFloat(),
-                        maxZoom = maxZoom.toFloat(),
-                        onValueChange = { newValue ->
-                            isZoomDragging = true
-                            zoomUiValue = newValue
-                            sendZoomUpdate(newValue)
-                        },
-                        onValueChangeFinished = {
-                            isZoomDragging = false
-                            sendZoomUpdate(zoomUiValue, force = true)
-                            showZoomRing = false
-                        }
-                    )
-                }
-
-                ZoomPresetSelector(
-                    options = commonZoomOptions,
-                    currentValue = zoomUiValue.coerceIn(minZoom.toFloat(), maxZoom.toFloat()),
-                    onOptionClick = { selectedZoom ->
+                ControllerBottomControls(
+                    state = controllerBottomControlsUiState,
+                    actions = ControllerBottomControlsActions(
+                        onZoomBarValueChange = { newValue ->
+                        isZoomDragging = true
+                        zoomUiValue = newValue
+                        sendZoomUpdate(newValue)
+                    },
+                        onZoomBarFinished = {
+                        isZoomDragging = false
+                        sendZoomUpdate(zoomUiValue, force = true)
+                        showZoomRing = false
+                    },
+                        onZoomPresetClick = { selectedZoom ->
                         zoomUiValue = selectedZoom
                         isZoomDragging = false
                         sendZoomUpdate(selectedZoom, force = true)
                         showZoomRing = false
                     },
-                    onLongPress = { showZoomRing = true }
+                        onZoomPresetLongPress = { showZoomRing = true },
+                        onShutterPress = { _ ->
+                        var burstStarted = false
+                        val startBurstJob = scope.launch {
+                            delay(350)
+                            burstStarted = true
+                            startBurstCapture()
+                        }
+
+                        val released = tryAwaitRelease()
+                        startBurstJob.cancel()
+
+                        if (burstStarted || isBurstCapturing) {
+                            stopBurstCapture()
+                        } else if (released) {
+                            triggerCaptureRequest()
+                        }
+                    })
                 )
-
-                if (isBurstCapturing) {
-                    Box(
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
-                            .padding(horizontal = 14.dp, vertical = 7.dp)
-                    ) {
-                        Text(
-                            text = burstCaptureCount.toString(),
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 16.sp
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .graphicsLayer {
-                            scaleX = shutterScale
-                            scaleY = shutterScale
-                        }
-                        .border(4.dp, Color.White, CircleShape)
-                        .padding(6.dp)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .pointerInput(roomCode) {
-                            detectTapGestures(
-                                onPress = {
-                                    var burstStarted = false
-                                    val startBurstJob = scope.launch {
-                                        delay(350)
-                                        burstStarted = true
-                                        startBurstCapture()
-                                    }
-
-                                    val released = tryAwaitRelease()
-                                    startBurstJob.cancel()
-
-                                    if (burstStarted || isBurstCapturing) {
-                                        stopBurstCapture()
-                                    } else if (released) {
-                                        triggerCaptureRequest()
-                                    }
-                                }
-                            )
-                        }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleX = shutterCoreScale
-                                scaleY = shutterCoreScale
-                            }
-                            .clip(if (isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
-                            .background(Color.White)
-                    )
-                }
             }
         }
+    }
+}
+
+@Composable
+private fun ControllerTopActionBar(
+    isEndingSession: Boolean,
+    onEndSession: () -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FloatingEndSessionButton(
+            isEnding = isEndingSession,
+            onClick = onEndSession,
+            containerColor = Color(0xFFE53935)
+        )
+    }
+}
+
+@Composable
+private fun ControllerStatusOverlay(
+    state: StatusUiState
+) {
+    SessionStatusChip(
+        text = state.text,
+        dotColor = state.dotColor
+    )
+
+    if (state.warningText != null) {
+        Spacer(modifier = Modifier.height(8.dp))
+        SessionWarningChip(
+            text = state.warningText,
+            detailText = state.warningDetailText
+        )
+    }
+}
+
+@Composable
+private fun ControllerBottomControls(
+    state: ControllerBottomControlsUiState,
+    actions: ControllerBottomControlsActions
+) {
+    if (state.showZoomRing) {
+        AndroidZoomBar(
+            value = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
+            minZoom = state.minZoom,
+            maxZoom = state.maxZoom,
+            onValueChange = actions.onZoomBarValueChange,
+            onValueChangeFinished = actions.onZoomBarFinished
+        )
+    }
+
+    ZoomPresetSelector(
+        options = state.commonZoomOptions,
+        currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
+        onOptionClick = actions.onZoomPresetClick,
+        onLongPress = actions.onZoomPresetLongPress
+    )
+
+    if (state.isBurstCapturing) {
+        Box(
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 14.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = state.burstCaptureCount.toString(),
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp
+            )
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(80.dp)
+            .graphicsLayer {
+                scaleX = state.shutterScale
+                scaleY = state.shutterScale
+            }
+            .border(4.dp, Color.White, CircleShape)
+            .padding(6.dp)
+            .clip(CircleShape)
+            .background(Color.White)
+            .pointerInput(state.roomCode) {
+                detectTapGestures(onPress = actions.onShutterPress)
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = state.shutterCoreScale
+                    scaleY = state.shutterCoreScale
+                }
+                .clip(if (state.isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
+                .background(Color.White)
+        )
     }
 }
 
@@ -1365,41 +1280,6 @@ private fun formatZoomLabel(value: Float): String =
     } else {
         String.format("%.1f", value)
     }
-
-@Composable
-fun CameraModeButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        IconButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier
-                .size(40.dp)
-                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Text(
-            text = label,
-            color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
 
 @Composable
 private fun FocusReticleSamsung(

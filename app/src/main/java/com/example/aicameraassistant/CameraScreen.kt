@@ -166,78 +166,51 @@ fun CameraScreen(
         firebaseFlashMode == "auto" -> ImageCapture.FLASH_MODE_AUTO
         else -> ImageCapture.FLASH_MODE_OFF
     }
-    val statusText = when {
-        !sessionIsActive -> when (roomStatus) {
-            "request_received" -> "Connection request received"
-            "denied" -> "Request denied"
-            else -> "Waiting for controller"
-        }
-
-        else -> when (connectionState) {
-            AppConnectionState.IDLE,
-            AppConnectionState.CONNECTING -> "Connecting..."
-            AppConnectionState.CONNECTED -> "Controller connected"
-            AppConnectionState.WEAK_NETWORK -> "Weak network"
-            AppConnectionState.RETRYING -> "Reconnecting..."
-            AppConnectionState.DISCONNECTED -> "Controller disconnected"
-        }
+    val hostCoordinator = remember(roomCode, repository, scope, context, onBack) {
+        HostSessionCoordinator(
+            repository = repository,
+            roomCode = roomCode,
+            scope = scope,
+            context = context,
+            onExit = onBack
+        )
     }
-    val statusDotColor = when {
-        !sessionIsActive -> when (roomStatus) {
-            "request_received" -> Color(0xFFFF9800)
-            "denied" -> Color(0xFFF44336)
-            else -> Color(0xFFFFC107)
+    val hostTopOverlayUiState = buildHostTopOverlayUiState(
+        roomCode = roomCode,
+        roomStatus = roomStatus,
+        connectionState = connectionState,
+        sessionIsActive = sessionIsActive,
+        requestReceived = firebaseRequestReceived,
+        controllerApproved = firebaseControllerApproved,
+        isEndingSession = isEndingSession
+    )
+    val hostToolRailUiState = buildCameraToolRailUiState(
+        flashSupported = flashSupported,
+        flashMode = firebaseFlashMode,
+        lensFacing = firebaseLensFacing,
+        gridEnabled = firebaseGridEnabled
+    )
+    val hostToolRailActions = CameraToolRailActions(
+        onFlashClick = {
+            hostCoordinator.updateFlashMode(firebaseFlashMode, flashSupported)
+        },
+        onLensClick = {
+            hostCoordinator.switchLens(firebaseLensFacing)
+        },
+        onGridClick = {
+            hostCoordinator.updateGridEnabled(firebaseGridEnabled)
         }
-
-        else -> when (connectionState) {
-            AppConnectionState.CONNECTED -> Color(0xFF4CAF50)
-            AppConnectionState.WEAK_NETWORK -> Color(0xFFFFB300)
-            AppConnectionState.RETRYING,
-            AppConnectionState.CONNECTING,
-            AppConnectionState.IDLE -> Color(0xFFFF9800)
-            AppConnectionState.DISCONNECTED -> Color(0xFFF44336)
-        }
-    }
-    val transientWarningText = when (connectionState) {
-        AppConnectionState.WEAK_NETWORK -> "Network unstable"
-        AppConnectionState.RETRYING -> "Reconnecting..."
-        AppConnectionState.DISCONNECTED -> "Connection lost"
-        else -> null
-    }
-    val transientWarningDetailText = when (connectionState) {
-        AppConnectionState.WEAK_NETWORK,
-        AppConnectionState.RETRYING -> "Video quality may be affected"
-        AppConnectionState.DISCONNECTED -> "Unable to reconnect"
-        else -> null
-    }
-
-    fun shutdownHostSession(exitScreen: Boolean) {
-        if (isEndingSession) return
-
-        isEndingSession = true
-        WebRtcSessionManager.stopLocalCamera()
-        WebRtcSessionManager.clearConnections()
-
-        if (exitScreen) {
-            onBack()
-        }
-    }
-
-    fun endHostSession() {
-        if (isEndingSession) return
-
-        scope.launch {
-            runCatching { repository.endSession(roomCode) }
-                .onSuccess {
-                    shutdownHostSession(exitScreen = true)
-                }
-                .onFailure {
-                    isEndingSession = false
-                    Log.e("SESSION_END", "Failed to end host session", it)
-                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
-                }
-        }
-    }
+    )
+    val hostTopOverlayActions = HostTopOverlayActions(
+        onEndSession = {
+            hostCoordinator.endSession(
+                isEndingSession = isEndingSession,
+                setIsEndingSession = { isEndingSession = it }
+            )
+        },
+        onAllowController = { hostCoordinator.updateApproval(true) },
+        onDenyController = { hostCoordinator.updateApproval(false) }
+    )
 
     fun triggerTapToFocus(tapOffset: Offset, lockFocus: Boolean = false) {
         if (!sessionIsActive) return
@@ -309,20 +282,13 @@ fun CameraScreen(
     }
 
     fun updateExposureFromProgress(progress: Float) {
-        if (!exposureSupported) return
-
-        val clampedProgress = progress.coerceIn(0f, 1f)
-        val targetIndex = (
-            exposureMinIndex +
-                ((1f - clampedProgress) * (exposureMaxIndex - exposureMinIndex))
-        ).roundToInt().coerceIn(exposureMinIndex, exposureMaxIndex)
-
-        focusUiToken++
-        if (targetIndex == firebaseExposureIndex) return
-
-        scope.launch {
-            repository.updateExposureIndex(roomCode, targetIndex)
-        }
+        hostCoordinator.updateExposureFromProgress(
+            progress = progress,
+            exposureMinIndex = exposureMinIndex,
+            exposureMaxIndex = exposureMaxIndex,
+            currentExposureIndex = firebaseExposureIndex,
+            onUiPulse = { focusUiToken++ }
+        )
     }
 
     DisposableEffect(roomCode) {
@@ -369,9 +335,17 @@ fun CameraScreen(
 
         if (roomStatus == "ended") {
             Toast.makeText(context, "Session ended", Toast.LENGTH_SHORT).show()
-            shutdownHostSession(exitScreen = true)
+            hostCoordinator.shutdownSession(
+                isEndingSession = isEndingSession,
+                setIsEndingSession = { isEndingSession = it },
+                exitScreen = true
+            )
         } else if (hasSeenConnectedState && roomStatus == "waiting") {
-            shutdownHostSession(exitScreen = true)
+            hostCoordinator.shutdownSession(
+                isEndingSession = isEndingSession,
+                setIsEndingSession = { isEndingSession = it },
+                exitScreen = true
+            )
         }
     }
 
@@ -733,7 +707,7 @@ fun CameraScreen(
             )
         }
 
-        if (sessionIsActive && transientWarningText != null) {
+        if (sessionIsActive && hostTopOverlayUiState.status.warningText != null) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -745,11 +719,11 @@ fun CameraScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = transientWarningText,
+                        text = hostTopOverlayUiState.status.warningText,
                         color = Color.White,
                         fontWeight = FontWeight.Medium
                     )
-                    transientWarningDetailText?.let { detailText ->
+                    hostTopOverlayUiState.status.warningDetailText?.let { detailText ->
                         Text(
                             text = detailText,
                             color = Color.White.copy(alpha = 0.78f)
@@ -823,156 +797,16 @@ fun CameraScreen(
                 .padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { endHostSession() },
-                    enabled = !isEndingSession,
-                    modifier = Modifier.background(MaterialTheme.colorScheme.error, CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = if (isEndingSession) "Ending session" else "End session",
-                        tint = Color.White
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color.Black.copy(alpha = 0.45f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(statusDotColor)
-                        )
-
-                        Text(
-                            text = statusText,
-                            color = Color.White,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            if (!sessionIsActive) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = "Room Code",
-                        color = Color.White.copy(alpha = 0.75f)
-                    )
-                    Text(
-                        text = roomCode,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            if (firebaseRequestReceived && !firebaseControllerApproved) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            scope.launch { repository.updateApproval(roomCode, true) }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Allow")
-                    }
-
-                    Button(
-                        onClick = {
-                            scope.launch { repository.updateApproval(roomCode, false) }
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text("Deny")
-                    }
-                }
-            }
-
+            HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
         }
 
-        Column(
+        CameraToolRail(
+            state = hostToolRailUiState,
+            actions = hostToolRailActions,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            HostCameraModeButton(
-                icon = when {
-                    !flashSupported -> Icons.Default.FlashOff
-                    firebaseFlashMode == "auto" -> Icons.Default.FlashAuto
-                    firebaseFlashMode == "on" -> Icons.Default.FlashOn
-                    else -> Icons.Default.FlashOff
-                },
-                label = when {
-                    !flashSupported -> "Unsupported"
-                    firebaseFlashMode == "auto" -> "Auto"
-                    firebaseFlashMode == "on" -> "On"
-                    else -> "Off"
-                },
-                enabled = flashSupported,
-                onClick = {
-                    if (!flashSupported) return@HostCameraModeButton
-                    val nextFlashMode = when (firebaseFlashMode) {
-                        "off" -> "auto"
-                        "auto" -> "on"
-                        else -> "off"
-                    }
-                    scope.launch {
-                        repository.updateFlashMode(roomCode, nextFlashMode)
-                    }
-                }
-            )
-
-            HostCameraModeButton(
-                icon = Icons.Default.SwitchCamera,
-                label = if (firebaseLensFacing == "back") "Rear" else "Front",
-                onClick = {
-                    scope.launch {
-                        val nextFacing =
-                            if (firebaseLensFacing == "back") "front" else "back"
-                        repository.updateLensFacing(roomCode, nextFacing)
-                    }
-                }
-            )
-
-            GridToggleButton(
-                isActive = firebaseGridEnabled,
-                onClick = {
-                    scope.launch {
-                        repository.updateGridEnabled(roomCode, !firebaseGridEnabled)
-                    }
-                }
-            )
-        }
+                .padding(end = 16.dp)
+        )
     }
 }
 
@@ -1052,37 +886,57 @@ fun GridToggleButton(
 }
 
 @Composable
-fun HostCameraModeButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    enabled: Boolean = true,
-    onClick: () -> Unit
+private fun HostTopOverlay(
+    state: HostTopOverlayUiState,
+    actions: HostTopOverlayActions
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier
-                .size(40.dp)
-                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Text(
-            text = label,
-            color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium
+        FloatingEndSessionButton(
+            isEnding = state.isEndingSession,
+            onClick = actions.onEndSession
         )
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        SessionStatusChip(
+            text = state.status.text,
+            dotColor = state.status.dotColor
+        )
+    }
+
+    if (!state.sessionIsActive) {
+        RoomCodeBadge(roomCode = state.roomCode)
+    }
+
+    if (state.showApprovalPrompt) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = actions.onAllowController,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Allow")
+            }
+
+            Button(
+                onClick = actions.onDenyController,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Deny")
+            }
+        }
     }
 }
 
