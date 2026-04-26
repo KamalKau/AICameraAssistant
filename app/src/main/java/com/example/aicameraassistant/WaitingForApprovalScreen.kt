@@ -93,6 +93,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -159,6 +160,10 @@ fun WaitingForApprovalScreen(
     var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
     var shutterFlashAlpha by remember(roomCode) { mutableFloatStateOf(0f) }
     var shutterPressed by remember(roomCode) { mutableStateOf(false) }
+    var captureRequestSequence by remember(roomCode) { mutableLongStateOf(0L) }
+    var burstJob by remember(roomCode) { mutableStateOf<Job?>(null) }
+    var isBurstCapturing by remember(roomCode) { mutableStateOf(false) }
+    var burstCaptureCount by remember(roomCode) { mutableIntStateOf(0) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -243,8 +248,12 @@ fun WaitingForApprovalScreen(
     }
     val flashModes = listOf("off", "auto", "on")
     val shutterScale by animateFloatAsState(
-        targetValue = if (shutterPressed) 0.92f else 1f,
+        targetValue = if (shutterPressed || isBurstCapturing) 0.92f else 1f,
         label = "controller_shutter_scale"
+    )
+    val shutterCoreScale by animateFloatAsState(
+        targetValue = if (isBurstCapturing) 0.72f else 1f,
+        label = "controller_shutter_core_scale"
     )
     val shutterSound = remember {
         MediaActionSound().apply {
@@ -325,6 +334,34 @@ fun WaitingForApprovalScreen(
             shutterPressed = false
             shutterFlashAlpha = 0f
         }
+    }
+
+    fun triggerCaptureRequest() {
+        captureRequestSequence = maxOf(captureRequestSequence + 1L, System.currentTimeMillis())
+        triggerShutterEffect()
+        scope.launch {
+            repository.sendCaptureRequest(roomCode, captureRequestSequence)
+        }
+    }
+
+    fun startBurstCapture() {
+        if (isBurstCapturing) return
+        isBurstCapturing = true
+        burstCaptureCount = 0
+        burstJob?.cancel()
+        burstJob = scope.launch {
+            while (isBurstCapturing) {
+                burstCaptureCount += 1
+                triggerCaptureRequest()
+                delay(220)
+            }
+        }
+    }
+
+    fun stopBurstCapture() {
+        isBurstCapturing = false
+        burstJob?.cancel()
+        burstJob = null
     }
 
     fun sendFocusRequest(tapOffset: Offset, previewRect: Rect, lockFocus: Boolean = false) {
@@ -1046,6 +1083,21 @@ fun WaitingForApprovalScreen(
                     onLongPress = { showZoomRing = true }
                 )
 
+                if (isBurstCapturing) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
+                            .padding(horizontal = 14.dp, vertical = 7.dp)
+                    ) {
+                        Text(
+                            text = burstCaptureCount.toString(),
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .size(80.dp)
@@ -1057,14 +1109,39 @@ fun WaitingForApprovalScreen(
                         .padding(6.dp)
                         .clip(CircleShape)
                         .background(Color.White)
-                        .clickable {
-                            triggerShutterEffect()
-                            scope.launch {
-                                val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                                db.collection("rooms").document(roomCode).update("captureRequest", true)
-                            }
+                        .pointerInput(roomCode) {
+                            detectTapGestures(
+                                onPress = {
+                                    var burstStarted = false
+                                    val startBurstJob = scope.launch {
+                                        delay(350)
+                                        burstStarted = true
+                                        startBurstCapture()
+                                    }
+
+                                    val released = tryAwaitRelease()
+                                    startBurstJob.cancel()
+
+                                    if (burstStarted || isBurstCapturing) {
+                                        stopBurstCapture()
+                                    } else if (released) {
+                                        triggerCaptureRequest()
+                                    }
+                                }
+                            )
                         }
-                )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = shutterCoreScale
+                                scaleY = shutterCoreScale
+                            }
+                            .clip(if (isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
+                            .background(Color.White)
+                    )
+                }
             }
         }
     }

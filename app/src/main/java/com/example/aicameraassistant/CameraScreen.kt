@@ -114,7 +114,7 @@ fun CameraScreen(
     val firebaseZoomLevel by repository.getZoomLevel(roomCode).collectAsState(initial = 1.0)
     val firebaseFlashMode by repository.getFlashMode(roomCode).collectAsState(initial = "off")
     val firebaseGridEnabled by repository.getGridEnabled(roomCode).collectAsState(initial = false)
-    val firebaseCaptureRequest by repository.getCaptureRequest(roomCode).collectAsState(initial = false)
+    val firebaseCaptureRequestId by repository.getCaptureRequestId(roomCode).collectAsState(initial = 0L)
     val firebaseRequestReceived by repository.getRequestReceived(roomCode).collectAsState(initial = false)
     val firebaseControllerApproved by repository.getControllerApproved(roomCode).collectAsState(initial = false)
     val firebaseFocusRequestId by repository.getFocusRequestId(roomCode).collectAsState(initial = 0L)
@@ -148,6 +148,7 @@ fun CameraScreen(
     var focusLocked by remember(roomCode) { mutableStateOf(false) }
     var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
     var lastAppliedRemoteFocusRequestId by remember(roomCode) { mutableStateOf(0L) }
+    var lastHandledCaptureRequestId by remember(roomCode) { mutableStateOf(0L) }
     var exposureMinIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureMaxIndex by remember(roomCode) { mutableIntStateOf(0) }
     var exposureIndex by remember(roomCode) { mutableIntStateOf(0) }
@@ -392,10 +393,10 @@ fun CameraScreen(
         }
     }
 
-    fun takePhotoWithCameraX(useFrontScreenFlash: Boolean) {
+    fun takePhotoWithCameraX(useFrontScreenFlash: Boolean): Boolean {
         val currentCapture = imageCapture ?: run {
             Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
-            return
+            return false
         }
 
         val resolvedCaptureFlashMode = when {
@@ -440,17 +441,23 @@ fun CameraScreen(
                 }
             }
         )
+        return true
     }
 
-    LaunchedEffect(firebaseCaptureRequest) {
-        if (firebaseCaptureRequest) {
-            val useFrontScreenFlash = shouldUseFrontScreenFlash()
+    LaunchedEffect(firebaseCaptureRequestId, imageCapture) {
+        if (firebaseCaptureRequestId <= 0L || firebaseCaptureRequestId == lastHandledCaptureRequestId) {
+            return@LaunchedEffect
+        }
 
-            if (!useFrontScreenFlash && captureFlashMode != ImageCapture.FLASH_MODE_OFF) {
-                flashAlpha = 0.85f
-            }
+        val useFrontScreenFlash = shouldUseFrontScreenFlash()
 
-            takePhotoWithCameraX(useFrontScreenFlash = useFrontScreenFlash)
+        if (!useFrontScreenFlash && captureFlashMode != ImageCapture.FLASH_MODE_OFF) {
+            flashAlpha = 0.85f
+        }
+
+        val captureStarted = takePhotoWithCameraX(useFrontScreenFlash = useFrontScreenFlash)
+        if (captureStarted) {
+            lastHandledCaptureRequestId = firebaseCaptureRequestId
             scope.launch {
                 repository.resetCaptureRequest(roomCode)
             }

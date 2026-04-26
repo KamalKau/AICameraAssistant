@@ -158,6 +158,18 @@ class FirebaseRoomRepository {
             .await()
     }
 
+    suspend fun sendCaptureRequest(roomCode: String, requestId: Long) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "captureRequest" to true,
+                    "captureRequestId" to requestId
+                )
+            )
+            .await()
+    }
+
     suspend fun saveOffer(roomCode: String, offerSdp: String) {
         db.collection("rooms")
             .document(roomCode)
@@ -189,6 +201,7 @@ class FirebaseRoomRepository {
             "requestReceived" to false,
             "controllerApproved" to false,
             "captureRequest" to false,
+            "captureRequestId" to 0L,
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -386,6 +399,14 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 snapshot?.getBoolean("captureRequest")?.let { trySend(it) }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getCaptureRequestId(roomCode: String): Flow<Long> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("captureRequestId") ?: 0L)
             }
         awaitClose { listener.remove() }
     }
