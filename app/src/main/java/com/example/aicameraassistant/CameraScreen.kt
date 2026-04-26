@@ -285,7 +285,7 @@ fun CameraScreen(
         val height = previewView.height.toFloat()
         if (width <= 0f || height <= 0f) return
         val previewRect =
-            calculateFittedPreviewRect(
+            fittedPreviewRect(
                 containerWidth = width,
                 containerHeight = height,
                 contentWidth = resolvedWidth.toFloat(),
@@ -303,7 +303,7 @@ fun CameraScreen(
             Offset(
                 x = previewRect.left + (mappedNormalizedX.toFloat() * previewRect.width),
                 y = previewRect.top + (mappedNormalizedY.toFloat() * previewRect.height)
-            ).clampTo(previewRect),
+            ).clampOffsetTo(previewRect),
             lockFocus = lockFocus
         )
     }
@@ -340,7 +340,7 @@ fun CameraScreen(
     LaunchedEffect(offerSdp, isStreaming) {
         val currentOfferSdp = offerSdp
         if (isStreaming && currentOfferSdp != null && !answerCreated) {
-            createAnswer(
+            createSharedAnswer(
                 context = context,
                 roomCode = roomCode,
                 offerSdp = currentOfferSdp,
@@ -712,7 +712,7 @@ fun CameraScreen(
         val boxMaxHeightPx = with(density) { maxHeight.toPx() }
         val previewContentRect =
             remember(boxMaxWidthPx, boxMaxHeightPx, resolvedWidth, resolvedHeight) {
-                calculateFittedPreviewRect(
+                fittedPreviewRect(
                     containerWidth = boxMaxWidthPx,
                     containerHeight = boxMaxHeightPx,
                     contentWidth = resolvedWidth.toFloat(),
@@ -785,7 +785,7 @@ fun CameraScreen(
                 val previewRect =
                     previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
                 val focusUiBounds = with(density) {
-                    calculateFocusUiBounds(
+                    focusUiBounds(
                         previewRect = previewRect,
                         topInsetPx = 132.dp.toPx(),
                         rightInsetPx = 116.dp.toPx(),
@@ -793,8 +793,8 @@ fun CameraScreen(
                         reticleRadiusPx = 34.dp.toPx()
                     )
                 }
-                val point = rawPoint.clampTo(previewRect)
-                FocusReticleSamsung(
+                val point = rawPoint.clampOffsetTo(previewRect)
+                SharedFocusReticleSamsung(
                     point = point,
                     success = focusSucceeded,
                     showExposureHandle = exposureSupported,
@@ -1465,30 +1465,6 @@ private fun FocusExposureHandleSamsung(
     }
 }
 
-private fun calculateFittedPreviewRect(
-    containerWidth: Float,
-    containerHeight: Float,
-    contentWidth: Float,
-    contentHeight: Float
-): Rect? {
-    if (containerWidth <= 0f || containerHeight <= 0f || contentWidth <= 0f || contentHeight <= 0f) {
-        return null
-    }
-
-    val scale = minOf(containerWidth / contentWidth, containerHeight / contentHeight)
-    val fittedWidth = contentWidth * scale
-    val fittedHeight = contentHeight * scale
-    val left = (containerWidth - fittedWidth) / 2f
-    val top = (containerHeight - fittedHeight) / 2f
-    return Rect(left, top, left + fittedWidth, top + fittedHeight)
-}
-
-private fun Offset.clampTo(rect: Rect): Offset =
-    Offset(
-        x = x.coerceIn(rect.left, rect.right),
-        y = y.coerceIn(rect.top, rect.bottom)
-    )
-
 private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -1525,105 +1501,3 @@ private fun isPreviewSceneDark(previewView: PreviewView): Boolean {
     }
 }
 
-fun createAnswer(
-    context: Context,
-    roomCode: String,
-    offerSdp: String,
-    repository: FirebaseRoomRepository,
-    onRemoteDescriptionSet: () -> Unit
-) {
-    WebRtcSessionManager.initialize(context)
-
-    val pc = WebRtcSessionManager.createCameraPeerConnection { candidate ->
-        CoroutineScope(Dispatchers.IO).launch {
-            repository.addCameraIceCandidate(roomCode, candidate)
-        }
-    } ?: return
-
-    pc.setRemoteDescription(
-        WebRtcSessionManager.sessionDescriptionObserver(
-            onSetSuccess = { onRemoteDescriptionSet() }
-        ),
-        SessionDescription(SessionDescription.Type.OFFER, offerSdp)
-    )
-
-    pc.createAnswer(
-        WebRtcSessionManager.sessionDescriptionObserver(
-            onCreateSuccess = { desc ->
-                pc.setLocalDescription(
-                    WebRtcSessionManager.sessionDescriptionObserver(),
-                    desc
-                )
-                CoroutineScope(Dispatchers.IO).launch {
-                    repository.saveAnswer(roomCode, desc.description)
-                }
-            }
-        ),
-        MediaConstraints()
-    )
-}
-
-private fun calculateFocusUiBounds(
-    previewRect: Rect,
-    topInsetPx: Float,
-    rightInsetPx: Float,
-    edgePaddingPx: Float,
-    reticleRadiusPx: Float
-): Rect {
-    val left = previewRect.left + edgePaddingPx + reticleRadiusPx
-    val top = previewRect.top + topInsetPx + reticleRadiusPx
-    val right = previewRect.right - rightInsetPx - edgePaddingPx
-    val bottom = previewRect.bottom - edgePaddingPx - reticleRadiusPx
-
-    return if (right > left && bottom > top) {
-        Rect(left, top, right, bottom)
-    } else {
-        previewRect
-    }
-}
-
-private fun calculateExposureSliderOffset(
-    point: Offset,
-    previewRect: Rect,
-    safeBounds: Rect,
-    sliderWidthPx: Float,
-    sliderHeightPx: Float,
-    reticleHalfPx: Float,
-    horizontalGapPx: Float
-): IntOffset {
-    val rightAnchorX = point.x + reticleHalfPx + horizontalGapPx
-    val leftAnchorX = point.x - reticleHalfPx - horizontalGapPx - sliderWidthPx
-    val minX = safeBounds.left
-    val maxX = safeBounds.right - sliderWidthPx
-    val rightFits = rightAnchorX in minX..maxX
-    val leftFits = leftAnchorX in minX..maxX
-    val desiredX = when {
-        point.x < previewRect.center.x && rightFits -> rightAnchorX
-        point.x >= previewRect.center.x && leftFits -> leftAnchorX
-        point.x < previewRect.center.x && leftFits -> leftAnchorX
-        point.x >= previewRect.center.x && rightFits -> rightAnchorX
-        else -> {
-            val clampedRightX = rightAnchorX.coerceIn(minX, maxX)
-            val clampedLeftX = leftAnchorX.coerceIn(minX, maxX)
-            val rightDelta = kotlin.math.abs(clampedRightX - rightAnchorX)
-            val leftDelta = kotlin.math.abs(clampedLeftX - leftAnchorX)
-            if (rightDelta <= leftDelta) clampedRightX else clampedLeftX
-        }
-    }
-
-    val minY = safeBounds.top
-    val maxY = safeBounds.bottom - sliderHeightPx
-    val centeredY = point.y - (sliderHeightPx / 2f)
-    val attachedTopY = point.y - reticleHalfPx
-    val attachedBottomY = point.y + reticleHalfPx - sliderHeightPx
-    val desiredY = when {
-        centeredY < minY -> attachedTopY.coerceAtLeast(minY)
-        centeredY > maxY -> attachedBottomY.coerceAtMost(maxY)
-        else -> centeredY
-    }
-
-    return IntOffset(
-        x = desiredX.coerceIn(minX, maxX).roundToInt(),
-        y = desiredY.coerceIn(minY, maxY).roundToInt()
-    )
-}
