@@ -1,7 +1,12 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.media.MediaActionSound
+import android.os.Build
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
@@ -64,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -73,9 +79,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -106,6 +114,16 @@ fun WaitingForApprovalScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val vibrator = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            manager?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+    }
 
     val roomStatus by repository.getRoomStatus(roomCode).collectAsState(initial = "waiting")
     val connectionState by WebRtcSessionManager.controllerConnectionState.collectAsState()
@@ -139,6 +157,8 @@ fun WaitingForApprovalScreen(
     var focusLocked by remember(roomCode) { mutableStateOf(false) }
     var focusUiToken by remember(roomCode) { mutableIntStateOf(0) }
     var previewOverlayRect by remember(roomCode) { mutableStateOf<Rect?>(null) }
+    var shutterFlashAlpha by remember(roomCode) { mutableFloatStateOf(0f) }
+    var shutterPressed by remember(roomCode) { mutableStateOf(false) }
 
     var remoteFrameWidth by remember { mutableIntStateOf(0) }
     var remoteFrameHeight by remember { mutableIntStateOf(0) }
@@ -222,6 +242,21 @@ fun WaitingForApprovalScreen(
             .ifEmpty { listOf(minZoom.toFloat()) }
     }
     val flashModes = listOf("off", "auto", "on")
+    val shutterScale by animateFloatAsState(
+        targetValue = if (shutterPressed) 0.92f else 1f,
+        label = "controller_shutter_scale"
+    )
+    val shutterSound = remember {
+        MediaActionSound().apply {
+            load(MediaActionSound.SHUTTER_CLICK)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            shutterSound.release()
+        }
+    }
 
     fun shutdownControllerSession(exitScreen: Boolean) {
         if (isEndingSession) return
@@ -264,6 +299,31 @@ fun WaitingForApprovalScreen(
         lastSentZoom = clampedZoom
         scope.launch {
             repository.updateZoomLevel(roomCode, clampedZoom)
+        }
+    }
+
+    fun triggerShutterEffect() {
+        shutterPressed = true
+        shutterFlashAlpha = 0.15f
+        runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
+        runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+        runCatching {
+            val deviceVibrator = vibrator
+            if (deviceVibrator?.hasVibrator() == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    deviceVibrator.vibrate(
+                        VibrationEffect.createOneShot(24L, 110)
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    deviceVibrator.vibrate(24L)
+                }
+            }
+        }
+        scope.launch {
+            delay(70)
+            shutterPressed = false
+            shutterFlashAlpha = 0f
         }
     }
 
@@ -675,6 +735,14 @@ fun WaitingForApprovalScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
+                if (shutterFlashAlpha > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.White.copy(alpha = shutterFlashAlpha))
+                    )
+                }
+
                 if (isVideoStalled) {
                     Box(
                         modifier = Modifier
@@ -981,11 +1049,16 @@ fun WaitingForApprovalScreen(
                 Box(
                     modifier = Modifier
                         .size(80.dp)
+                        .graphicsLayer {
+                            scaleX = shutterScale
+                            scaleY = shutterScale
+                        }
                         .border(4.dp, Color.White, CircleShape)
                         .padding(6.dp)
                         .clip(CircleShape)
                         .background(Color.White)
                         .clickable {
+                            triggerShutterEffect()
                             scope.launch {
                                 val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                                 db.collection("rooms").document(roomCode).update("captureRequest", true)
