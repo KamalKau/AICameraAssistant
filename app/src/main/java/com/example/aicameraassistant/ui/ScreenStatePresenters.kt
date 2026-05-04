@@ -122,7 +122,10 @@ fun buildCameraToolRailUiState(
     flashSupported: Boolean,
     flashMode: String,
     lensFacing: String,
-    gridEnabled: Boolean
+    gridEnabled: Boolean,
+    brightnessSupported: Boolean,
+    brightnessVisible: Boolean,
+    brightnessProgress: Float
 ): CameraToolRailUiState =
     CameraToolRailUiState(
         flashIcon = when {
@@ -139,7 +142,10 @@ fun buildCameraToolRailUiState(
         },
         flashEnabled = flashSupported,
         lensLabel = if (lensFacing == "back") "Rear" else "Front",
-        gridEnabled = gridEnabled
+        gridEnabled = gridEnabled,
+        brightnessSupported = brightnessSupported,
+        brightnessVisible = brightnessVisible,
+        brightnessProgress = brightnessProgress
     )
 
 fun buildControllerCommonZoomOptions(

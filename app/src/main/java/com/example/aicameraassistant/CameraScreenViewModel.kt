@@ -34,6 +34,8 @@ class CameraScreenViewModel : ViewModel() {
     var exposureMinIndex by mutableIntStateOf(0)
     var exposureMaxIndex by mutableIntStateOf(0)
     var exposureIndex by mutableIntStateOf(0)
+    var showManualBrightnessControl by mutableStateOf(false)
+    var manualExposureProgressOverride by mutableStateOf<Float?>(null)
     var isRemoteDescriptionSet by mutableStateOf(false)
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {

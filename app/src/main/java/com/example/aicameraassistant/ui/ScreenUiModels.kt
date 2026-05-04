@@ -29,13 +29,18 @@ data class CameraToolRailUiState(
     val flashLabel: String,
     val flashEnabled: Boolean,
     val lensLabel: String,
-    val gridEnabled: Boolean
+    val gridEnabled: Boolean,
+    val brightnessSupported: Boolean,
+    val brightnessVisible: Boolean,
+    val brightnessProgress: Float
 )
 
 data class CameraToolRailActions(
     val onFlashClick: () -> Unit,
     val onLensClick: () -> Unit,
-    val onGridClick: () -> Unit
+    val onGridClick: () -> Unit,
+    val onBrightnessClick: () -> Unit,
+    val onBrightnessProgressChange: (Float) -> Unit
 )
 
 data class ControllerBottomControlsUiState(

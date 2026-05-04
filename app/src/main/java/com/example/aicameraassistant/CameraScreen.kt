@@ -142,6 +142,8 @@ fun CameraScreen(
     var exposureMinIndex by screenViewModel::exposureMinIndex
     var exposureMaxIndex by screenViewModel::exposureMaxIndex
     var exposureIndex by screenViewModel::exposureIndex
+    var showManualBrightnessControl by screenViewModel::showManualBrightnessControl
+    var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
@@ -150,6 +152,25 @@ fun CameraScreen(
     val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
     val flashSupported = hasLedFlash || lensFacing == CameraSelector.LENS_FACING_FRONT
     val exposureSupported = exposureMinIndex != exposureMaxIndex
+    val remoteExposureProgress =
+        ((exposureMaxIndex - firebaseExposureIndex).toFloat() /
+            (exposureMaxIndex - exposureMinIndex).toFloat().coerceAtLeast(1f))
+            .coerceIn(0f, 1f)
+    val exposureProgress = manualExposureProgressOverride ?: remoteExposureProgress
+    val exposureLabel = buildExposureLabel(
+        currentIndex = firebaseExposureIndex,
+        minIndex = exposureMinIndex,
+        maxIndex = exposureMaxIndex
+    )
+    val neutralExposureProgress = defaultExposureProgress(
+        minIndex = exposureMinIndex,
+        maxIndex = exposureMaxIndex
+    )
+    val frontPreviewExposureOverlay =
+        buildPreviewExposureOverlay(
+            currentProgress = exposureProgress,
+            neutralProgress = neutralExposureProgress
+        )
     val captureFlashMode = when {
         lensFacing == CameraSelector.LENS_FACING_FRONT -> ImageCapture.FLASH_MODE_OFF
         firebaseFlashMode == "on" -> ImageCapture.FLASH_MODE_ON
@@ -178,7 +199,10 @@ fun CameraScreen(
         flashSupported = flashSupported,
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
-        gridEnabled = firebaseGridEnabled
+        gridEnabled = firebaseGridEnabled,
+        brightnessSupported = exposureSupported,
+        brightnessVisible = showManualBrightnessControl,
+        brightnessProgress = exposureProgress
     )
     val hostToolRailActions = CameraToolRailActions(
         onFlashClick = {
@@ -189,6 +213,27 @@ fun CameraScreen(
         },
         onGridClick = {
             hostCoordinator.updateGridEnabled(firebaseGridEnabled)
+        },
+        onBrightnessClick = {
+            if (exposureSupported) {
+                if (!showManualBrightnessControl) {
+                    manualExposureProgressOverride = remoteExposureProgress
+                }
+                showManualBrightnessControl = !showManualBrightnessControl
+                if (!showManualBrightnessControl) {
+                    manualExposureProgressOverride = null
+                }
+            }
+        },
+        onBrightnessProgressChange = { progress ->
+            manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            hostCoordinator.updateExposureFromProgress(
+                progress = progress,
+                exposureMinIndex = exposureMinIndex,
+                exposureMaxIndex = exposureMaxIndex,
+                currentExposureIndex = firebaseExposureIndex,
+                onUiPulse = { focusUiToken++ }
+            )
         }
     )
     val hostTopOverlayActions = HostTopOverlayActions(
@@ -279,6 +324,21 @@ fun CameraScreen(
             currentExposureIndex = firebaseExposureIndex,
             onUiPulse = { focusUiToken++ }
         )
+    }
+
+    fun publishExposureState(activeCamera: Camera) {
+        val exposureState = activeCamera.cameraInfo.exposureState
+        exposureMinIndex = exposureState.exposureCompensationRange.lower
+        exposureMaxIndex = exposureState.exposureCompensationRange.upper
+        exposureIndex = exposureState.exposureCompensationIndex
+        scope.launch {
+            repository.updateExposureState(
+                roomCode = roomCode,
+                minIndex = exposureMinIndex,
+                maxIndex = exposureMaxIndex,
+                currentIndex = exposureIndex
+            )
+        }
     }
 
     DisposableEffect(roomCode) {
@@ -485,17 +545,7 @@ fun CameraScreen(
 
             camera = firstCamera
             imageCapture = newImageCapture
-            exposureMinIndex = firstCamera.cameraInfo.exposureState.exposureCompensationRange.lower
-            exposureMaxIndex = firstCamera.cameraInfo.exposureState.exposureCompensationRange.upper
-            exposureIndex = firstCamera.cameraInfo.exposureState.exposureCompensationIndex
-            scope.launch {
-                repository.updateExposureState(
-                    roomCode = roomCode,
-                    minIndex = exposureMinIndex,
-                    maxIndex = exposureMaxIndex,
-                    currentIndex = exposureIndex
-                )
-            }
+            publishExposureState(firstCamera)
 
             scope.launch {
                 repository.updateFlashSupported(
@@ -591,6 +641,7 @@ fun CameraScreen(
 
             camera = finalCamera
             imageCapture = newImageCapture
+            publishExposureState(finalCamera)
         } catch (e: Exception) {
             Log.e("CAMERA_BIND", "Camera bind failed", e)
         }
@@ -624,11 +675,18 @@ fun CameraScreen(
         val clampedExposure = firebaseExposureIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
         if (clampedExposure != exposureIndex) {
             exposureIndex = clampedExposure
-            currentCamera.cameraControl.setExposureCompensationIndex(clampedExposure)
-            if (clampedExposure != firebaseExposureIndex) {
-                scope.launch {
-                    repository.updateExposureIndex(roomCode, clampedExposure)
-                }
+            runCatching {
+                currentCamera.cameraControl.setExposureCompensationIndex(clampedExposure)
+            }.onFailure {
+                Log.w("CAMERA_EXPOSURE", "Exposure compensation failed", it)
+            }
+            scope.launch {
+                repository.updateExposureState(
+                    roomCode = roomCode,
+                    minIndex = exposureMinIndex,
+                    maxIndex = exposureMaxIndex,
+                    currentIndex = clampedExposure
+                )
             }
         }
     }
@@ -694,6 +752,26 @@ fun CameraScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.White.copy(alpha = flashAlpha))
+            )
+        }
+
+        if (isFrontCamera && exposureSupported && frontPreviewExposureOverlay.alpha > 0f) {
+            val previewRect =
+                previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+            PreviewExposureOverlay(
+                state = frontPreviewExposureOverlay,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            previewRect.left.roundToInt(),
+                            previewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { previewRect.width.toDp() },
+                        height = with(density) { previewRect.height.toDp() }
+                    )
             )
         }
 
@@ -763,10 +841,7 @@ fun CameraScreen(
                     success = focusSucceeded,
                     showExposureHandle = exposureSupported,
                     isLocked = focusLocked,
-                    exposureProgress = (
-                        (exposureMaxIndex - firebaseExposureIndex).toFloat() /
-                            (exposureMaxIndex - exposureMinIndex).toFloat().coerceAtLeast(1f)
-                        ),
+                    exposureProgress = exposureProgress,
                     onToggleLock = {
                         triggerTapToFocus(point, lockFocus = !focusLocked)
                     },
@@ -797,6 +872,44 @@ fun CameraScreen(
                 .align(Alignment.CenterEnd)
                 .padding(end = 16.dp)
         )
+
+        if (showManualBrightnessControl && exposureSupported) {
+            ManualExposurePanel(
+                progress = exposureProgress,
+                exposureLabel = exposureLabel,
+                onProgressChange = { progress ->
+                    manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+                    hostCoordinator.updateExposureFromProgress(
+                        progress = progress,
+                        exposureMinIndex = exposureMinIndex,
+                        exposureMaxIndex = exposureMaxIndex,
+                        currentExposureIndex = firebaseExposureIndex,
+                        onUiPulse = { focusUiToken++ }
+                    )
+                },
+                onDismiss = {
+                    showManualBrightnessControl = false
+                    manualExposureProgressOverride = null
+                },
+                onReset = {
+                    val defaultProgress = defaultExposureProgress(
+                        minIndex = exposureMinIndex,
+                        maxIndex = exposureMaxIndex
+                    )
+                    manualExposureProgressOverride = defaultProgress
+                    hostCoordinator.updateExposureFromProgress(
+                        progress = defaultProgress,
+                        exposureMinIndex = exposureMinIndex,
+                        exposureMaxIndex = exposureMaxIndex,
+                        currentExposureIndex = firebaseExposureIndex,
+                        onUiPulse = { focusUiToken++ }
+                    )
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 112.dp)
+            )
+        }
     }
 }
 

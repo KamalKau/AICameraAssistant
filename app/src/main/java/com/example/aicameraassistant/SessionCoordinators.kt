@@ -27,6 +27,8 @@ class HostSessionCoordinator(
     private val context: Context,
     private val onExit: () -> Unit
 ) {
+    private var lastRequestedExposureIndex: Int? = null
+
     fun shutdownSession(
         isEndingSession: Boolean,
         setIsEndingSession: (Boolean) -> Unit,
@@ -112,8 +114,13 @@ class HostSessionCoordinator(
                 ((1f - clampedProgress) * (exposureMaxIndex - exposureMinIndex))
         ).roundToInt().coerceIn(exposureMinIndex, exposureMaxIndex)
 
+        if (lastRequestedExposureIndex == currentExposureIndex) {
+            lastRequestedExposureIndex = null
+        }
         onUiPulse()
-        if (targetIndex == currentExposureIndex) return
+        if (targetIndex == currentExposureIndex || targetIndex == lastRequestedExposureIndex) return
+
+        lastRequestedExposureIndex = targetIndex
 
         scope.launch {
             repository.updateExposureIndex(roomCode, targetIndex)
@@ -131,6 +138,8 @@ class ControllerSessionCoordinator(
     private val vibrator: Vibrator?,
     private val shutterSound: MediaActionSound
 ) {
+    private var lastRequestedExposureIndex: Int? = null
+
     fun shutdownSession(
         isEndingSession: Boolean,
         setIsEndingSession: (Boolean) -> Unit,
@@ -338,8 +347,13 @@ class ControllerSessionCoordinator(
                 ((1f - clampedProgress) * (exposureMaxIndex - exposureMinIndex))
         ).roundToInt().coerceIn(exposureMinIndex, exposureMaxIndex)
 
+        if (lastRequestedExposureIndex == currentExposureIndex) {
+            lastRequestedExposureIndex = null
+        }
         onUiPulse()
-        if (targetIndex == currentExposureIndex) return
+        if (targetIndex == currentExposureIndex || targetIndex == lastRequestedExposureIndex) return
+
+        lastRequestedExposureIndex = targetIndex
 
         scope.launch {
             repository.updateExposureIndex(roomCode, targetIndex)

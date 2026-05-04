@@ -36,6 +36,8 @@ class ControllerScreenViewModel : ViewModel() {
     var focusSucceeded by mutableStateOf<Boolean?>(null)
     var focusLocked by mutableStateOf(false)
     var focusUiToken by mutableIntStateOf(0)
+    var showManualBrightnessControl by mutableStateOf(false)
+    var manualExposureProgressOverride by mutableStateOf<Float?>(null)
     var previewOverlayRect by mutableStateOf<Rect?>(null)
     var shutterFlashAlpha by mutableFloatStateOf(0f)
     var shutterPressed by mutableStateOf(false)

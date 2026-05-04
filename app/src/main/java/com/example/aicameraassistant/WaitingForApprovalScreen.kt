@@ -156,6 +156,8 @@ fun WaitingForApprovalScreen(
     var focusSucceeded by screenViewModel::focusSucceeded
     var focusLocked by screenViewModel::focusLocked
     var focusUiToken by screenViewModel::focusUiToken
+    var showManualBrightnessControl by screenViewModel::showManualBrightnessControl
+    var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
     var previewOverlayRect by screenViewModel::previewOverlayRect
     var shutterFlashAlpha by screenViewModel::shutterFlashAlpha
     var shutterPressed by screenViewModel::shutterPressed
@@ -200,6 +202,25 @@ fun WaitingForApprovalScreen(
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
     val exposureSupported = firebaseExposureMinIndex != firebaseExposureMaxIndex
+    val remoteExposureProgress =
+        ((firebaseExposureMaxIndex - firebaseExposureIndex).toFloat() /
+            (firebaseExposureMaxIndex - firebaseExposureMinIndex).toFloat().coerceAtLeast(1f))
+            .coerceIn(0f, 1f)
+    val exposureProgress = manualExposureProgressOverride ?: remoteExposureProgress
+    val exposureLabel = buildExposureLabel(
+        currentIndex = firebaseExposureIndex,
+        minIndex = firebaseExposureMinIndex,
+        maxIndex = firebaseExposureMaxIndex
+    )
+    val neutralExposureProgress = defaultExposureProgress(
+        minIndex = firebaseExposureMinIndex,
+        maxIndex = firebaseExposureMaxIndex
+    )
+    val frontPreviewExposureOverlay =
+        buildPreviewExposureOverlay(
+            currentProgress = exposureProgress,
+            neutralProgress = neutralExposureProgress
+        )
     val controllerStatusUiState = buildControllerStatusUiState(connectionState)
     val isVideoStalled =
         roomStatus == "connected" &&
@@ -255,7 +276,10 @@ fun WaitingForApprovalScreen(
         flashSupported = firebaseFlashSupported,
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
-        gridEnabled = firebaseGridEnabled
+        gridEnabled = firebaseGridEnabled,
+        brightnessSupported = exposureSupported,
+        brightnessVisible = showManualBrightnessControl,
+        brightnessProgress = exposureProgress
     )
     val controllerToolRailActions = CameraToolRailActions(
         onFlashClick = {
@@ -266,6 +290,27 @@ fun WaitingForApprovalScreen(
         },
         onGridClick = {
             controllerCoordinator.updateGridEnabled(firebaseGridEnabled)
+        },
+        onBrightnessClick = {
+            if (exposureSupported) {
+                if (!showManualBrightnessControl) {
+                    manualExposureProgressOverride = remoteExposureProgress
+                }
+                showManualBrightnessControl = !showManualBrightnessControl
+                if (!showManualBrightnessControl) {
+                    manualExposureProgressOverride = null
+                }
+            }
+        },
+        onBrightnessProgressChange = { progress ->
+            manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            controllerCoordinator.updateExposureFromProgress(
+                progress = progress,
+                exposureMinIndex = firebaseExposureMinIndex,
+                exposureMaxIndex = firebaseExposureMaxIndex,
+                currentExposureIndex = firebaseExposureIndex,
+                onUiPulse = { focusUiToken++ }
+            )
         }
     )
     val controllerBottomControlsUiState = buildControllerBottomControlsUiState(
@@ -727,11 +772,6 @@ fun WaitingForApprovalScreen(
                                 shouldRotatePreviewContent
                             )
                         }
-                        remoteTrack?.let { track ->
-                            track.setEnabled(true)
-                            runCatching { track.removeSink(renderer) }
-                            track.addSink(renderer)
-                        }
                         container.onVideoRectChanged = { rect ->
                             previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
                         }
@@ -744,6 +784,30 @@ fun WaitingForApprovalScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.White.copy(alpha = shutterFlashAlpha))
+                    )
+                }
+
+                if (
+                    firebaseLensFacing == "front" &&
+                    exposureSupported &&
+                    frontPreviewExposureOverlay.alpha > 0f
+                ) {
+                    val previewRect =
+                        activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+                    PreviewExposureOverlay(
+                        state = frontPreviewExposureOverlay,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    previewRect.left.roundToInt(),
+                                    previewRect.top.roundToInt()
+                                )
+                            }
+                            .size(
+                                width = with(density) { previewRect.width.toDp() },
+                                height = with(density) { previewRect.height.toDp() }
+                            )
                     )
                 }
 
@@ -847,11 +911,7 @@ fun WaitingForApprovalScreen(
                             success = focusSucceeded,
                             showExposureHandle = exposureSupported,
                             isLocked = focusLocked || firebaseFocusLockEnabled,
-                            exposureProgress = (
-                                (firebaseExposureMaxIndex - firebaseExposureIndex).toFloat() /
-                                    (firebaseExposureMaxIndex - firebaseExposureMinIndex).toFloat()
-                                        .coerceAtLeast(1f)
-                                ),
+                            exposureProgress = exposureProgress,
                             onToggleLock = {
                                 sendFocusRequest(
                                     tapOffset = point,
@@ -955,6 +1015,45 @@ fun WaitingForApprovalScreen(
                             triggerCaptureRequest()
                         }
                     })
+                )
+            }
+
+            if (showManualBrightnessControl && exposureSupported) {
+                ManualExposurePanel(
+                    progress = exposureProgress,
+                    exposureLabel = exposureLabel,
+                    onProgressChange = { progress ->
+                        manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+                        controllerCoordinator.updateExposureFromProgress(
+                            progress = progress,
+                            exposureMinIndex = firebaseExposureMinIndex,
+                            exposureMaxIndex = firebaseExposureMaxIndex,
+                            currentExposureIndex = firebaseExposureIndex,
+                            onUiPulse = { focusUiToken++ }
+                        )
+                    },
+                    onDismiss = {
+                        showManualBrightnessControl = false
+                        manualExposureProgressOverride = null
+                    },
+                    onReset = {
+                        val defaultProgress = defaultExposureProgress(
+                            minIndex = firebaseExposureMinIndex,
+                            maxIndex = firebaseExposureMaxIndex
+                        )
+                        manualExposureProgressOverride = defaultProgress
+                        controllerCoordinator.updateExposureFromProgress(
+                            progress = defaultProgress,
+                            exposureMinIndex = firebaseExposureMinIndex,
+                            exposureMaxIndex = firebaseExposureMaxIndex,
+                            currentExposureIndex = firebaseExposureIndex,
+                            onUiPulse = { focusUiToken++ }
+                        )
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 132.dp)
                 )
             }
         }
