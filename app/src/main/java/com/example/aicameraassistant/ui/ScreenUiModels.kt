@@ -30,17 +30,31 @@ data class CameraToolRailUiState(
     val flashEnabled: Boolean,
     val lensLabel: String,
     val gridEnabled: Boolean,
-    val brightnessSupported: Boolean,
-    val brightnessVisible: Boolean,
-    val brightnessProgress: Float
+    val exposureSupported: Boolean
 )
 
 data class CameraToolRailActions(
     val onFlashClick: () -> Unit,
     val onLensClick: () -> Unit,
     val onGridClick: () -> Unit,
-    val onBrightnessClick: () -> Unit,
-    val onBrightnessProgressChange: (Float) -> Unit
+    val onExposureClick: () -> Unit
+)
+
+data class ExposureUiState(
+    val supported: Boolean,
+    val visible: Boolean,
+    val progress: Float,
+    val remoteProgress: Float,
+    val neutralProgress: Float,
+    val label: String,
+    val frontPreviewOverlay: PreviewExposureOverlayState
+)
+
+data class ExposureUiActions(
+    val onToggle: () -> Unit,
+    val onProgressChange: (Float) -> Unit,
+    val onDismiss: () -> Unit,
+    val onReset: () -> Unit
 )
 
 data class ControllerBottomControlsUiState(

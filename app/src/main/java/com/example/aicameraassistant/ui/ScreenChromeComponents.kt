@@ -217,8 +217,8 @@ fun CameraToolRail(
             CameraToolButton(
                 icon = Icons.Default.WbSunny,
                 label = "Exposure",
-                enabled = state.brightnessSupported,
-                onClick = actions.onBrightnessClick
+                enabled = state.exposureSupported,
+                onClick = actions.onExposureClick
             )
         }
         GridToggleButton(

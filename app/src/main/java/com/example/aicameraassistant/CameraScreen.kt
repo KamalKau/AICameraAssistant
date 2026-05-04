@@ -17,6 +17,7 @@ import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.ExperimentalPreviewViewScreenFlash
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
@@ -26,7 +27,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -69,10 +69,12 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -84,6 +86,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import org.webrtc.IceCandidate
 
+@ExperimentalPreviewViewScreenFlash
 @Composable
 fun CameraScreen(
     roomCode: String,
@@ -151,26 +154,13 @@ fun CameraScreen(
     val hasLedFlash = camera?.cameraInfo?.hasFlashUnit() == true
     val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
     val flashSupported = hasLedFlash || lensFacing == CameraSelector.LENS_FACING_FRONT
-    val exposureSupported = exposureMinIndex != exposureMaxIndex
-    val remoteExposureProgress =
-        ((exposureMaxIndex - firebaseExposureIndex).toFloat() /
-            (exposureMaxIndex - exposureMinIndex).toFloat().coerceAtLeast(1f))
-            .coerceIn(0f, 1f)
-    val exposureProgress = manualExposureProgressOverride ?: remoteExposureProgress
-    val exposureLabel = buildExposureLabel(
+    val exposureUiState = buildExposureUiState(
+        minIndex = exposureMinIndex,
+        maxIndex = exposureMaxIndex,
         currentIndex = firebaseExposureIndex,
-        minIndex = exposureMinIndex,
-        maxIndex = exposureMaxIndex
+        manualProgressOverride = manualExposureProgressOverride,
+        visible = showManualBrightnessControl
     )
-    val neutralExposureProgress = defaultExposureProgress(
-        minIndex = exposureMinIndex,
-        maxIndex = exposureMaxIndex
-    )
-    val frontPreviewExposureOverlay =
-        buildPreviewExposureOverlay(
-            currentProgress = exposureProgress,
-            neutralProgress = neutralExposureProgress
-        )
     val captureFlashMode = when {
         lensFacing == CameraSelector.LENS_FACING_FRONT -> ImageCapture.FLASH_MODE_OFF
         firebaseFlashMode == "on" -> ImageCapture.FLASH_MODE_ON
@@ -200,9 +190,48 @@ fun CameraScreen(
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
         gridEnabled = firebaseGridEnabled,
-        brightnessSupported = exposureSupported,
-        brightnessVisible = showManualBrightnessControl,
-        brightnessProgress = exposureProgress
+        exposureSupported = exposureUiState.supported
+    )
+    val hostExposureUiActions = ExposureUiActions(
+        onToggle = {
+            if (exposureUiState.supported) {
+                if (!exposureUiState.visible) {
+                    manualExposureProgressOverride = exposureUiState.remoteProgress
+                }
+                showManualBrightnessControl = !showManualBrightnessControl
+                if (!showManualBrightnessControl) {
+                    manualExposureProgressOverride = null
+                }
+            }
+        },
+        onProgressChange = { progress ->
+            manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            hostCoordinator.updateExposureFromProgress(
+                progress = progress,
+                exposureMinIndex = exposureMinIndex,
+                exposureMaxIndex = exposureMaxIndex,
+                currentExposureIndex = firebaseExposureIndex,
+                onUiPulse = { focusUiToken++ }
+            )
+        },
+        onDismiss = {
+            showManualBrightnessControl = false
+            manualExposureProgressOverride = null
+        },
+        onReset = {
+            val defaultProgress = defaultExposureProgress(
+                minIndex = exposureMinIndex,
+                maxIndex = exposureMaxIndex
+            )
+            manualExposureProgressOverride = defaultProgress
+            hostCoordinator.updateExposureFromProgress(
+                progress = defaultProgress,
+                exposureMinIndex = exposureMinIndex,
+                exposureMaxIndex = exposureMaxIndex,
+                currentExposureIndex = firebaseExposureIndex,
+                onUiPulse = { focusUiToken++ }
+            )
+        }
     )
     val hostToolRailActions = CameraToolRailActions(
         onFlashClick = {
@@ -214,27 +243,7 @@ fun CameraScreen(
         onGridClick = {
             hostCoordinator.updateGridEnabled(firebaseGridEnabled)
         },
-        onBrightnessClick = {
-            if (exposureSupported) {
-                if (!showManualBrightnessControl) {
-                    manualExposureProgressOverride = remoteExposureProgress
-                }
-                showManualBrightnessControl = !showManualBrightnessControl
-                if (!showManualBrightnessControl) {
-                    manualExposureProgressOverride = null
-                }
-            }
-        },
-        onBrightnessProgressChange = { progress ->
-            manualExposureProgressOverride = progress.coerceIn(0f, 1f)
-            hostCoordinator.updateExposureFromProgress(
-                progress = progress,
-                exposureMinIndex = exposureMinIndex,
-                exposureMaxIndex = exposureMaxIndex,
-                currentExposureIndex = firebaseExposureIndex,
-                onUiPulse = { focusUiToken++ }
-            )
-        }
+        onExposureClick = hostExposureUiActions.onToggle
     )
     val hostTopOverlayActions = HostTopOverlayActions(
         onEndSession = {
@@ -670,7 +679,7 @@ fun CameraScreen(
 
     LaunchedEffect(camera, firebaseExposureIndex, exposureMinIndex, exposureMaxIndex) {
         val currentCamera = camera ?: return@LaunchedEffect
-        if (!exposureSupported) return@LaunchedEffect
+        if (!exposureUiState.supported) return@LaunchedEffect
 
         val clampedExposure = firebaseExposureIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
         if (clampedExposure != exposureIndex) {
@@ -724,14 +733,17 @@ fun CameraScreen(
         }
     }
 
-    BoxWithConstraints(
+    var previewContainerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
+            .onSizeChanged { previewContainerSize = it }
             .background(Color.Black)
     ) {
         val density = LocalDensity.current
-        val boxMaxWidthPx = with(density) { maxWidth.toPx() }
-        val boxMaxHeightPx = with(density) { maxHeight.toPx() }
+        val boxMaxWidthPx = previewContainerSize.width.toFloat()
+        val boxMaxHeightPx = previewContainerSize.height.toFloat()
         val previewContentRect =
             remember(boxMaxWidthPx, boxMaxHeightPx, resolvedWidth, resolvedHeight) {
                 fittedPreviewRect(
@@ -755,11 +767,11 @@ fun CameraScreen(
             )
         }
 
-        if (isFrontCamera && exposureSupported && frontPreviewExposureOverlay.alpha > 0f) {
+        if (isFrontCamera && exposureUiState.supported && exposureUiState.frontPreviewOverlay.alpha > 0f) {
             val previewRect =
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
             PreviewExposureOverlay(
-                state = frontPreviewExposureOverlay,
+                state = exposureUiState.frontPreviewOverlay,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {
@@ -828,24 +840,24 @@ fun CameraScreen(
                     previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
                 val focusUiBounds = with(density) {
                     focusUiBounds(
-                        previewRect = previewRect,
-                        topInsetPx = 132.dp.toPx(),
-                        rightInsetPx = 116.dp.toPx(),
-                        edgePaddingPx = 12.dp.toPx(),
-                        reticleRadiusPx = 34.dp.toPx()
+                    previewRect = previewRect,
+                    topInsetPx = 132.dp.toPx(),
+                    rightInsetPx = 116.dp.toPx(),
+                    edgePaddingPx = 12.dp.toPx(),
+                    reticleRadiusPx = 34.dp.toPx()
                     )
                 }
                 val point = rawPoint.clampOffsetTo(previewRect)
                 SharedFocusReticleSamsung(
                     point = point,
                     success = focusSucceeded,
-                    showExposureHandle = exposureSupported,
+                    showExposureHandle = exposureUiState.supported,
                     isLocked = focusLocked,
-                    exposureProgress = exposureProgress,
+                    exposureProgress = exposureUiState.progress,
                     onToggleLock = {
                         triggerTapToFocus(point, lockFocus = !focusLocked)
                     },
-                    onExposureProgressChange = if (exposureSupported) {
+                    onExposureProgressChange = if (exposureUiState.supported) {
                         { progress -> updateExposureFromProgress(progress) }
                     } else {
                         null
@@ -873,38 +885,13 @@ fun CameraScreen(
                 .padding(end = 16.dp)
         )
 
-        if (showManualBrightnessControl && exposureSupported) {
+        if (exposureUiState.visible && exposureUiState.supported) {
             ManualExposurePanel(
-                progress = exposureProgress,
-                exposureLabel = exposureLabel,
-                onProgressChange = { progress ->
-                    manualExposureProgressOverride = progress.coerceIn(0f, 1f)
-                    hostCoordinator.updateExposureFromProgress(
-                        progress = progress,
-                        exposureMinIndex = exposureMinIndex,
-                        exposureMaxIndex = exposureMaxIndex,
-                        currentExposureIndex = firebaseExposureIndex,
-                        onUiPulse = { focusUiToken++ }
-                    )
-                },
-                onDismiss = {
-                    showManualBrightnessControl = false
-                    manualExposureProgressOverride = null
-                },
-                onReset = {
-                    val defaultProgress = defaultExposureProgress(
-                        minIndex = exposureMinIndex,
-                        maxIndex = exposureMaxIndex
-                    )
-                    manualExposureProgressOverride = defaultProgress
-                    hostCoordinator.updateExposureFromProgress(
-                        progress = defaultProgress,
-                        exposureMinIndex = exposureMinIndex,
-                        exposureMaxIndex = exposureMaxIndex,
-                        currentExposureIndex = firebaseExposureIndex,
-                        onUiPulse = { focusUiToken++ }
-                    )
-                },
+                progress = exposureUiState.progress,
+                exposureLabel = exposureUiState.label,
+                onProgressChange = hostExposureUiActions.onProgressChange,
+                onDismiss = hostExposureUiActions.onDismiss,
+                onReset = hostExposureUiActions.onReset,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 112.dp)

@@ -123,9 +123,7 @@ fun buildCameraToolRailUiState(
     flashMode: String,
     lensFacing: String,
     gridEnabled: Boolean,
-    brightnessSupported: Boolean,
-    brightnessVisible: Boolean,
-    brightnessProgress: Float
+    exposureSupported: Boolean
 ): CameraToolRailUiState =
     CameraToolRailUiState(
         flashIcon = when {
@@ -143,10 +141,36 @@ fun buildCameraToolRailUiState(
         flashEnabled = flashSupported,
         lensLabel = if (lensFacing == "back") "Rear" else "Front",
         gridEnabled = gridEnabled,
-        brightnessSupported = brightnessSupported,
-        brightnessVisible = brightnessVisible,
-        brightnessProgress = brightnessProgress
+        exposureSupported = exposureSupported
     )
+
+fun buildExposureUiState(
+    minIndex: Int,
+    maxIndex: Int,
+    currentIndex: Int,
+    manualProgressOverride: Float?,
+    visible: Boolean
+): ExposureUiState {
+    val supported = minIndex != maxIndex
+    val remoteProgress =
+        ((maxIndex - currentIndex).toFloat() / (maxIndex - minIndex).toFloat().coerceAtLeast(1f))
+            .coerceIn(0f, 1f)
+    val progress = (manualProgressOverride ?: remoteProgress).coerceIn(0f, 1f)
+    val neutralProgress = defaultExposureProgress(minIndex, maxIndex)
+
+    return ExposureUiState(
+        supported = supported,
+        visible = visible,
+        progress = progress,
+        remoteProgress = remoteProgress,
+        neutralProgress = neutralProgress,
+        label = buildExposureLabel(currentIndex, minIndex, maxIndex),
+        frontPreviewOverlay = buildPreviewExposureOverlay(
+            currentProgress = progress,
+            neutralProgress = neutralProgress
+        )
+    )
+}
 
 fun buildControllerCommonZoomOptions(
     minZoom: Double,
