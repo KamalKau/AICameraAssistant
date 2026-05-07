@@ -14,6 +14,7 @@ class FirebaseRoomRepository {
 
     suspend fun createRoom(roomCode: String) {
         val docRef = db.collection("rooms").document(roomCode)
+        clearIceCandidates(roomCode)
         docRef.set(defaultRoomData(roomCode)).await()
     }
 
@@ -23,11 +24,15 @@ class FirebaseRoomRepository {
 
         if (!snapshot.exists()) return false
 
+        clearIceCandidates(roomCode)
         docRef.update(
             mapOf(
                 "requestReceived" to true,
                 "controllerApproved" to false,
-                "status" to "request_received"
+                "status" to "request_received",
+                "offer" to null,
+                "answer" to null,
+                "rtcSessionId" to null
             )
         ).await()
 
@@ -80,6 +85,35 @@ class FirebaseRoomRepository {
             .await()
     }
 
+    suspend fun updateCameraMode(roomCode: String, mode: String) {
+        val cameraMode = if (mode == "portrait") "portrait" else "photo"
+        updateStringIfChanged(roomCode, "cameraMode", cameraMode)
+    }
+
+    suspend fun updatePortraitBlurLevel(roomCode: String, blurLevel: String) {
+        val portraitBlurLevel = when (blurLevel) {
+            "natural", "strong" -> blurLevel
+            else -> "blur"
+        }
+        updateStringIfChanged(roomCode, "portraitBlurLevel", portraitBlurLevel)
+    }
+
+    suspend fun updatePortraitStrength(roomCode: String, strength: Int) {
+        val portraitStrength = strength.coerceIn(1, 7)
+        val docRef = db.collection("rooms").document(roomCode)
+        val snapshot = docRef.get().await()
+        if ((snapshot.getLong("portraitStrength") ?: 5L).toInt() == portraitStrength) return
+        docRef.update("portraitStrength", portraitStrength.toLong()).await()
+    }
+
+    suspend fun updatePortraitEffect(roomCode: String, effect: String) {
+        val portraitEffect = when (effect) {
+            "studio", "mono", "backdrop", "low_key_mono", "high_key_mono", "color_point" -> effect
+            else -> "blur"
+        }
+        updateStringIfChanged(roomCode, "portraitEffect", portraitEffect)
+    }
+
     suspend fun updateFlashSupported(roomCode: String, flashSupported: Boolean) {
         db.collection("rooms")
             .document(roomCode)
@@ -91,6 +125,20 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .update("gridEnabled", gridEnabled)
+            .await()
+    }
+
+    suspend fun updateNightModeEnabled(roomCode: String, nightModeEnabled: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("nightModeEnabled", nightModeEnabled)
+            .await()
+    }
+
+    suspend fun updateToolbarExpanded(roomCode: String, toolbarExpanded: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("toolbarExpanded", toolbarExpanded)
             .await()
     }
 
@@ -154,44 +202,79 @@ class FirebaseRoomRepository {
     suspend fun resetCaptureRequest(roomCode: String) {
         db.collection("rooms")
             .document(roomCode)
-            .update("captureRequest", false)
-            .await()
-    }
-
-    suspend fun sendCaptureRequest(roomCode: String, requestId: Long) {
-        db.collection("rooms")
-            .document(roomCode)
             .update(
                 mapOf(
-                    "captureRequest" to true,
-                    "captureRequestId" to requestId
+                    "captureRequest" to false,
+                    "captureRequestType" to "photo"
                 )
             )
             .await()
     }
 
-    suspend fun saveOffer(roomCode: String, offerSdp: String) {
+    suspend fun sendCaptureRequest(
+        roomCode: String,
+        requestId: Long,
+        requestType: String = "photo"
+    ) {
         db.collection("rooms")
             .document(roomCode)
-            .update("offer", offerSdp)
+            .update(
+                mapOf(
+                    "captureRequest" to true,
+                    "captureRequestId" to requestId,
+                    "captureRequestType" to requestType
+                )
+            )
             .await()
     }
 
-    suspend fun saveAnswer(roomCode: String, answerSdp: String) {
+    suspend fun saveOffer(roomCode: String, offerSdp: String, rtcSessionId: String) {
         db.collection("rooms")
             .document(roomCode)
-            .update("answer", answerSdp)
+            .update(
+                mapOf(
+                    "offer" to offerSdp,
+                    "answer" to null,
+                    "rtcSessionId" to rtcSessionId
+                )
+            )
             .await()
     }
 
-    suspend fun endSession(roomCode: String) {
+    suspend fun saveAnswer(roomCode: String, answerSdp: String, rtcSessionId: String) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "answer" to answerSdp,
+                    "rtcSessionId" to rtcSessionId
+                )
+            )
+            .await()
+    }
+
+    suspend fun endSession(roomCode: String, expectedSessionVersion: Long? = null) {
         val roomRef = db.collection("rooms").document(roomCode)
 
-        clearIceCandidates(roomCode)
+        val ended = db.runTransaction { transaction ->
+            val snapshot = transaction.get(roomRef)
+            val currentVersion = snapshot.getLong("sessionVersion") ?: 0L
+            if (expectedSessionVersion != null && currentVersion != expectedSessionVersion) {
+                return@runTransaction false
+            }
 
-        roomRef.set(
-            defaultRoomData(roomCode) + ("status" to "ended")
-        ).await()
+            transaction.set(
+                roomRef,
+                defaultRoomData(roomCode) +
+                    ("status" to "ended") +
+                    ("sessionVersion" to currentVersion)
+            )
+            true
+        }.await()
+
+        if (ended) {
+            clearIceCandidates(roomCode)
+        }
     }
 
     private fun defaultRoomData(roomCode: String): Map<String, Any?> =
@@ -202,6 +285,11 @@ class FirebaseRoomRepository {
             "controllerApproved" to false,
             "captureRequest" to false,
             "captureRequestId" to 0L,
+            "captureRequestType" to "photo",
+            "cameraMode" to "photo",
+            "portraitBlurLevel" to "blur",
+            "portraitStrength" to 5L,
+            "portraitEffect" to "blur",
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -209,6 +297,8 @@ class FirebaseRoomRepository {
             "flashMode" to "off",
             "flashSupported" to false,
             "gridEnabled" to false,
+            "nightModeEnabled" to false,
+            "toolbarExpanded" to false,
             "focusRequestId" to 0L,
             "focusLockEnabled" to false,
             "focusPointX" to 0.5,
@@ -218,8 +308,10 @@ class FirebaseRoomRepository {
             "exposureIndex" to 0L,
             "offer" to null,
             "answer" to null,
+            "rtcSessionId" to null,
             "previewWidth" to 0L,
             "previewHeight" to 0L,
+            "sessionVersion" to System.currentTimeMillis(),
             "createdAt" to System.currentTimeMillis()
         )
 
@@ -229,7 +321,11 @@ class FirebaseRoomRepository {
         clearCollection(roomRef.collection("iceCandidatesCamera"))
     }
 
-    suspend fun addControllerIceCandidate(roomCode: String, candidate: IceCandidate) {
+    suspend fun addControllerIceCandidate(
+        roomCode: String,
+        candidate: IceCandidate,
+        rtcSessionId: String
+    ) {
         db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesController")
@@ -237,13 +333,18 @@ class FirebaseRoomRepository {
                 mapOf(
                     "sdpMid" to candidate.sdpMid,
                     "sdpMLineIndex" to candidate.sdpMLineIndex,
-                    "candidate" to candidate.sdp
+                    "candidate" to candidate.sdp,
+                    "rtcSessionId" to rtcSessionId
                 )
             )
             .await()
     }
 
-    suspend fun addCameraIceCandidate(roomCode: String, candidate: IceCandidate) {
+    suspend fun addCameraIceCandidate(
+        roomCode: String,
+        candidate: IceCandidate,
+        rtcSessionId: String
+    ) {
         db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesCamera")
@@ -251,7 +352,8 @@ class FirebaseRoomRepository {
                 mapOf(
                     "sdpMid" to candidate.sdpMid,
                     "sdpMLineIndex" to candidate.sdpMLineIndex,
-                    "candidate" to candidate.sdp
+                    "candidate" to candidate.sdp,
+                    "rtcSessionId" to rtcSessionId
                 )
             )
             .await()
@@ -305,6 +407,51 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getCameraMode(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val cameraMode = snapshot?.getString("cameraMode")
+                trySend(if (cameraMode == "portrait") "portrait" else "photo")
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPortraitBlurLevel(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val blurLevel = snapshot?.getString("portraitBlurLevel")
+                trySend(
+                    when (blurLevel) {
+                        "natural", "strong" -> blurLevel
+                        else -> "blur"
+                    }
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPortraitStrength(roomCode: String): Flow<Int> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend((snapshot?.getLong("portraitStrength") ?: 5L).toInt().coerceIn(1, 7))
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPortraitEffect(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val effect = snapshot?.getString("portraitEffect")
+                trySend(
+                    when (effect) {
+                        "studio", "mono", "backdrop", "low_key_mono", "high_key_mono", "color_point" -> effect
+                        else -> "blur"
+                    }
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getFlashSupported(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
@@ -317,6 +464,22 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getBoolean("gridEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getNightModeEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("nightModeEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getToolbarExpanded(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("toolbarExpanded") ?: false)
             }
         awaitClose { listener.remove() }
     }
@@ -411,6 +574,27 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getCaptureRequestType(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getString("captureRequestType") ?: "photo")
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getCaptureRequestState(roomCode: String): Flow<CaptureRequestState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(
+                    CaptureRequestState(
+                        requestId = snapshot?.getLong("captureRequestId") ?: 0L,
+                        requestType = snapshot?.getString("captureRequestType") ?: "photo"
+                    )
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getRequestReceived(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
@@ -443,8 +627,25 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getRtcSessionId(roomCode: String): Flow<String?> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getString("rtcSessionId"))
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getSessionVersion(roomCode: String): Flow<Long> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getLong("sessionVersion") ?: 0L)
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun listenToControllerIceCandidates(
         roomCode: String,
+        rtcSessionId: String,
         onCandidate: (IceCandidate) -> Unit
     ): ListenerRegistration {
         return db.collection("rooms")
@@ -457,6 +658,8 @@ class FirebaseRoomRepository {
                         val sdpMid = data.getString("sdpMid")
                         val sdpMLineIndex = data.getLong("sdpMLineIndex")?.toInt() ?: 0
                         val candidate = data.getString("candidate") ?: return@forEach
+                        val candidateSessionId = data.getString("rtcSessionId")
+                        if (candidateSessionId != rtcSessionId) return@forEach
 
                         onCandidate(IceCandidate(sdpMid, sdpMLineIndex, candidate))
                     }
@@ -466,6 +669,7 @@ class FirebaseRoomRepository {
 
     fun listenToCameraIceCandidates(
         roomCode: String,
+        rtcSessionId: String,
         onCandidate: (IceCandidate) -> Unit
     ): ListenerRegistration {
         return db.collection("rooms")
@@ -478,6 +682,8 @@ class FirebaseRoomRepository {
                         val sdpMid = data.getString("sdpMid")
                         val sdpMLineIndex = data.getLong("sdpMLineIndex")?.toInt() ?: 0
                         val candidate = data.getString("candidate") ?: return@forEach
+                        val candidateSessionId = data.getString("rtcSessionId")
+                        if (candidateSessionId != rtcSessionId) return@forEach
 
                         onCandidate(IceCandidate(sdpMid, sdpMLineIndex, candidate))
                     }
@@ -492,5 +698,12 @@ class FirebaseRoomRepository {
         snapshot.documents.forEach { document ->
             document.reference.delete().await()
         }
+    }
+
+    private suspend fun updateStringIfChanged(roomCode: String, field: String, value: String) {
+        val docRef = db.collection("rooms").document(roomCode)
+        val snapshot = docRef.get().await()
+        if (snapshot.getString(field) == value) return
+        docRef.update(field, value).await()
     }
 }

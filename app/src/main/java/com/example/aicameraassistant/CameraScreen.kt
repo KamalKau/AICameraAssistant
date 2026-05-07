@@ -1,7 +1,9 @@
 package com.example.aicameraassistant
 
 import android.content.ContentValues
+import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
+import android.media.MediaActionSound
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -12,6 +14,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -22,6 +25,8 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -33,6 +38,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -64,6 +70,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -81,9 +88,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import kotlin.coroutines.resume
 import org.webrtc.IceCandidate
 
 @ExperimentalPreviewViewScreenFlash
@@ -106,8 +117,15 @@ fun CameraScreen(
     val firebaseLensFacing = remoteUiState.lensFacing
     val firebaseZoomLevel = remoteUiState.zoomLevel
     val firebaseFlashMode = remoteUiState.flashMode
+    val firebaseCameraMode = remoteUiState.cameraMode
+    val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
+    val firebasePortraitStrength = remoteUiState.portraitStrength
+    val firebasePortraitEffect = remoteUiState.portraitEffect
     val firebaseGridEnabled = remoteUiState.gridEnabled
+    val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseCaptureRequestId = remoteUiState.captureRequestId
+    val firebaseCaptureRequestType = remoteUiState.captureRequestType
     val firebaseRequestReceived = remoteUiState.requestReceived
     val firebaseControllerApproved = remoteUiState.controllerApproved
     val firebaseFocusRequestId = remoteUiState.focusRequestId
@@ -116,6 +134,8 @@ fun CameraScreen(
     val firebaseFocusPointY = remoteUiState.focusPointY
     val firebaseExposureIndex = remoteUiState.exposureIndex
     val offerSdp = remoteUiState.offerSdp
+    val firebaseRtcSessionId = remoteUiState.rtcSessionId
+    val firebaseSessionVersion = remoteUiState.sessionVersion
 
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
@@ -123,9 +143,11 @@ fun CameraScreen(
 
     var resolvedWidth by remember { mutableIntStateOf(0) }
     var resolvedHeight by remember { mutableIntStateOf(0) }
+    var webRtcSourceReady by remember { mutableStateOf(false) }
 
     val previewView = remember {
         PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
     }
@@ -147,19 +169,38 @@ fun CameraScreen(
     var exposureIndex by screenViewModel::exposureIndex
     var showManualBrightnessControl by screenViewModel::showManualBrightnessControl
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
+    var boomerangInProgress by screenViewModel::boomerangInProgress
+    var captureMode by screenViewModel::captureMode
+    var selfieLightVisible by remember { mutableStateOf(false) }
+    var nightAssistInProgress by remember { mutableStateOf(false) }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
+    var lastHandledOfferSessionId by screenViewModel::lastHandledOfferSessionId
     val sessionIsActive = roomStatus == "connected"
+    val isPortraitMode = firebaseCameraMode == "portrait"
     val hasLedFlash = camera?.cameraInfo?.hasFlashUnit() == true
     val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
     val flashSupported = hasLedFlash || lensFacing == CameraSelector.LENS_FACING_FRONT
+    val nightModeExposurePolicy = remember { NightModeExposurePolicy() }
+    val shutterSound = remember {
+        MediaActionSound().apply {
+            load(MediaActionSound.SHUTTER_CLICK)
+        }
+    }
+    fun playShutterClick() {
+        runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
+    }
     val exposureUiState = buildExposureUiState(
         minIndex = exposureMinIndex,
         maxIndex = exposureMaxIndex,
         currentIndex = firebaseExposureIndex,
         manualProgressOverride = manualExposureProgressOverride,
         visible = showManualBrightnessControl
+    )
+    val selfieLightAlpha by animateFloatAsState(
+        targetValue = if (selfieLightVisible && isFrontCamera) 1f else 0f,
+        label = "selfie_light_alpha"
     )
     val captureFlashMode = when {
         lensFacing == CameraSelector.LENS_FACING_FRONT -> ImageCapture.FLASH_MODE_OFF
@@ -190,6 +231,9 @@ fun CameraScreen(
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
         gridEnabled = firebaseGridEnabled,
+        nightModeEnabled = firebaseNightModeEnabled,
+        toolbarExpanded = firebaseToolbarExpanded,
+        boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
     )
     val hostExposureUiActions = ExposureUiActions(
@@ -237,19 +281,29 @@ fun CameraScreen(
         onFlashClick = {
             hostCoordinator.updateFlashMode(firebaseFlashMode, flashSupported)
         },
+        onBoomerangClick = {
+            captureMode = if (captureMode == "boomerang") "photo" else "boomerang"
+        },
         onLensClick = {
             hostCoordinator.switchLens(firebaseLensFacing)
         },
         onGridClick = {
             hostCoordinator.updateGridEnabled(firebaseGridEnabled)
         },
-        onExposureClick = hostExposureUiActions.onToggle
+        onNightModeClick = {
+            hostCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onExposureClick = hostExposureUiActions.onToggle,
+        onToolbarExpandedChange = { expanded ->
+            hostCoordinator.updateToolbarExpanded(expanded)
+        }
     )
     val hostTopOverlayActions = HostTopOverlayActions(
         onEndSession = {
             hostCoordinator.endSession(
                 isEndingSession = isEndingSession,
-                setIsEndingSession = { isEndingSession = it }
+                setIsEndingSession = { isEndingSession = it },
+                sessionVersion = firebaseSessionVersion
             )
         },
         onAllowController = { hostCoordinator.updateApproval(true) },
@@ -335,6 +389,13 @@ fun CameraScreen(
         )
     }
 
+    fun updateCameraMode(mode: String) {
+        if (mode == firebaseCameraMode) return
+        scope.launch {
+            repository.updateCameraMode(roomCode, mode)
+        }
+    }
+
     fun publishExposureState(activeCamera: Camera) {
         val exposureState = activeCamera.cameraInfo.exposureState
         exposureMinIndex = exposureState.exposureCompensationRange.lower
@@ -350,8 +411,15 @@ fun CameraScreen(
         }
     }
 
-    DisposableEffect(roomCode) {
-        val registration = repository.listenToControllerIceCandidates(roomCode) { candidate ->
+    DisposableEffect(roomCode, firebaseRtcSessionId) {
+        val activeRtcSessionId = firebaseRtcSessionId
+        if (activeRtcSessionId == null) {
+            onDispose { }
+        } else {
+            val registration = repository.listenToControllerIceCandidates(
+                roomCode = roomCode,
+                rtcSessionId = activeRtcSessionId
+            ) { candidate ->
             val pc = WebRtcSessionManager.cameraPeerConnection
             if (isRemoteDescriptionSet && pc != null) {
                 pc.addIceCandidate(candidate)
@@ -359,16 +427,27 @@ fun CameraScreen(
                 pendingCandidates.add(candidate)
             }
         }
-        onDispose { registration.remove() }
+            onDispose { registration.remove() }
+        }
     }
 
-    LaunchedEffect(offerSdp, isStreaming) {
+    LaunchedEffect(offerSdp, firebaseRtcSessionId, isStreaming, webRtcSourceReady) {
         val currentOfferSdp = offerSdp
-        if (isStreaming && currentOfferSdp != null && !answerCreated) {
-            createSharedAnswer(
+        val currentRtcSessionId = firebaseRtcSessionId
+        if (
+            isStreaming &&
+                webRtcSourceReady &&
+                currentOfferSdp != null &&
+                currentRtcSessionId != null &&
+                currentRtcSessionId != lastHandledOfferSessionId
+        ) {
+            isRemoteDescriptionSet = false
+            pendingCandidates.clear()
+            val answerStarted = createSharedAnswer(
                 context = context,
                 roomCode = roomCode,
                 offerSdp = currentOfferSdp,
+                rtcSessionId = currentRtcSessionId,
                 repository = repository,
                 onRemoteDescriptionSet = {
                     isRemoteDescriptionSet = true
@@ -379,7 +458,10 @@ fun CameraScreen(
                     }
                 }
             )
-            answerCreated = true
+            if (answerStarted) {
+                answerCreated = true
+                lastHandledOfferSessionId = currentRtcSessionId
+            }
         }
     }
 
@@ -426,7 +508,20 @@ fun CameraScreen(
         }
     }
 
-    fun takePhotoWithCameraX(useFrontScreenFlash: Boolean): Boolean {
+    fun setScreenBrightness(brightness: Float) {
+        activity?.window?.let { window ->
+            val attributes = window.attributes
+            attributes.screenBrightness = brightness
+            window.attributes = attributes
+        }
+    }
+
+    fun takePhotoWithCameraX(
+        useFrontScreenFlash: Boolean,
+        onCaptureFinished: () -> Unit = {},
+        playShutterSound: Boolean = true,
+        forcedCaptureFlashMode: Int? = null
+    ): Boolean {
         val currentCapture = imageCapture ?: run {
             Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
             return false
@@ -446,7 +541,7 @@ fun CameraScreen(
         } else {
             null
         }
-        currentCapture.flashMode = resolvedCaptureFlashMode
+        currentCapture.flashMode = forcedCaptureFlashMode ?: resolvedCaptureFlashMode
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
         val contentValues = ContentValues().apply {
@@ -465,36 +560,355 @@ fun CameraScreen(
             outputOptions,
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
+                override fun onCaptureStarted() {
+                    if (playShutterSound) {
+                        playShutterClick()
+                    }
+                }
+
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
+                    onCaptureFinished()
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("AICameraAssistant", "Photo capture failed", exception)
+                    onCaptureFinished()
                 }
             }
         )
         return true
     }
 
-    LaunchedEffect(firebaseCaptureRequestId, imageCapture) {
-        if (firebaseCaptureRequestId <= 0L || firebaseCaptureRequestId == lastHandledCaptureRequestId) {
-            return@LaunchedEffect
+    suspend fun captureJpegBytes(
+        capture: ImageCapture,
+        useFrontScreenFlash: Boolean,
+        playShutterSound: Boolean = true,
+        forcedCaptureFlashMode: Int? = null
+    ): ByteArray? = suspendCancellableCoroutine { continuation ->
+        capture.screenFlash = if (useFrontScreenFlash) {
+            previewView.screenFlash
+        } else {
+            null
+        }
+        capture.flashMode = forcedCaptureFlashMode ?: when {
+            useFrontScreenFlash -> ImageCapture.FLASH_MODE_SCREEN
+            isFrontCamera -> ImageCapture.FLASH_MODE_OFF
+            !hasLedFlash -> ImageCapture.FLASH_MODE_OFF
+            firebaseFlashMode == "on" -> ImageCapture.FLASH_MODE_ON
+            firebaseFlashMode == "auto" -> ImageCapture.FLASH_MODE_AUTO
+            else -> ImageCapture.FLASH_MODE_OFF
+        }
+
+        capture.takePicture(
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureStarted() {
+                    if (playShutterSound) {
+                        playShutterClick()
+                    }
+                }
+
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val bytes = runCatching {
+                        val buffer = image.planes.first().buffer
+                        ByteArray(buffer.remaining()).also { buffer.get(it) }
+                    }.onFailure {
+                        Log.e("AICameraAssistant", "Night Assist image read failed", it)
+                    }.getOrNull()
+                    image.close()
+                    if (continuation.isActive) {
+                        continuation.resume(bytes)
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e("AICameraAssistant", "Night Assist capture failed", exception)
+                    if (continuation.isActive) {
+                        continuation.resume(null)
+                    }
+                }
+            }
+        )
+    }
+
+    fun scoreNightAssistFrame(bytes: ByteArray): Double {
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = 8
+            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+        }
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return 0.0
+        return try {
+            val width = bitmap.width
+            val height = bitmap.height
+            if (width < 2 || height < 2) return 0.0
+
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            var brightnessTotal = 0.0
+            var sharpnessTotal = 0.0
+            var sampleCount = 0
+            val step = 3
+            var y = step
+            while (y < height) {
+                var x = step
+                while (x < width) {
+                    val index = y * width + x
+                    val pixel = pixels[index]
+                    val luma = (
+                        (android.graphics.Color.red(pixel) * 0.299) +
+                            (android.graphics.Color.green(pixel) * 0.587) +
+                            (android.graphics.Color.blue(pixel) * 0.114)
+                        )
+                    val leftPixel = pixels[index - step]
+                    val topPixel = pixels[index - (step * width)]
+                    val leftLuma = (
+                        (android.graphics.Color.red(leftPixel) * 0.299) +
+                            (android.graphics.Color.green(leftPixel) * 0.587) +
+                            (android.graphics.Color.blue(leftPixel) * 0.114)
+                        )
+                    val topLuma = (
+                        (android.graphics.Color.red(topPixel) * 0.299) +
+                            (android.graphics.Color.green(topPixel) * 0.587) +
+                            (android.graphics.Color.blue(topPixel) * 0.114)
+                        )
+
+                    brightnessTotal += luma
+                    sharpnessTotal += kotlin.math.abs(luma - leftLuma) + kotlin.math.abs(luma - topLuma)
+                    sampleCount++
+                    x += step
+                }
+                y += step
+            }
+
+            if (sampleCount == 0) {
+                0.0
+            } else {
+                val brightnessScore = brightnessTotal / sampleCount
+                val sharpnessScore = sharpnessTotal / sampleCount
+                brightnessScore + (sharpnessScore * 1.8)
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    suspend fun saveJpegBytes(bytes: ByteArray): Boolean = withContext(Dispatchers.IO) {
+        val name = "IMG_${System.currentTimeMillis()}.jpg"
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/AICameraAssistant")
+        }
+        val uri = context.contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        ) ?: return@withContext false
+
+        runCatching {
+            context.contentResolver.openOutputStream(uri)?.use { output ->
+                output.write(bytes)
+            } ?: return@withContext false
+        }.onFailure {
+            Log.e("AICameraAssistant", "Night Assist save failed", it)
+        }.isSuccess
+    }
+
+    suspend fun captureNightAssistPhoto(): Boolean {
+        val currentCapture = imageCapture ?: run {
+            Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
+            return false
+        }
+        val currentCamera = camera
+        val originalExposureIndex = exposureIndex
+        val useFrontScreenFlash = false
+
+        return try {
+            nightAssistInProgress = true
+
+            if (currentCamera != null && exposureUiState.supported) {
+                val boostedExposure = exposureMaxIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
+                exposureIndex = boostedExposure
+                runCatching {
+                    currentCamera.cameraControl.setExposureCompensationIndex(boostedExposure)
+                }.onFailure {
+                    Log.w("CAMERA_EXPOSURE", "Night Assist exposure boost failed", it)
+                }
+            }
+
+            val useLedTorch = currentCamera != null && hasLedFlash && !isFrontCamera
+            if (useLedTorch) {
+                runCatching { currentCamera?.cameraControl?.enableTorch(true) }
+                delay(300)
+                playShutterClick()
+            }
+
+            var bestScore = Double.NEGATIVE_INFINITY
+            var bestBytes: ByteArray? = null
+            repeat(3) { index ->
+                val bytes = captureJpegBytes(
+                    capture = currentCapture,
+                    useFrontScreenFlash = useFrontScreenFlash,
+                    playShutterSound = !useLedTorch && index == 0,
+                    forcedCaptureFlashMode = if (useLedTorch) ImageCapture.FLASH_MODE_OFF else null
+                )
+                if (bytes != null) {
+                    val score = withContext(Dispatchers.Default) {
+                        scoreNightAssistFrame(bytes)
+                    }
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestBytes = bytes
+                    }
+                }
+                if (index < 2) {
+                    delay(120)
+                }
+            }
+
+            bestBytes?.let { saveJpegBytes(it) } == true
+        } finally {
+            nightAssistInProgress = false
+
+            if (currentCamera != null && hasLedFlash && !isFrontCamera) {
+                runCatching { currentCamera.cameraControl.enableTorch(false) }
+            }
+
+            if (currentCamera != null && exposureUiState.supported && !firebaseNightModeEnabled) {
+                runCatching {
+                    currentCamera.cameraControl.setExposureCompensationIndex(originalExposureIndex)
+                }
+            }
+        }
+    }
+
+    suspend fun handleCaptureRequest(requestId: Long, requestType: String) {
+        Log.d("AICameraAssistant", "CAPTURE_REQUEST")
+        Log.d("AICameraAssistant", "Handling capture request type=$requestType id=$requestId")
+
+        if (requestType == "boomerang") {
+            if (boomerangInProgress) return
+
+            boomerangInProgress = true
+            val saved = BoomerangRecorder(context, previewView).record()
+            boomerangInProgress = false
+            lastHandledCaptureRequestId = requestId
+            scope.launch {
+                repository.resetCaptureRequest(roomCode)
+            }
+            Toast.makeText(
+                context,
+                if (saved) "Boomerang saved" else "Boomerang failed",
+                Toast.LENGTH_SHORT
+            ).show()
+            if (!saved) {
+                Log.w("AICameraAssistant", "Boomerang request failed")
+            }
+            return
+        }
+
+        if (firebaseNightModeEnabled && isFrontCamera) {
+            val previousBrightness = activity?.window?.attributes?.screenBrightness
+            selfieLightVisible = true
+            Log.d("AICameraAssistant", "FRONT_SCREEN_LIGHT_ON")
+            setScreenBrightness(1f)
+            Log.d("AICameraAssistant", "SCREEN_BRIGHTNESS_MAX")
+            delay(400)
+            Log.d("AICameraAssistant", "WAIT_BEFORE_CAPTURE_DONE")
+            Log.d("AICameraAssistant", "TAKE_PICTURE_NOW")
+
+            var saved = false
+            try {
+                saved = captureNightAssistPhoto()
+                if (saved) {
+                    Log.d("AICameraAssistant", "IMAGE_SAVED")
+                }
+            } finally {
+                selfieLightVisible = false
+                previousBrightness?.let { setScreenBrightness(it) }
+                Log.d("AICameraAssistant", "FRONT_SCREEN_LIGHT_OFF")
+            }
+            lastHandledCaptureRequestId = requestId
+            scope.launch { repository.resetCaptureRequest(roomCode) }
+            if (!saved) {
+                Toast.makeText(context, "Night Assist capture failed", Toast.LENGTH_SHORT).show()
+            }
+            return
         }
 
         val useFrontScreenFlash = shouldUseFrontScreenFlash()
+        val useLedTorchFlash =
+            !useFrontScreenFlash &&
+                !isFrontCamera &&
+                hasLedFlash &&
+                (firebaseFlashMode == "on" || (firebaseFlashMode == "auto" && isPreviewSceneDark(previewView)))
 
-        if (!useFrontScreenFlash && captureFlashMode != ImageCapture.FLASH_MODE_OFF) {
+        if (useLedTorchFlash) {
             flashAlpha = 0.85f
+            runCatching { camera?.cameraControl?.enableTorch(true) }
+            delay(400)
+            playShutterClick()
+        } else if (useFrontScreenFlash) {
+            val previousBrightness = activity?.window?.attributes?.screenBrightness
+            selfieLightVisible = true
+            setScreenBrightness(1f)
+            delay(250)
+            playShutterClick()
+            val captureStarted = takePhotoWithCameraX(
+                useFrontScreenFlash = false,
+                playShutterSound = false,
+                forcedCaptureFlashMode = ImageCapture.FLASH_MODE_OFF,
+                onCaptureFinished = {
+                    selfieLightVisible = false
+                    previousBrightness?.let { setScreenBrightness(it) }
+                }
+            )
+            if (!captureStarted) {
+                selfieLightVisible = false
+                previousBrightness?.let { setScreenBrightness(it) }
+            }
+            if (captureStarted) {
+                lastHandledCaptureRequestId = requestId
+                scope.launch {
+                    repository.resetCaptureRequest(roomCode)
+                }
+            }
+            return
         }
 
-        val captureStarted = takePhotoWithCameraX(useFrontScreenFlash = useFrontScreenFlash)
+        val captureStarted = takePhotoWithCameraX(
+            useFrontScreenFlash = useFrontScreenFlash,
+            playShutterSound = !useLedTorchFlash,
+            forcedCaptureFlashMode = if (useLedTorchFlash) ImageCapture.FLASH_MODE_OFF else null,
+            onCaptureFinished = {
+                if (useLedTorchFlash) {
+                    runCatching { camera?.cameraControl?.enableTorch(false) }
+                    flashAlpha = 0f
+                }
+            }
+        )
+        if (!captureStarted && useLedTorchFlash) {
+            runCatching { camera?.cameraControl?.enableTorch(false) }
+            flashAlpha = 0f
+        }
         if (captureStarted) {
-            lastHandledCaptureRequestId = firebaseCaptureRequestId
+            lastHandledCaptureRequestId = requestId
             scope.launch {
                 repository.resetCaptureRequest(roomCode)
             }
         }
+    }
+
+    LaunchedEffect(firebaseCaptureRequestId, firebaseCaptureRequestType, imageCapture) {
+        if (firebaseCaptureRequestId <= 0L || firebaseCaptureRequestId == lastHandledCaptureRequestId) {
+            return@LaunchedEffect
+        }
+
+        handleCaptureRequest(
+            requestId = firebaseCaptureRequestId,
+            requestType = firebaseCaptureRequestType
+        )
     }
 
     LaunchedEffect(activity) {
@@ -610,7 +1024,8 @@ fun CameraScreen(
             val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
 
             if (isStreaming) {
-                val streamMaxLongEdge = 2560
+                webRtcSourceReady = false
+                val streamMaxLongEdge = 1920
                 val streamScale =
                     (streamMaxLongEdge.toFloat() / maxOf(rawSize.width, rawSize.height)).coerceAtMost(1f)
                 val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
@@ -637,8 +1052,10 @@ fun CameraScreen(
                     }
 
                     finalUseCases.add(streamingPreview)
+                    webRtcSourceReady = true
                 }
             } else {
+                webRtcSourceReady = false
                 WebRtcSessionManager.stopLocalCamera()
             }
 
@@ -677,25 +1094,38 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(camera, firebaseExposureIndex, exposureMinIndex, exposureMaxIndex) {
+    LaunchedEffect(
+        camera,
+        firebaseExposureIndex,
+        exposureMinIndex,
+        exposureMaxIndex,
+        firebaseNightModeEnabled
+    ) {
         val currentCamera = camera ?: return@LaunchedEffect
         if (!exposureUiState.supported) return@LaunchedEffect
 
-        val clampedExposure = firebaseExposureIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
-        if (clampedExposure != exposureIndex) {
-            exposureIndex = clampedExposure
+        val targetExposure = nightModeExposurePolicy.resolveTargetIndex(
+            nightModeEnabled = firebaseNightModeEnabled,
+            requestedIndex = firebaseExposureIndex,
+            minIndex = exposureMinIndex,
+            maxIndex = exposureMaxIndex
+        )
+        if (targetExposure != exposureIndex) {
+            exposureIndex = targetExposure
             runCatching {
-                currentCamera.cameraControl.setExposureCompensationIndex(clampedExposure)
+                currentCamera.cameraControl.setExposureCompensationIndex(targetExposure)
             }.onFailure {
                 Log.w("CAMERA_EXPOSURE", "Exposure compensation failed", it)
             }
-            scope.launch {
-                repository.updateExposureState(
-                    roomCode = roomCode,
-                    minIndex = exposureMinIndex,
-                    maxIndex = exposureMaxIndex,
-                    currentIndex = clampedExposure
-                )
+            if (!firebaseNightModeEnabled) {
+                scope.launch {
+                    repository.updateExposureState(
+                        roomCode = roomCode,
+                        minIndex = exposureMinIndex,
+                        maxIndex = exposureMaxIndex,
+                        currentIndex = targetExposure
+                    )
+                }
             }
         }
     }
@@ -728,6 +1158,7 @@ fun CameraScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            shutterSound.release()
             WebRtcSessionManager.stopLocalCamera()
             WebRtcSessionManager.clearConnections()
         }
@@ -834,6 +1265,27 @@ fun CameraScreen(
             }
         }
 
+        if (isPortraitMode) {
+            val previewRect =
+                previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+            PortraitPreviewOverlay(
+                effectKey = firebasePortraitEffect,
+                strength = firebasePortraitStrength,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            previewRect.left.roundToInt(),
+                            previewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { previewRect.width.toDp() },
+                        height = with(density) { previewRect.height.toDp() }
+                    )
+            )
+        }
+
         if (sessionIsActive) {
             focusPoint?.let { rawPoint ->
                 val previewRect =
@@ -871,7 +1323,7 @@ fun CameraScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
+                .padding(top = 28.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
@@ -897,6 +1349,136 @@ fun CameraScreen(
                     .padding(bottom = 112.dp)
             )
         }
+
+        HostCameraModeStrip(
+            selectedMode = firebaseCameraMode,
+            onModeSelected = { mode -> updateCameraMode(mode) },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 26.dp)
+        )
+
+        if (selfieLightAlpha > 0.01f) {
+            NightModeAssistLight(
+                intensity = selfieLightAlpha,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        if (nightAssistInProgress) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.46f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "Hold still...",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HostCameraModeStatus(
+    cameraMode: String,
+    portraitEffect: String,
+    portraitBlurLevel: String
+) {
+    val isPortrait = cameraMode == "portrait"
+    Row(
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.34f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Mode: ${if (isPortrait) "Portrait" else "Photo"}",
+            color = Color.White.copy(alpha = 0.88f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+        if (isPortrait) {
+            Text(
+                text = "${portraitEffectLabel(portraitEffect)} / ${formatPortraitBlurLabel(portraitBlurLevel)}",
+                color = Color(0xFFFFD54F),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+private fun formatPortraitBlurLabel(value: String): String =
+    when (value) {
+        "natural" -> "Natural"
+        "strong" -> "Strong"
+        else -> "Blur"
+    }
+
+@Composable
+private fun HostCameraModeStrip(
+    selectedMode: String,
+    onModeSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.30f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HostCameraModeItem(
+            label = "PORTRAIT",
+            mode = "portrait",
+            selected = selectedMode == "portrait",
+            onModeSelected = onModeSelected
+        )
+        HostCameraModeItem(
+            label = "PHOTO",
+            mode = "photo",
+            selected = selectedMode != "portrait",
+            onModeSelected = onModeSelected
+        )
+    }
+}
+
+@Composable
+private fun HostCameraModeItem(
+    label: String,
+    mode: String,
+    selected: Boolean,
+    onModeSelected: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clickable(enabled = !selected) { onModeSelected(mode) }
+            .padding(horizontal = 4.dp, vertical = 3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.54f),
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
+        Box(
+            modifier = Modifier
+                .size(width = if (selected) 22.dp else 4.dp, height = 3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (selected) Color(0xFFFFD54F) else Color.Transparent)
+        )
     }
 }
 
@@ -907,7 +1489,7 @@ fun GridToggleButton(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.size(40.dp),
+        modifier = modifier.size(34.dp),
         shape = CircleShape,
         color = if (isActive) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.32f),
         tonalElevation = 0.dp,
@@ -919,7 +1501,7 @@ fun GridToggleButton(
         }
     ) {
         IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
-            Canvas(modifier = Modifier.size(16.dp)) {
+            Canvas(modifier = Modifier.size(14.dp)) {
                 val iconColor = Color.White.copy(alpha = if (isActive) 0.96f else 0.88f)
                 val strokeWidth = 1.2.dp.toPx()
                 val thirdWidth = size.width / 3f

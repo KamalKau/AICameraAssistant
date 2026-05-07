@@ -39,6 +39,9 @@ object WebRtcSessionManager {
     private const val DISCONNECT_TIMEOUT_MS = 5_000L
     private const val WEAK_NETWORK_HOLD_MS = 2_500L
     private const val UNSTABLE_RECOVERY_WINDOW_MS = 5_000L
+    private const val VIDEO_MIN_BITRATE_BPS = 900_000
+    private const val VIDEO_MAX_BITRATE_BPS = 5_000_000
+    private const val VIDEO_MAX_FRAMERATE = 30
 
     private var initialized = false
     private val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -262,12 +265,12 @@ object WebRtcSessionManager {
 
             val params = sender.parameters
             params.degradationPreference =
-                RtpParameters.DegradationPreference.BALANCED
+                RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
 
             if (params.encodings.isNotEmpty()) {
-                params.encodings[0].minBitrateBps = 1_500_000
-                params.encodings[0].maxBitrateBps = 6_000_000
-                params.encodings[0].maxFramerate = 30
+                params.encodings[0].minBitrateBps = VIDEO_MIN_BITRATE_BPS
+                params.encodings[0].maxBitrateBps = VIDEO_MAX_BITRATE_BPS
+                params.encodings[0].maxFramerate = VIDEO_MAX_FRAMERATE
             }
             sender.parameters = params
         } catch (t: Throwable) {

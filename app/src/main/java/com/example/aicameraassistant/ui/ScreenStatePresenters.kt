@@ -123,6 +123,9 @@ fun buildCameraToolRailUiState(
     flashMode: String,
     lensFacing: String,
     gridEnabled: Boolean,
+    nightModeEnabled: Boolean,
+    toolbarExpanded: Boolean,
+    boomerangSelected: Boolean,
     exposureSupported: Boolean
 ): CameraToolRailUiState =
     CameraToolRailUiState(
@@ -141,6 +144,9 @@ fun buildCameraToolRailUiState(
         flashEnabled = flashSupported,
         lensLabel = if (lensFacing == "back") "Rear" else "Front",
         gridEnabled = gridEnabled,
+        nightModeEnabled = nightModeEnabled,
+        toolbarExpanded = toolbarExpanded,
+        boomerangSelected = boomerangSelected,
         exposureSupported = exposureSupported
     )
 
@@ -190,7 +196,11 @@ fun buildControllerBottomControlsUiState(
     isBurstCapturing: Boolean,
     burstCaptureCount: Int,
     shutterScale: Float,
-    shutterCoreScale: Float
+    shutterCoreScale: Float,
+    portraitControlsVisible: Boolean,
+    portraitControlsEnabled: Boolean,
+    portraitStrength: Int,
+    portraitEffect: String
 ): ControllerBottomControlsUiState =
     ControllerBottomControlsUiState(
         roomCode = roomCode,
@@ -202,5 +212,9 @@ fun buildControllerBottomControlsUiState(
         isBurstCapturing = isBurstCapturing,
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
-        shutterCoreScale = shutterCoreScale
+        shutterCoreScale = shutterCoreScale,
+        portraitControlsVisible = portraitControlsVisible,
+        portraitControlsEnabled = portraitControlsEnabled,
+        portraitStrength = portraitStrength,
+        portraitEffect = portraitEffect
     )

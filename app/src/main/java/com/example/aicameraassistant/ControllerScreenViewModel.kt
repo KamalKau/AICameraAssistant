@@ -42,14 +42,53 @@ class ControllerScreenViewModel : ViewModel() {
     var shutterFlashAlpha by mutableFloatStateOf(0f)
     var shutterPressed by mutableStateOf(false)
     var captureRequestSequence by mutableLongStateOf(0L)
+    var captureMode by mutableStateOf("photo")
+    var showPortraitControls by mutableStateOf(false)
     var burstJob by mutableStateOf<Job?>(null)
     var isBurstCapturing by mutableStateOf(false)
     var burstCaptureCount by mutableIntStateOf(0)
     var lastFrameTimestampMs by mutableLongStateOf(0L)
     var uiNowMs by mutableLongStateOf(0L)
     var isRemoteDescriptionSet by mutableStateOf(false)
+    var currentOfferSessionId by mutableStateOf<String?>(null)
+    var lastOfferCreatedAtMs by mutableLongStateOf(0L)
+    var previewRetryCount by mutableIntStateOf(0)
+
+    private fun resetSessionState() {
+        remoteTrack = null
+        offerCreated = false
+        hasSeenConnectedState = false
+        isEndingSession = false
+        zoomUiValue = 1f
+        isZoomDragging = false
+        showZoomRing = false
+        lastSentZoom = Double.NaN
+        focusPoint = null
+        focusSucceeded = null
+        focusLocked = false
+        showManualBrightnessControl = false
+        manualExposureProgressOverride = null
+        previewOverlayRect = null
+        shutterFlashAlpha = 0f
+        shutterPressed = false
+        captureMode = "photo"
+        showPortraitControls = false
+        burstJob?.cancel()
+        burstJob = null
+        isBurstCapturing = false
+        burstCaptureCount = 0
+        lastFrameTimestampMs = 0L
+        uiNowMs = 0L
+        isRemoteDescriptionSet = false
+        currentOfferSessionId = null
+        lastOfferCreatedAtMs = 0L
+        previewRetryCount = 0
+    }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
+        resetSessionState()
+        _remoteUiState.value = ControllerRemoteUiState(roomStatus = "request_received")
+
         if (boundRoomCode == roomCode && bindJob?.isActive == true) return
 
         bindJob?.cancel()
@@ -63,12 +102,20 @@ class ControllerScreenViewModel : ViewModel() {
                 repository.getMinZoom(roomCode),
                 repository.getMaxZoom(roomCode),
                 repository.getFlashMode(roomCode),
+                repository.getCameraMode(roomCode),
+                repository.getPortraitBlurLevel(roomCode),
+                repository.getPortraitStrength(roomCode),
+                repository.getPortraitEffect(roomCode),
                 repository.getFlashSupported(roomCode),
                 repository.getGridEnabled(roomCode),
+                repository.getNightModeEnabled(roomCode),
+                repository.getToolbarExpanded(roomCode),
                 repository.getExposureMinIndex(roomCode),
                 repository.getExposureMaxIndex(roomCode),
                 repository.getExposureIndex(roomCode),
                 repository.getAnswerSdp(roomCode),
+                repository.getRtcSessionId(roomCode),
+                repository.getSessionVersion(roomCode),
                 repository.getPreviewWidth(roomCode),
                 repository.getPreviewHeight(roomCode),
                 repository.getFocusRequestId(roomCode),
@@ -82,16 +129,24 @@ class ControllerScreenViewModel : ViewModel() {
                     minZoom = values[4] as Double,
                     maxZoom = values[5] as Double,
                     flashMode = values[6] as String,
-                    flashSupported = values[7] as Boolean,
-                    gridEnabled = values[8] as Boolean,
-                    exposureMinIndex = values[9] as Int,
-                    exposureMaxIndex = values[10] as Int,
-                    exposureIndex = values[11] as Int,
-                    answerSdp = values[12] as String?,
-                    previewWidth = values[13] as Int,
-                    previewHeight = values[14] as Int,
-                    focusRequestId = values[15] as Long,
-                    focusLockEnabled = values[16] as Boolean
+                    cameraMode = values[7] as String,
+                    portraitBlurLevel = values[8] as String,
+                    portraitStrength = values[9] as Int,
+                    portraitEffect = values[10] as String,
+                    flashSupported = values[11] as Boolean,
+                    gridEnabled = values[12] as Boolean,
+                    nightModeEnabled = values[13] as Boolean,
+                    toolbarExpanded = values[14] as Boolean,
+                    exposureMinIndex = values[15] as Int,
+                    exposureMaxIndex = values[16] as Int,
+                    exposureIndex = values[17] as Int,
+                    answerSdp = values[18] as String?,
+                    rtcSessionId = values[19] as String?,
+                    sessionVersion = values[20] as Long,
+                    previewWidth = values[21] as Int,
+                    previewHeight = values[22] as Int,
+                    focusRequestId = values[23] as Long,
+                    focusLockEnabled = values[24] as Boolean
                 )
             }.collect { state ->
                 _remoteUiState.value = state

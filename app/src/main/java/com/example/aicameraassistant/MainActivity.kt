@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -73,6 +74,7 @@ fun MainContent() {
     var currentScreen by remember { mutableStateOf("home") }
     var pendingRoomCode by remember { mutableStateOf("") }
     var cameraRoomCode by remember { mutableStateOf(generateRoomCode()) }
+    var controlRoomCodeError by remember { mutableStateOf<String?>(null) }
     
     var permissionsGranted by remember { mutableStateOf(false) }
     
@@ -109,13 +111,22 @@ fun MainContent() {
 
             "controller" -> {
                 ControlCameraScreen(
-                    onBack = { currentScreen = "home" },
+                    errorMessage = controlRoomCodeError,
+                    onCodeChanged = { controlRoomCodeError = null },
+                    onBack = {
+                        controlRoomCodeError = null
+                        currentScreen = "home"
+                    },
                     onConnect = { roomCode ->
+                        controlRoomCodeError = null
                         pendingRoomCode = roomCode
+                        WebRtcSessionManager.clearConnections()
                         scope.launch {
                             val exists = repository.sendConnectionRequest(roomCode)
                             if (exists) {
                                 currentScreen = "waiting_for_approval"
+                            } else {
+                                controlRoomCodeError = "Wrong room code"
                             }
                         }
                     }
@@ -140,6 +151,8 @@ fun MainContent() {
                             if (cameraRoomCode.isBlank()) {
                                 cameraRoomCode = generateRoomCode()
                             }
+                            WebRtcSessionManager.stopLocalCamera()
+                            WebRtcSessionManager.clearConnections()
                             repository.createRoom(cameraRoomCode)
                             currentScreen = "camera"
                         }
@@ -148,6 +161,7 @@ fun MainContent() {
                         if (pendingRoomCode.isNotBlank()) {
                             currentScreen = "waiting_for_approval"
                         } else {
+                            controlRoomCodeError = null
                             currentScreen = "controller"
                         }
                     }
@@ -173,53 +187,128 @@ fun HomeScreen(
     onStartCamera: () -> Unit,
     onControlCamera: () -> Unit
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+            .background(Color(0xFF05070B))
     ) {
-        AppFrontLogo(
+        HomeWallpaper(modifier = Modifier.fillMaxSize())
+
+        Column(
             modifier = Modifier
-                .padding(bottom = 18.dp)
-                .size(92.dp)
-        )
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            AppFrontLogo(
+                modifier = Modifier
+                    .padding(bottom = 18.dp)
+                    .size(92.dp)
+            )
 
-        Text(
-            text = "AI Camera Assistant",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
-        )
+            Text(
+                text = "AI Camera Assistant",
+                color = Color.White,
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
 
-        HomeActionButton(
-            title = "Start Camera",
-            subtitle = "Host your phone camera",
-            backgroundBrush = Brush.linearGradient(
+            HomeActionButton(
+                title = "Start Camera",
+                subtitle = "Host your phone camera",
+                backgroundBrush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFFF9B54),
+                        Color(0xFFFF5D7A)
+                    )
+                ),
+                borderColor = Color(0xFFFFC7A7),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                onClick = onStartCamera
+            )
+
+            HomeActionButton(
+                title = "Control Camera",
+                subtitle = "Join with a room code",
+                backgroundBrush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF1B2B59),
+                        Color(0xFF2D7CFF)
+                    )
+                ),
+                borderColor = Color(0xFF82B4FF),
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onControlCamera
+            )
+        }
+    }
+}
+
+@Composable
+fun HomeWallpaper(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        drawRect(
+            brush = Brush.verticalGradient(
                 colors = listOf(
-                    Color(0xFFFF9B54),
-                    Color(0xFFFF5D7A)
+                    Color(0xFF05070B),
+                    Color(0xFF0B1020),
+                    Color(0xFF07080C)
                 )
-            ),
-            borderColor = Color(0xFFFFC7A7),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            onClick = onStartCamera
+            )
         )
 
-        HomeActionButton(
-            title = "Control Camera",
-            subtitle = "Join with a room code",
-            backgroundBrush = Brush.linearGradient(
+        val gridColor = Color.White.copy(alpha = 0.045f)
+        val step = size.minDimension / 7f
+        var x = step
+        while (x < size.width) {
+            drawLine(gridColor, start = androidx.compose.ui.geometry.Offset(x, 0f), end = androidx.compose.ui.geometry.Offset(x, size.height), strokeWidth = 1f)
+            x += step
+        }
+        var y = step
+        while (y < size.height) {
+            drawLine(gridColor, start = androidx.compose.ui.geometry.Offset(0f, y), end = androidx.compose.ui.geometry.Offset(size.width, y), strokeWidth = 1f)
+            y += step
+        }
+
+        val lensCenter = androidx.compose.ui.geometry.Offset(size.width * 0.72f, size.height * 0.24f)
+        drawCircle(
+            brush = Brush.radialGradient(
                 colors = listOf(
-                    Color(0xFF1B2B59),
-                    Color(0xFF2D7CFF)
-                )
+                    Color(0xFF2D7CFF).copy(alpha = 0.24f),
+                    Color.Transparent
+                ),
+                center = lensCenter,
+                radius = size.minDimension * 0.42f
             ),
-            borderColor = Color(0xFF82B4FF),
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onControlCamera
+            radius = size.minDimension * 0.42f,
+            center = lensCenter,
+            style = Fill
+        )
+        repeat(4) { index ->
+            drawCircle(
+                color = Color.White.copy(alpha = 0.045f + (index * 0.012f)),
+                radius = size.minDimension * (0.12f + index * 0.07f),
+                center = lensCenter,
+                style = Stroke(width = 1.2f)
+            )
+        }
+
+        val warmCenter = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.82f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFFF5D7A).copy(alpha = 0.2f),
+                    Color(0xFFFF9B54).copy(alpha = 0.08f),
+                    Color.Transparent
+                ),
+                center = warmCenter,
+                radius = size.minDimension * 0.48f
+            ),
+            radius = size.minDimension * 0.48f,
+            center = warmCenter
         )
     }
 }

@@ -30,14 +30,20 @@ data class CameraToolRailUiState(
     val flashEnabled: Boolean,
     val lensLabel: String,
     val gridEnabled: Boolean,
+    val nightModeEnabled: Boolean,
+    val toolbarExpanded: Boolean,
+    val boomerangSelected: Boolean,
     val exposureSupported: Boolean
 )
 
 data class CameraToolRailActions(
     val onFlashClick: () -> Unit,
+    val onBoomerangClick: () -> Unit,
     val onLensClick: () -> Unit,
     val onGridClick: () -> Unit,
-    val onExposureClick: () -> Unit
+    val onNightModeClick: () -> Unit,
+    val onExposureClick: () -> Unit,
+    val onToolbarExpandedChange: (Boolean) -> Unit
 )
 
 data class ExposureUiState(
@@ -67,7 +73,11 @@ data class ControllerBottomControlsUiState(
     val isBurstCapturing: Boolean,
     val burstCaptureCount: Int,
     val shutterScale: Float,
-    val shutterCoreScale: Float
+    val shutterCoreScale: Float,
+    val portraitControlsVisible: Boolean,
+    val portraitControlsEnabled: Boolean,
+    val portraitStrength: Int,
+    val portraitEffect: String
 )
 
 data class ControllerBottomControlsActions(
@@ -75,5 +85,8 @@ data class ControllerBottomControlsActions(
     val onZoomBarFinished: () -> Unit,
     val onZoomPresetClick: (Float) -> Unit,
     val onZoomPresetLongPress: () -> Unit,
+    val onPortraitControlsClick: () -> Unit,
+    val onPortraitStrengthSelected: (Int) -> Unit,
+    val onPortraitEffectSelected: (String) -> Unit,
     val onShutterPress: suspend androidx.compose.foundation.gestures.PressGestureScope.(androidx.compose.ui.geometry.Offset) -> Unit
 )

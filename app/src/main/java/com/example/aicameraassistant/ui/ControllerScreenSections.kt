@@ -3,9 +3,11 @@ package com.example.aicameraassistant
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,14 +15,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,12 +90,21 @@ fun ControllerBottomControls(
         )
     }
 
-    ZoomPresetSelector(
-        options = state.commonZoomOptions,
-        currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
-        onOptionClick = actions.onZoomPresetClick,
-        onLongPress = actions.onZoomPresetLongPress
-    )
+    if (state.portraitControlsVisible) {
+        CompactPortraitControls(
+            strength = state.portraitStrength,
+            selectedEffect = state.portraitEffect,
+            onStrengthSelected = actions.onPortraitStrengthSelected,
+            onEffectSelected = actions.onPortraitEffectSelected
+        )
+    } else {
+        ZoomPresetSelector(
+            options = state.commonZoomOptions,
+            currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
+            onOptionClick = actions.onZoomPresetClick,
+            onLongPress = actions.onZoomPresetLongPress
+        )
+    }
 
     if (state.isBurstCapturing) {
         Box(
@@ -109,30 +121,244 @@ fun ControllerBottomControls(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .size(80.dp)
-            .graphicsLayer {
-                scaleX = state.shutterScale
-                scaleY = state.shutterScale
-            }
-            .border(4.dp, Color.White, CircleShape)
-            .padding(6.dp)
-            .clip(CircleShape)
-            .background(Color.White)
-            .pointerInput(state.roomCode) {
-                detectTapGestures(onPress = actions.onShutterPress)
-            }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(34.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        PortraitFeatureButton(
+            enabled = state.portraitControlsEnabled,
+            selected = state.portraitControlsVisible,
+            onClick = actions.onPortraitControlsClick
+        )
+
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .size(80.dp)
                 .graphicsLayer {
-                    scaleX = state.shutterCoreScale
-                    scaleY = state.shutterCoreScale
+                    scaleX = state.shutterScale
+                    scaleY = state.shutterScale
                 }
-                .clip(if (state.isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
+                .border(4.dp, Color.White, CircleShape)
+                .padding(6.dp)
+                .clip(CircleShape)
                 .background(Color.White)
+                .pointerInput(state.roomCode) {
+                    detectTapGestures(onPress = actions.onShutterPress)
+                }
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = state.shutterCoreScale
+                        scaleY = state.shutterCoreScale
+                    }
+                    .clip(if (state.isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
+                    .background(Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(36.dp))
+    }
+}
+
+@Composable
+private fun CompactPortraitControls(
+    strength: Int,
+    selectedEffect: String,
+    onStrengthSelected: (Int) -> Unit,
+    onEffectSelected: (String) -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(20.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            PortraitStrengthBar(
+                strength = strength,
+                onStrengthChange = onStrengthSelected
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(20.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .width(202.dp)
+                    .horizontalScroll(rememberScrollState(), reverseScrolling = true),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PortraitEffect.selectable.forEach { effect ->
+                    CompactPortraitEffectChip(
+                        value = effect.key,
+                        selectedValue = selectedEffect,
+                        onSelected = onEffectSelected
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitStrengthBar(
+    strength: Int,
+    onStrengthChange: (Int) -> Unit
+) {
+    val clampedStrength = strength.coerceIn(1, 7)
+    fun strengthFromX(x: Float, width: Int): Int {
+        if (width <= 0) return clampedStrength
+        val progressFromLeft = (x / width.toFloat()).coerceIn(0f, 1f)
+        return (1 + (progressFromLeft * 6f)).roundToInt().coerceIn(1, 7)
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Effect strength",
+            color = Color.White,
+            fontSize = 13.sp
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier
+                .width(148.dp)
+                .pointerInput(clampedStrength) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val nextStrength = strengthFromX(offset.x, size.width)
+                            if (nextStrength != clampedStrength) onStrengthChange(nextStrength)
+                        },
+                        onDrag = { change, _ ->
+                            val nextStrength = strengthFromX(change.position.x, size.width)
+                            if (nextStrength != clampedStrength) onStrengthChange(nextStrength)
+                            change.consume()
+                        }
+                    )
+                },
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            (1..7).forEach { value ->
+                Box(
+                    modifier = Modifier
+                        .size(width = 14.dp, height = 28.dp)
+                        .clickable {
+                            if (value != clampedStrength) onStrengthChange(value)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .height(if (value == clampedStrength) 24.dp else 12.dp)
+                            .background(
+                                if (value == clampedStrength) {
+                                    Color(0xFFFFD54F)
+                                } else {
+                                    Color.White.copy(alpha = 0.65f)
+                                },
+                                RoundedCornerShape(50)
+                            )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = clampedStrength.toString(),
+            color = Color(0xFFFFD54F),
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp
+        )
+    }
+}
+
+@Composable
+private fun CompactPortraitEffectChip(
+    value: String,
+    selectedValue: String,
+    onSelected: (String) -> Unit
+) {
+    val selected = value == selectedValue
+    Box(
+        modifier = Modifier
+            .size(if (selected) 38.dp else 34.dp)
+            .clip(CircleShape)
+            .background(if (selected) Color(0xFFFFD54F).copy(alpha = 0.18f) else Color.White.copy(alpha = 0.07f))
+            .border(
+                if (selected) 1.4.dp else 1.dp,
+                if (selected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.10f),
+                CircleShape
+            )
+            .clickable(enabled = !selected) { onSelected(value) },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = portraitEffectSymbol(value),
+            color = if (selected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.82f),
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun PortraitFeatureButton(
+    enabled: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    !enabled -> Color.Black.copy(alpha = 0.22f)
+                    selected -> Color(0xFFFFD54F).copy(alpha = 0.22f)
+                    else -> Color.Black.copy(alpha = 0.42f)
+                }
+            )
+            .border(
+                width = if (selected) 1.2.dp else 1.dp,
+                color = when {
+                    !enabled -> Color.White.copy(alpha = 0.10f)
+                    selected -> Color(0xFFFFD54F)
+                    else -> Color.White.copy(alpha = 0.18f)
+                },
+                shape = CircleShape
+            )
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "P",
+            color = when {
+                !enabled -> Color.White.copy(alpha = 0.28f)
+                selected -> Color(0xFFFFD54F)
+                else -> Color.White.copy(alpha = 0.84f)
+            },
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }

@@ -11,7 +11,9 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -28,14 +30,12 @@ class HostSessionCoordinator(
     private val onExit: () -> Unit
 ) {
     private var lastRequestedExposureIndex: Int? = null
+    private val remoteEndScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun shutdownSession(
-        isEndingSession: Boolean,
+    private fun completeLocalShutdown(
         setIsEndingSession: (Boolean) -> Unit,
         exitScreen: Boolean
     ) {
-        if (isEndingSession) return
-
         setIsEndingSession(true)
         WebRtcSessionManager.stopLocalCamera()
         WebRtcSessionManager.clearConnections()
@@ -45,27 +45,35 @@ class HostSessionCoordinator(
         }
     }
 
-    fun endSession(
+    fun shutdownSession(
         isEndingSession: Boolean,
-        setIsEndingSession: (Boolean) -> Unit
+        setIsEndingSession: (Boolean) -> Unit,
+        exitScreen: Boolean
     ) {
         if (isEndingSession) return
 
-        scope.launch {
-            runCatching { repository.endSession(roomCode) }
-                .onSuccess {
-                    shutdownSession(
-                        isEndingSession = isEndingSession,
-                        setIsEndingSession = setIsEndingSession,
-                        exitScreen = true
-                    )
-                }
+        completeLocalShutdown(
+            setIsEndingSession = setIsEndingSession,
+            exitScreen = exitScreen
+        )
+    }
+
+    fun endSession(
+        isEndingSession: Boolean,
+        setIsEndingSession: (Boolean) -> Unit,
+        sessionVersion: Long
+    ) {
+        remoteEndScope.launch {
+            runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    setIsEndingSession(false)
-                    Log.e("SESSION_END", "Failed to end host session", it)
-                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
+                    Log.e("SESSION_END", "Failed to end host session remotely", it)
                 }
-        }
+            }
+
+        completeLocalShutdown(
+            setIsEndingSession = setIsEndingSession,
+            exitScreen = true
+        )
     }
 
     fun updateApproval(approved: Boolean) {
@@ -96,6 +104,18 @@ class HostSessionCoordinator(
     fun updateGridEnabled(currentEnabled: Boolean) {
         scope.launch {
             repository.updateGridEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateNightModeEnabled(currentEnabled: Boolean) {
+        scope.launch {
+            repository.updateNightModeEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateToolbarExpanded(expanded: Boolean) {
+        scope.launch {
+            repository.updateToolbarExpanded(roomCode, expanded)
         }
     }
 
@@ -139,15 +159,13 @@ class ControllerSessionCoordinator(
     private val shutterSound: MediaActionSound
 ) {
     private var lastRequestedExposureIndex: Int? = null
+    private val remoteEndScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun shutdownSession(
-        isEndingSession: Boolean,
+    private fun completeLocalShutdown(
         setIsEndingSession: (Boolean) -> Unit,
         performCleanup: () -> Unit,
         exitScreen: Boolean
     ) {
-        if (isEndingSession) return
-
         setIsEndingSession(true)
         performCleanup()
         WebRtcSessionManager.stopLocalCamera()
@@ -158,29 +176,39 @@ class ControllerSessionCoordinator(
         }
     }
 
-    fun endSession(
+    fun shutdownSession(
         isEndingSession: Boolean,
         setIsEndingSession: (Boolean) -> Unit,
-        performCleanup: () -> Unit
+        performCleanup: () -> Unit,
+        exitScreen: Boolean
     ) {
         if (isEndingSession) return
 
-        scope.launch {
-            runCatching { repository.endSession(roomCode) }
-                .onSuccess {
-                    shutdownSession(
-                        isEndingSession = isEndingSession,
-                        setIsEndingSession = setIsEndingSession,
-                        performCleanup = performCleanup,
-                        exitScreen = true
-                    )
-                }
+        completeLocalShutdown(
+            setIsEndingSession = setIsEndingSession,
+            performCleanup = performCleanup,
+            exitScreen = exitScreen
+        )
+    }
+
+    fun endSession(
+        isEndingSession: Boolean,
+        setIsEndingSession: (Boolean) -> Unit,
+        performCleanup: () -> Unit,
+        sessionVersion: Long
+    ) {
+        remoteEndScope.launch {
+            runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    setIsEndingSession(false)
-                    Log.e("SESSION_END", "Failed to end controller session", it)
-                    Toast.makeText(context, "Unable to end session", Toast.LENGTH_SHORT).show()
+                    Log.e("SESSION_END", "Failed to end controller session remotely", it)
                 }
-        }
+            }
+
+        completeLocalShutdown(
+            setIsEndingSession = setIsEndingSession,
+            performCleanup = performCleanup,
+            exitScreen = true
+        )
     }
 
     fun updateFlashMode(currentMode: String, flashSupported: Boolean) {
@@ -205,6 +233,18 @@ class ControllerSessionCoordinator(
     fun updateGridEnabled(currentEnabled: Boolean) {
         scope.launch {
             repository.updateGridEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateNightModeEnabled(currentEnabled: Boolean) {
+        scope.launch {
+            repository.updateNightModeEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateToolbarExpanded(expanded: Boolean) {
+        scope.launch {
+            repository.updateToolbarExpanded(roomCode, expanded)
         }
     }
 
@@ -233,7 +273,6 @@ class ControllerSessionCoordinator(
     ) {
         setShutterPressed(true)
         setShutterFlashAlpha(0.15f)
-        runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
         runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
         runCatching {
             val deviceVibrator = vibrator
@@ -257,7 +296,8 @@ class ControllerSessionCoordinator(
         nextRequestId: Long,
         setCaptureRequestSequence: (Long) -> Unit,
         setShutterPressed: (Boolean) -> Unit,
-        setShutterFlashAlpha: (Float) -> Unit
+        setShutterFlashAlpha: (Float) -> Unit,
+        requestType: String = "photo"
     ) {
         setCaptureRequestSequence(nextRequestId)
         triggerShutterEffect(
@@ -265,7 +305,8 @@ class ControllerSessionCoordinator(
             setShutterFlashAlpha = setShutterFlashAlpha
         )
         scope.launch {
-            repository.sendCaptureRequest(roomCode, nextRequestId)
+            Log.d("AICameraAssistant", "Sending capture request type=$requestType id=$nextRequestId")
+            repository.sendCaptureRequest(roomCode, nextRequestId, requestType)
         }
     }
 

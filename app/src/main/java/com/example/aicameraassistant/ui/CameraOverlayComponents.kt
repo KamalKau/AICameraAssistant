@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -33,6 +34,58 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+
+@Composable
+fun NightModeAssistLight(
+    intensity: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val alpha = intensity.coerceIn(0f, 1f)
+        if (alpha <= 0f) return@Canvas
+
+        val minDimension = minOf(size.width, size.height)
+        if (minDimension <= 0f) return@Canvas
+
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val glowRadius = (minDimension * 0.42f).coerceIn(160.dp.toPx(), 340.dp.toPx())
+        val circleRadius = glowRadius * 0.68f
+
+        drawRect(color = Color(0xFFFFE8B0).copy(alpha = 0.86f * alpha))
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFFFF0B3).copy(alpha = 0.78f * alpha),
+                    Color(0xFFFFE28A).copy(alpha = 0.56f * alpha),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = glowRadius
+            ),
+            radius = glowRadius,
+            center = center
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFFFF0B3).copy(alpha = 0.94f * alpha),
+                    Color(0xFFFFE28A).copy(alpha = 0.76f * alpha),
+                    Color(0xFFFFD166).copy(alpha = 0.48f * alpha)
+                ),
+                center = center,
+                radius = circleRadius
+            ),
+            radius = circleRadius,
+            center = center
+        )
+        drawCircle(
+            color = Color(0xFFFFE28A).copy(alpha = 0.58f * alpha),
+            radius = circleRadius,
+            center = center,
+            style = Stroke(width = 1.6.dp.toPx())
+        )
+    }
+}
 
 @Composable
 fun SharedFocusReticleSamsung(

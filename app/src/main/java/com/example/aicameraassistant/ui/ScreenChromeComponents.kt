@@ -1,6 +1,10 @@
 package com.example.aicameraassistant
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AllInclusive
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material.icons.filled.WbSunny
@@ -44,6 +52,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Canvas
@@ -55,27 +64,38 @@ fun SessionStatusChip(
     dotColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val pulse by rememberInfiniteTransition(label = "status_pulse").animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "status_dot_pulse"
+    )
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
-        color = Color.Black.copy(alpha = 0.45f)
+        shape = RoundedCornerShape(18.dp),
+        color = Color.Black.copy(alpha = 0.38f),
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.1f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(7.dp)
                     .clip(CircleShape)
-                    .background(dotColor)
+                    .background(dotColor.copy(alpha = pulse))
             )
 
             Text(
                 text = text,
                 color = Color.White,
-                fontWeight = FontWeight.Medium
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }
@@ -116,20 +136,62 @@ fun RoomCodeBadge(
     roomCode: String,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.36f),
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.12f))
     ) {
-        Text(
-            text = "Room Code",
-            color = Color.White.copy(alpha = 0.75f)
-        )
-        Text(
-            text = roomCode,
-            color = Color.White,
-            fontWeight = FontWeight.Bold
-        )
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = "ROOM",
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = roomCode,
+                color = Color.White,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun CompactRoomCodeChip(
+    roomCode: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = Color.Black.copy(alpha = 0.36f),
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.1f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "ROOM",
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = roomCode,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -142,7 +204,6 @@ fun FloatingEndSessionButton(
 ) {
     IconButton(
         onClick = onClick,
-        enabled = !isEnding,
         modifier = modifier.background(containerColor, CircleShape)
     ) {
         Icon(
@@ -158,33 +219,49 @@ fun CameraToolButton(
     icon: ImageVector,
     label: String,
     enabled: Boolean = true,
+    showLabel: Boolean = false,
+    selected: Boolean = false,
     onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.width(if (showLabel) 104.dp else 34.dp)
     ) {
+        if (showLabel) {
+            Text(
+                text = label,
+                color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.width(66.dp)
+            )
+        }
+
         IconButton(
             onClick = onClick,
             enabled = enabled,
             modifier = Modifier
-                .size(40.dp)
-                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                .size(34.dp)
+                .background(
+                    if (selected) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
+                    CircleShape
+                )
+                .border(
+                    width = if (selected) 1.dp else 0.dp,
+                    color = if (selected) Color.White.copy(alpha = 0.42f) else Color.Transparent,
+                    shape = CircleShape
+                )
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(15.dp)
             )
         }
-
-        Text(
-            text = label,
-            color = if (enabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium
-        )
     }
 }
 
@@ -194,20 +271,31 @@ fun CameraToolRail(
     actions: CameraToolRailActions,
     modifier: Modifier = Modifier
 ) {
+    val labelsExpanded = state.toolbarExpanded
+
     Column(
         modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(if (labelsExpanded) 9.dp else 7.dp)
     ) {
         CameraToolButton(
             icon = state.flashIcon,
             label = state.flashLabel,
             enabled = state.flashEnabled,
+            showLabel = labelsExpanded,
             onClick = actions.onFlashClick
+        )
+        CameraToolButton(
+            icon = Icons.Default.AllInclusive,
+            label = if (state.boomerangSelected) "Boomerang On" else "Boomerang",
+            showLabel = labelsExpanded,
+            selected = state.boomerangSelected,
+            onClick = actions.onBoomerangClick
         )
         CameraToolButton(
             icon = Icons.Default.SwitchCamera,
             label = state.lensLabel,
+            showLabel = labelsExpanded,
             onClick = actions.onLensClick
         )
         Column(
@@ -218,12 +306,42 @@ fun CameraToolRail(
                 icon = Icons.Default.WbSunny,
                 label = "Exposure",
                 enabled = state.exposureSupported,
+                showLabel = labelsExpanded,
                 onClick = actions.onExposureClick
             )
         }
-        GridToggleButton(
-            isActive = state.gridEnabled,
-            onClick = actions.onGridClick
+        if (labelsExpanded) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Grid",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    modifier = Modifier.width(66.dp)
+                )
+                GridToggleButton(
+                    isActive = state.gridEnabled,
+                    onClick = actions.onGridClick
+                )
+            }
+            CameraToolButton(
+                icon = Icons.Default.DarkMode,
+                label = if (state.nightModeEnabled) "Night On" else "Night",
+                showLabel = true,
+                selected = state.nightModeEnabled,
+                onClick = actions.onNightModeClick
+            )
+        }
+        CameraToolButton(
+            icon = if (labelsExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+            label = if (labelsExpanded) "Hide" else "Show",
+            showLabel = labelsExpanded,
+            onClick = { actions.onToolbarExpandedChange(!labelsExpanded) }
         )
     }
 }

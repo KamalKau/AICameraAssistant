@@ -6,8 +6,15 @@ data class CameraRemoteUiState(
     val lensFacing: String = "back",
     val zoomLevel: Double = 1.0,
     val flashMode: String = "off",
+    val cameraMode: String = "photo",
+    val portraitBlurLevel: String = "blur",
+    val portraitStrength: Int = 5,
+    val portraitEffect: String = "blur",
     val gridEnabled: Boolean = false,
+    val nightModeEnabled: Boolean = false,
+    val toolbarExpanded: Boolean = false,
     val captureRequestId: Long = 0L,
+    val captureRequestType: String = "photo",
     val requestReceived: Boolean = false,
     val controllerApproved: Boolean = false,
     val focusRequestId: Long = 0L,
@@ -15,7 +22,14 @@ data class CameraRemoteUiState(
     val focusPointY: Double = 0.5,
     val focusLockEnabled: Boolean = false,
     val exposureIndex: Int = 0,
-    val offerSdp: String? = null
+    val offerSdp: String? = null,
+    val rtcSessionId: String? = null,
+    val sessionVersion: Long = 0L
+)
+
+data class CaptureRequestState(
+    val requestId: Long = 0L,
+    val requestType: String = "photo"
 )
 
 data class ControllerRemoteUiState(
@@ -26,12 +40,20 @@ data class ControllerRemoteUiState(
     val minZoom: Double = 1.0,
     val maxZoom: Double = 1.0,
     val flashMode: String = "off",
+    val cameraMode: String = "photo",
+    val portraitBlurLevel: String = "blur",
+    val portraitStrength: Int = 5,
+    val portraitEffect: String = "blur",
     val flashSupported: Boolean = false,
     val gridEnabled: Boolean = false,
+    val nightModeEnabled: Boolean = false,
+    val toolbarExpanded: Boolean = false,
     val exposureMinIndex: Int = 0,
     val exposureMaxIndex: Int = 0,
     val exposureIndex: Int = 0,
     val answerSdp: String? = null,
+    val rtcSessionId: String? = null,
+    val sessionVersion: Long = 0L,
     val previewWidth: Int = 0,
     val previewHeight: Int = 0,
     val focusRequestId: Long = 0L,

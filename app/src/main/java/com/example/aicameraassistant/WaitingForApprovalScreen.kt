@@ -44,8 +44,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -133,12 +131,20 @@ fun WaitingForApprovalScreen(
     val firebaseMinZoom = remoteUiState.minZoom
     val firebaseMaxZoom = remoteUiState.maxZoom
     val firebaseFlashMode = remoteUiState.flashMode
+    val firebaseCameraMode = remoteUiState.cameraMode
+    val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
+    val firebasePortraitStrength = remoteUiState.portraitStrength
+    val firebasePortraitEffect = remoteUiState.portraitEffect
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
+    val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseExposureMinIndex = remoteUiState.exposureMinIndex
     val firebaseExposureMaxIndex = remoteUiState.exposureMaxIndex
     val firebaseExposureIndex = remoteUiState.exposureIndex
     val firebaseAnswer = remoteUiState.answerSdp
+    val firebaseRtcSessionId = remoteUiState.rtcSessionId
+    val firebaseSessionVersion = remoteUiState.sessionVersion
     val cameraPreviewWidth = remoteUiState.previewWidth
     val cameraPreviewHeight = remoteUiState.previewHeight
     val firebaseFocusRequestId = remoteUiState.focusRequestId
@@ -163,6 +169,8 @@ fun WaitingForApprovalScreen(
     var shutterFlashAlpha by screenViewModel::shutterFlashAlpha
     var shutterPressed by screenViewModel::shutterPressed
     var captureRequestSequence by screenViewModel::captureRequestSequence
+    var captureMode by screenViewModel::captureMode
+    var showPortraitControls by screenViewModel::showPortraitControls
     var burstJob by screenViewModel::burstJob
     var isBurstCapturing by screenViewModel::isBurstCapturing
     var burstCaptureCount by screenViewModel::burstCaptureCount
@@ -174,6 +182,9 @@ fun WaitingForApprovalScreen(
     var uiNowMs by screenViewModel::uiNowMs
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
+    var currentOfferSessionId by screenViewModel::currentOfferSessionId
+    var lastOfferCreatedAtMs by screenViewModel::lastOfferCreatedAtMs
+    var previewRetryCount by screenViewModel::previewRetryCount
 
     val shouldSwapRemoteFrame =
         (remoteFrameRotation == 90 || remoteFrameRotation == 270) ||
@@ -265,6 +276,9 @@ fun WaitingForApprovalScreen(
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
         gridEnabled = firebaseGridEnabled,
+        nightModeEnabled = firebaseNightModeEnabled,
+        toolbarExpanded = firebaseToolbarExpanded,
+        boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
     )
     val controllerExposureUiActions = ExposureUiActions(
@@ -312,13 +326,22 @@ fun WaitingForApprovalScreen(
         onFlashClick = {
             controllerCoordinator.updateFlashMode(firebaseFlashMode, firebaseFlashSupported)
         },
+        onBoomerangClick = {
+            captureMode = if (captureMode == "boomerang") "photo" else "boomerang"
+        },
         onLensClick = {
             controllerCoordinator.switchLens(firebaseLensFacing)
         },
         onGridClick = {
             controllerCoordinator.updateGridEnabled(firebaseGridEnabled)
         },
-        onExposureClick = controllerExposureUiActions.onToggle
+        onNightModeClick = {
+            controllerCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onExposureClick = controllerExposureUiActions.onToggle,
+        onToolbarExpandedChange = { expanded ->
+            controllerCoordinator.updateToolbarExpanded(expanded)
+        }
     )
     val controllerBottomControlsUiState = buildControllerBottomControlsUiState(
         roomCode = roomCode,
@@ -330,7 +353,11 @@ fun WaitingForApprovalScreen(
         isBurstCapturing = isBurstCapturing,
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
-        shutterCoreScale = shutterCoreScale
+        shutterCoreScale = shutterCoreScale,
+        portraitControlsVisible = firebaseCameraMode == "portrait" && showPortraitControls,
+        portraitControlsEnabled = firebaseCameraMode == "portrait",
+        portraitStrength = firebasePortraitStrength,
+        portraitEffect = firebasePortraitEffect
     )
     DisposableEffect(Unit) {
         onDispose {
@@ -339,10 +366,16 @@ fun WaitingForApprovalScreen(
     }
 
     fun releaseControllerPreview() {
-        remoteTrack?.removeSink(previewContainerRef?.renderer)
-        previewContainerRef?.renderer?.release()
-        previewContainerRef = null
+        previewContainerRef?.renderer?.let { renderer ->
+            remoteTrack?.let { track ->
+                runCatching { track.removeSink(renderer) }
+            }
+        }
         remoteTrack = null
+        remoteFrameWidth = 0
+        remoteFrameHeight = 0
+        remoteFrameRotation = 0
+        lastFrameTimestampMs = 0L
     }
 
     fun sendZoomUpdate(zoom: Float, force: Boolean = false) {
@@ -364,12 +397,17 @@ fun WaitingForApprovalScreen(
     }
 
     fun triggerCaptureRequest() {
+        val requestType = captureMode
         controllerCoordinator.triggerCaptureRequest(
             nextRequestId = nextCaptureRequestId(captureRequestSequence),
             setCaptureRequestSequence = { captureRequestSequence = it },
             setShutterPressed = { shutterPressed = it },
-            setShutterFlashAlpha = { shutterFlashAlpha = it }
+            setShutterFlashAlpha = { shutterFlashAlpha = it },
+            requestType = requestType
         )
+        if (requestType == "boomerang") {
+            captureMode = "photo"
+        }
     }
 
     fun startBurstCapture() {
@@ -416,8 +454,52 @@ fun WaitingForApprovalScreen(
         )
     }
 
-    DisposableEffect(roomCode) {
-        val registration = repository.listenToCameraIceCandidates(roomCode) { candidate ->
+    fun updateCameraMode(mode: String) {
+        if (mode == firebaseCameraMode) return
+        if (mode != "portrait") {
+            showPortraitControls = false
+        }
+        scope.launch {
+            repository.updateCameraMode(roomCode, mode)
+        }
+    }
+
+    fun updatePortraitBlurLevel(blurLevel: String) {
+        if (blurLevel == firebasePortraitBlurLevel) return
+        scope.launch {
+            repository.updatePortraitBlurLevel(roomCode, blurLevel)
+        }
+    }
+
+    fun updatePortraitStrength(strength: Int) {
+        if (strength == firebasePortraitStrength) return
+        scope.launch {
+            repository.updatePortraitStrength(roomCode, strength)
+        }
+    }
+
+    fun updatePortraitEffect(effect: String) {
+        if (effect == firebasePortraitEffect) return
+        scope.launch {
+            repository.updatePortraitEffect(roomCode, effect)
+        }
+    }
+
+    LaunchedEffect(firebaseCameraMode) {
+        if (firebaseCameraMode != "portrait") {
+            showPortraitControls = false
+        }
+    }
+
+    DisposableEffect(roomCode, currentOfferSessionId) {
+        val activeRtcSessionId = currentOfferSessionId
+        if (activeRtcSessionId == null) {
+            onDispose { }
+        } else {
+            val registration = repository.listenToCameraIceCandidates(
+                roomCode = roomCode,
+                rtcSessionId = activeRtcSessionId
+            ) { candidate ->
             scope.launch(Dispatchers.Main) {
                 val pc = WebRtcSessionManager.controllerPeerConnection
                 if (isRemoteDescriptionSet && pc != null) {
@@ -429,8 +511,9 @@ fun WaitingForApprovalScreen(
                 }
             }
         }
-        onDispose {
-            registration.remove()
+            onDispose {
+                registration.remove()
+            }
         }
     }
 
@@ -438,16 +521,18 @@ fun WaitingForApprovalScreen(
         onDispose {
             remoteTrack?.removeSink(previewContainerRef?.renderer)
             previewContainerRef?.renderer?.release()
+            previewContainerRef = null
+            remoteTrack = null
             WebRtcSessionManager.clearConnections()
         }
     }
 
-    LaunchedEffect(roomStatus) {
+    LaunchedEffect(roomStatus, connectionState, offerCreated) {
         if (roomStatus == "connected") {
             hasSeenConnectedState = true
         }
 
-        if (roomStatus == "ended") {
+        if (roomStatus == "ended" && hasSeenConnectedState) {
             Toast.makeText(context, "Session ended by camera", Toast.LENGTH_SHORT).show()
             controllerCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
@@ -468,10 +553,32 @@ fun WaitingForApprovalScreen(
             return@LaunchedEffect
         }
 
-        if (roomStatus == "connected" && !offerCreated) {
-            createSharedOffer(
+        val shouldCreateOffer =
+            roomStatus == "connected" &&
+                (!offerCreated || connectionState == AppConnectionState.DISCONNECTED)
+
+        if (shouldCreateOffer) {
+            if (connectionState == AppConnectionState.DISCONNECTED) {
+                delay(500)
+                releaseControllerPreview()
+                pendingCandidates.clear()
+                isRemoteDescriptionSet = false
+            }
+
+            runCatching {
+                repository.clearIceCandidates(roomCode)
+            }.onFailure {
+                Log.w("WEBRTC_LOG", "Unable to clear ICE candidates before creating offer", it)
+            }
+
+            val nextRtcSessionId = "${System.currentTimeMillis()}-${roomCode}"
+            currentOfferSessionId = nextRtcSessionId
+            lastOfferCreatedAtMs = SystemClock.elapsedRealtime()
+            lastFrameTimestampMs = 0L
+            val offerStarted = createSharedOffer(
                 context = context,
                 roomCode = roomCode,
+                rtcSessionId = nextRtcSessionId,
                 repository = repository,
                 onRemoteTrackReady = { track ->
                     scope.launch(Dispatchers.Main) {
@@ -485,12 +592,45 @@ fun WaitingForApprovalScreen(
                     }
                 }
             )
-            offerCreated = true
+            if (offerStarted) {
+                offerCreated = true
+            } else {
+                currentOfferSessionId = null
+                lastOfferCreatedAtMs = 0L
+            }
         }
     }
 
-    LaunchedEffect(firebaseAnswer) {
+    LaunchedEffect(roomStatus, uiNowMs, offerCreated, lastFrameTimestampMs, lastOfferCreatedAtMs) {
+        val waitingForFirstFrame =
+            roomStatus == "connected" &&
+                offerCreated &&
+                lastOfferCreatedAtMs > 0L &&
+                lastFrameTimestampMs == 0L &&
+                uiNowMs - lastOfferCreatedAtMs > 5_500L
+
+        if (!waitingForFirstFrame || previewRetryCount >= 3) return@LaunchedEffect
+
+        Log.w(
+            "WEBRTC_LOG",
+            "Controller preview has no first frame; retrying WebRTC offer ${previewRetryCount + 1}/3"
+        )
+        previewRetryCount += 1
+        releaseControllerPreview()
+        pendingCandidates.clear()
+        isRemoteDescriptionSet = false
+        currentOfferSessionId = null
+        lastOfferCreatedAtMs = 0L
+        offerCreated = false
+        WebRtcSessionManager.clearConnections()
+    }
+
+    LaunchedEffect(firebaseAnswer, firebaseRtcSessionId, currentOfferSessionId) {
         val answer = firebaseAnswer ?: return@LaunchedEffect
+        if (firebaseRtcSessionId == null || firebaseRtcSessionId != currentOfferSessionId) {
+            Log.d("WEBRTC_LOG", "Controller ignoring stale answer for session=$firebaseRtcSessionId")
+            return@LaunchedEffect
+        }
         val pc = WebRtcSessionManager.controllerPeerConnection ?: return@LaunchedEffect
 
         if (pc.remoteDescription == null) {
@@ -595,13 +735,13 @@ fun WaitingForApprovalScreen(
                         controllerCoordinator.endSession(
                             isEndingSession = isEndingSession,
                             setIsEndingSession = { isEndingSession = it },
-                            performCleanup = { releaseControllerPreview() }
+                            performCleanup = { releaseControllerPreview() },
+                            sessionVersion = firebaseSessionVersion
                         )
                     } else {
                         onBack()
                     }
                 },
-                enabled = !isEndingSession,
                 colors = if (hasSeenConnectedState || roomStatus == "request_received") {
                     ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -702,6 +842,7 @@ fun WaitingForApprovalScreen(
                                     override fun onFirstFrameRendered() {
                                         Log.d("WEBRTC_LOG", "Controller first remote frame rendered")
                                         lastFrameTimestampMs = SystemClock.elapsedRealtime()
+                                        previewRetryCount = 0
                                     }
 
                                     override fun onFrameResolutionChanged(
@@ -878,6 +1019,27 @@ fun WaitingForApprovalScreen(
                     }
                 }
 
+                if (firebaseCameraMode == "portrait") {
+                    val previewRect =
+                        activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+                    PortraitPreviewOverlay(
+                        effectKey = firebasePortraitEffect,
+                        strength = firebasePortraitStrength,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    previewRect.left.roundToInt(),
+                                    previewRect.top.roundToInt()
+                                )
+                            }
+                            .size(
+                                width = with(density) { previewRect.width.toDp() },
+                                height = with(density) { previewRect.height.toDp() }
+                            )
+                    )
+                }
+
                 focusPoint?.let { rawPoint ->
                     val previewRect =
                         activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
@@ -954,7 +1116,8 @@ fun WaitingForApprovalScreen(
                         controllerCoordinator.endSession(
                             isEndingSession = isEndingSession,
                             setIsEndingSession = { isEndingSession = it },
-                            performCleanup = { releaseControllerPreview() }
+                            performCleanup = { releaseControllerPreview() },
+                            sessionVersion = firebaseSessionVersion
                         )
                     }
                 )
@@ -1008,6 +1171,17 @@ fun WaitingForApprovalScreen(
                         showZoomRing = false
                     },
                         onZoomPresetLongPress = { showZoomRing = true },
+                        onPortraitControlsClick = {
+                        if (firebaseCameraMode == "portrait") {
+                            showPortraitControls = !showPortraitControls
+                        }
+                    },
+                        onPortraitStrengthSelected = { strength ->
+                        updatePortraitStrength(strength)
+                    },
+                        onPortraitEffectSelected = { effect ->
+                        updatePortraitEffect(effect)
+                    },
                         onShutterPress = { _ ->
                         var burstStarted = false
                         val startBurstJob = scope.launch {
@@ -1026,6 +1200,10 @@ fun WaitingForApprovalScreen(
                         }
                     })
                 )
+                ControllerCameraModeStrip(
+                    selectedMode = firebaseCameraMode,
+                    onModeSelected = { mode -> updateCameraMode(mode) }
+                )
             }
 
             if (exposureUiState.visible && exposureUiState.supported) {
@@ -1042,6 +1220,68 @@ fun WaitingForApprovalScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ControllerCameraModeStrip(
+    selectedMode: String,
+    onModeSelected: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.30f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ControllerCameraModeItem(
+            label = "PORTRAIT",
+            mode = "portrait",
+            selected = selectedMode == "portrait",
+            onModeSelected = onModeSelected
+        )
+        ControllerCameraModeItem(
+            label = "PHOTO",
+            mode = "photo",
+            selected = selectedMode != "portrait",
+            onModeSelected = onModeSelected
+        )
+    }
+}
+
+@Composable
+private fun ControllerCameraModeItem(
+    label: String,
+    mode: String,
+    selected: Boolean,
+    onModeSelected: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clickable(enabled = !selected) { onModeSelected(mode) }
+            .padding(horizontal = 4.dp, vertical = 3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.54f),
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
+        Box(
+            modifier = Modifier
+                .size(width = if (selected) 22.dp else 4.dp, height = 3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(
+                    if (selected) {
+                        Color(0xFFFFD54F)
+                    } else {
+                        Color.Transparent
+                    }
+                )
+        )
     }
 }
 

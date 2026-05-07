@@ -13,73 +13,92 @@ fun createSharedAnswer(
     context: Context,
     roomCode: String,
     offerSdp: String,
+    rtcSessionId: String,
     repository: FirebaseRoomRepository,
     onRemoteDescriptionSet: () -> Unit
-) {
+): Boolean {
     WebRtcSessionManager.initialize(context)
 
     val pc = WebRtcSessionManager.createCameraPeerConnection { candidate ->
         CoroutineScope(Dispatchers.IO).launch {
-            repository.addCameraIceCandidate(roomCode, candidate)
+            repository.addCameraIceCandidate(roomCode, candidate, rtcSessionId)
         }
-    } ?: return
+    } ?: return false
 
     pc.setRemoteDescription(
         WebRtcSessionManager.sessionDescriptionObserver(
-            onSetSuccess = { onRemoteDescriptionSet() }
+            onSetSuccess = {
+                onRemoteDescriptionSet()
+                pc.createAnswer(
+                    WebRtcSessionManager.sessionDescriptionObserver(
+                        onCreateSuccess = { desc ->
+                            pc.setLocalDescription(
+                                WebRtcSessionManager.sessionDescriptionObserver(
+                                    onSetSuccess = {
+                                        CoroutineScope(Dispatchers.IO).launch {
+                                            repository.saveAnswer(
+                                                roomCode = roomCode,
+                                                answerSdp = desc.description,
+                                                rtcSessionId = rtcSessionId
+                                            )
+                                        }
+                                    }
+                                ),
+                                desc
+                            )
+                        }
+                    ),
+                    MediaConstraints()
+                )
+            }
         ),
         SessionDescription(SessionDescription.Type.OFFER, offerSdp)
     )
-
-    pc.createAnswer(
-        WebRtcSessionManager.sessionDescriptionObserver(
-            onCreateSuccess = { desc ->
-                pc.setLocalDescription(
-                    WebRtcSessionManager.sessionDescriptionObserver(),
-                    desc
-                )
-                CoroutineScope(Dispatchers.IO).launch {
-                    repository.saveAnswer(roomCode, desc.description)
-                }
-            }
-        ),
-        MediaConstraints()
-    )
+    return true
 }
 
 fun createSharedOffer(
     context: Context,
     roomCode: String,
+    rtcSessionId: String,
     repository: FirebaseRoomRepository,
     onRemoteTrackReady: (VideoTrack) -> Unit
-) {
+): Boolean {
     WebRtcSessionManager.initialize(context)
 
     val pc = WebRtcSessionManager.createControllerPeerConnection(
         onIceCandidate = { candidate ->
             @Suppress("OPT_IN_USAGE")
             GlobalScope.launch {
-                repository.addControllerIceCandidate(roomCode, candidate)
+                repository.addControllerIceCandidate(roomCode, candidate, rtcSessionId)
             }
         },
         onRemoteTrack = { videoTrack ->
             onRemoteTrackReady(videoTrack)
         }
-    ) ?: return
+    ) ?: return false
 
     pc.createOffer(
         WebRtcSessionManager.sessionDescriptionObserver(
             onCreateSuccess = { desc ->
                 pc.setLocalDescription(
-                    WebRtcSessionManager.sessionDescriptionObserver(),
+                    WebRtcSessionManager.sessionDescriptionObserver(
+                        onSetSuccess = {
+                            @Suppress("OPT_IN_USAGE")
+                            GlobalScope.launch {
+                                repository.saveOffer(
+                                    roomCode = roomCode,
+                                    offerSdp = desc.description,
+                                    rtcSessionId = rtcSessionId
+                                )
+                            }
+                        }
+                    ),
                     desc
                 )
-                @Suppress("OPT_IN_USAGE")
-                GlobalScope.launch {
-                    repository.saveOffer(roomCode, desc.description)
-                }
             }
         ),
         MediaConstraints()
     )
+    return true
 }
