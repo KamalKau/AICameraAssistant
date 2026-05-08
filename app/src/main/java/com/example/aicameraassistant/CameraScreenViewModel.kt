@@ -112,6 +112,7 @@ class CameraScreenViewModel : ViewModel() {
                     portraitFaceBottom = (values[9] as PortraitSubjectState).bottom,
                     faceDetected = (values[10] as FaceDetectionOverlayState).faceDetected,
                     faceBox = (values[10] as FaceDetectionOverlayState).faceBox,
+                    faceBoxes = (values[10] as FaceDetectionOverlayState).faceBoxes,
                     faceDetectionTimestamp = (values[10] as FaceDetectionOverlayState).timestamp,
                     gridEnabled = values[11] as Boolean,
                     nightModeEnabled = values[12] as Boolean,

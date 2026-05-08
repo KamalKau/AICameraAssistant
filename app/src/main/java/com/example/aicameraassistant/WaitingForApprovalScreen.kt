@@ -142,6 +142,7 @@ fun WaitingForApprovalScreen(
     val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
     val firebaseFaceDetected = remoteUiState.faceDetected
     val firebaseFaceBox = remoteUiState.faceBox
+    val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseFaceDetectionTimestamp = remoteUiState.faceDetectionTimestamp
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
@@ -193,7 +194,7 @@ fun WaitingForApprovalScreen(
     var currentOfferSessionId by screenViewModel::currentOfferSessionId
     var lastOfferCreatedAtMs by screenViewModel::lastOfferCreatedAtMs
     var previewRetryCount by screenViewModel::previewRetryCount
-    var remoteFaceBoxBounds by remember { mutableStateOf(NormalizedFaceBounds()) }
+    var remoteFaceBoxBounds by remember { mutableStateOf(emptyList<NormalizedFaceBounds>()) }
     var remoteFaceBoxVisible by remember { mutableStateOf(false) }
 
     val shouldSwapRemoteFrame =
@@ -220,12 +221,12 @@ fun WaitingForApprovalScreen(
             remoteFrameWidth > remoteFrameHeight
 
     LaunchedEffect(firebaseFaceDetected, firebaseFaceDetectionTimestamp) {
-        if (firebaseFaceDetected && firebaseFaceBox.isValid()) {
-            remoteFaceBoxBounds = firebaseFaceBox
+        if (firebaseFaceDetected && (firebaseFaceBoxes.any { it.isValid() } || firebaseFaceBox.isValid())) {
+            remoteFaceBoxBounds = firebaseFaceBoxes.ifEmpty { listOf(firebaseFaceBox) }
             remoteFaceBoxVisible = true
         } else {
             remoteFaceBoxVisible = false
-            remoteFaceBoxBounds = NormalizedFaceBounds()
+            remoteFaceBoxBounds = emptyList()
         }
     }
 
@@ -1070,6 +1071,7 @@ fun WaitingForApprovalScreen(
                         faceTop = firebasePortraitFaceTop,
                         faceRight = firebasePortraitFaceRight,
                         faceBottom = firebasePortraitFaceBottom,
+                        faceBoxes = firebaseFaceBoxes,
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .offset {

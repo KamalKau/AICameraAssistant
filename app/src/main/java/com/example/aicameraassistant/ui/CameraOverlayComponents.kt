@@ -94,42 +94,56 @@ fun FaceDetectionFocusBox(
     visible: Boolean,
     modifier: Modifier = Modifier
 ) {
+    FaceDetectionFocusBoxes(
+        bounds = if (bounds.isValid()) listOf(bounds) else emptyList(),
+        visible = visible,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun FaceDetectionFocusBoxes(
+    bounds: List<NormalizedFaceBounds>,
+    visible: Boolean,
+    modifier: Modifier = Modifier
+) {
     val alpha by animateFloatAsState(
-        targetValue = if (visible && bounds.isValid()) 1f else 0f,
+        targetValue = if (visible && bounds.any { it.isValid() }) 1f else 0f,
         label = "face_detection_box_alpha"
     )
-    if (alpha <= 0.01f || !bounds.isValid()) return
+    if (alpha <= 0.01f) return
 
     Canvas(modifier = modifier) {
-        val paddingPx = 10.dp.toPx()
-        val left = (bounds.left.toFloat() * size.width - paddingPx).coerceIn(0f, size.width)
-        val top = (bounds.top.toFloat() * size.height - paddingPx).coerceIn(0f, size.height)
-        val right = (bounds.right.toFloat() * size.width + paddingPx).coerceIn(left, size.width)
-        val bottom = (bounds.bottom.toFloat() * size.height + paddingPx).coerceIn(top, size.height)
-        val rectSize = androidx.compose.ui.geometry.Size(right - left, bottom - top)
-        val cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx())
+        val cornerRadius = CornerRadius(34.dp.toPx(), 34.dp.toPx())
+        val minBoxWidth = 96.dp.toPx()
+        val minBoxHeight = 128.dp.toPx()
+        bounds.filter { it.isValid() }.forEach { box ->
+            val desiredLeft = box.left.toFloat() * size.width
+            val desiredTop = box.top.toFloat() * size.height
+            val boxWidth = ((box.right - box.left).toFloat() * size.width)
+                .coerceAtLeast(minBoxWidth)
+                .coerceAtMost(size.width)
+            val boxHeight = ((box.bottom - box.top).toFloat() * size.height)
+                .coerceAtLeast(minBoxHeight)
+                .coerceAtMost(size.height)
+            val left = desiredLeft.coerceIn(0f, size.width - boxWidth)
+            val top = desiredTop.coerceIn(0f, size.height - boxHeight)
+            val rectSize = androidx.compose.ui.geometry.Size(boxWidth, boxHeight)
 
-        drawRoundRect(
-            color = Color(0xFFFFD54F).copy(alpha = 0.24f * alpha),
-            topLeft = Offset(left, top),
-            size = rectSize,
-            cornerRadius = cornerRadius,
-            style = Stroke(width = 6.dp.toPx())
-        )
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.78f * alpha),
-            topLeft = Offset(left, top),
-            size = rectSize,
-            cornerRadius = cornerRadius,
-            style = Stroke(width = 1.4.dp.toPx())
-        )
-        drawRoundRect(
-            color = Color(0xFFFFD54F).copy(alpha = alpha),
-            topLeft = Offset(left, top),
-            size = rectSize,
-            cornerRadius = cornerRadius,
-            style = Stroke(width = 2.2.dp.toPx())
-        )
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.035f * alpha),
+                topLeft = Offset(left, top),
+                size = rectSize,
+                cornerRadius = cornerRadius
+            )
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.58f * alpha),
+                topLeft = Offset(left, top),
+                size = rectSize,
+                cornerRadius = cornerRadius,
+                style = Stroke(width = 2.dp.toPx())
+            )
+        }
     }
 }
 

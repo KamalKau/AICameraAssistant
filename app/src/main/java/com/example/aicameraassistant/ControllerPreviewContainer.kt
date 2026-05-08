@@ -42,6 +42,13 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     }
 
     fun setFaceDetectionOverlay(bounds: NormalizedFaceBounds, visible: Boolean) {
+        setFaceDetectionOverlay(
+            bounds = if (bounds.isValid()) listOf(bounds) else emptyList(),
+            visible = visible
+        )
+    }
+
+    fun setFaceDetectionOverlay(bounds: List<NormalizedFaceBounds>, visible: Boolean) {
         faceOverlay.setFaceDetectionOverlay(bounds, visible)
     }
 
@@ -143,24 +150,18 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
 private class ControllerFaceDetectionOverlayView(context: Context) : View(context) {
     private val videoRect = RectF()
-    private var bounds = NormalizedFaceBounds()
+    private var bounds = emptyList<NormalizedFaceBounds>()
     private var overlayAlpha = 0f
     private var alphaAnimator: ValueAnimator? = null
 
-    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 6f * resources.displayMetrics.density
-        color = Color.argb(61, 255, 213, 79)
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.argb(9, 255, 255, 255)
     }
-    private val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 1.4f * resources.displayMetrics.density
-        color = Color.argb(199, 255, 255, 255)
-    }
-    private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2.2f * resources.displayMetrics.density
-        color = Color.rgb(255, 213, 79)
+        strokeWidth = 2f * resources.displayMetrics.density
+        color = Color.argb(148, 255, 255, 255)
     }
 
     fun setVideoRect(rect: RectF) {
@@ -168,35 +169,41 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
         invalidate()
     }
 
-    fun setFaceDetectionOverlay(nextBounds: NormalizedFaceBounds, visible: Boolean) {
+    fun setFaceDetectionOverlay(nextBounds: List<NormalizedFaceBounds>, visible: Boolean) {
         bounds = nextBounds
-        animateAlpha(if (visible && nextBounds.isValid()) 1f else 0f)
+        animateAlpha(if (visible && nextBounds.any { it.isValid() }) 1f else 0f)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (overlayAlpha <= 0.01f || !bounds.isValid() || videoRect.isEmpty) return
+        if (overlayAlpha <= 0.01f || videoRect.isEmpty) return
 
         val density = resources.displayMetrics.density
-        val paddingPx = 10f * density
-        val left = (videoRect.left + (bounds.left.toFloat() * videoRect.width()) - paddingPx)
-            .coerceIn(videoRect.left, videoRect.right)
-        val top = (videoRect.top + (bounds.top.toFloat() * videoRect.height()) - paddingPx)
-            .coerceIn(videoRect.top, videoRect.bottom)
-        val right = (videoRect.left + (bounds.right.toFloat() * videoRect.width()) + paddingPx)
-            .coerceIn(left, videoRect.right)
-        val bottom = (videoRect.top + (bounds.bottom.toFloat() * videoRect.height()) + paddingPx)
-            .coerceIn(top, videoRect.bottom)
-        val radius = 18f * density
+        val radius = 34f * density
+        val minBoxWidth = 96f * density
+        val minBoxHeight = 128f * density
 
-        glowPaint.alpha = (61 * overlayAlpha).toInt().coerceIn(0, 255)
-        whitePaint.alpha = (199 * overlayAlpha).toInt().coerceIn(0, 255)
-        accentPaint.alpha = (255 * overlayAlpha).toInt().coerceIn(0, 255)
+        fillPaint.alpha = (9 * overlayAlpha).toInt().coerceIn(0, 255)
+        framePaint.alpha = (148 * overlayAlpha).toInt().coerceIn(0, 255)
 
-        val rect = RectF(left, top, right, bottom)
-        canvas.drawRoundRect(rect, radius, radius, glowPaint)
-        canvas.drawRoundRect(rect, radius, radius, whitePaint)
-        canvas.drawRoundRect(rect, radius, radius, accentPaint)
+        bounds.filter { it.isValid() }.forEach { box ->
+            val boxWidth = ((box.right - box.left).toFloat() * videoRect.width())
+                .coerceAtLeast(minBoxWidth)
+                .coerceAtMost(videoRect.width())
+            val boxHeight = ((box.bottom - box.top).toFloat() * videoRect.height())
+                .coerceAtLeast(minBoxHeight)
+                .coerceAtMost(videoRect.height())
+            val left = (videoRect.left + (box.left.toFloat() * videoRect.width()))
+                .coerceIn(videoRect.left, videoRect.right - boxWidth)
+            val top = (videoRect.top + (box.top.toFloat() * videoRect.height()))
+                .coerceIn(videoRect.top, videoRect.bottom - boxHeight)
+            val right = left + boxWidth
+            val bottom = top + boxHeight
+
+            val rect = RectF(left, top, right, bottom)
+            canvas.drawRoundRect(rect, radius, radius, fillPaint)
+            canvas.drawRoundRect(rect, radius, radius, framePaint)
+        }
     }
 
     private fun animateAlpha(targetAlpha: Float) {

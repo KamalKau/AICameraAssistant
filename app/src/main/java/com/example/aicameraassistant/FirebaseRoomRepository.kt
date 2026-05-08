@@ -155,6 +155,7 @@ class FirebaseRoomRepository {
         roomCode: String,
         faceDetected: Boolean,
         faceBox: NormalizedFaceBounds,
+        faceBoxes: List<NormalizedFaceBounds>,
         timestamp: Long
     ) {
         val safeBox = mapOf(
@@ -163,11 +164,22 @@ class FirebaseRoomRepository {
             "right" to faceBox.right.coerceIn(0.0, 1.0),
             "bottom" to faceBox.bottom.coerceIn(0.0, 1.0)
         )
+        val safeBoxes = faceBoxes
+            .filter { it.isValid() }
+            .map { box ->
+                mapOf(
+                    "left" to box.left.coerceIn(0.0, 1.0),
+                    "top" to box.top.coerceIn(0.0, 1.0),
+                    "right" to box.right.coerceIn(0.0, 1.0),
+                    "bottom" to box.bottom.coerceIn(0.0, 1.0)
+                )
+            }
         db.collection("rooms")
             .document(roomCode)
             .update(
                 mapOf(
                     "faceBox" to safeBox,
+                    "faceBoxes" to safeBoxes,
                     "faceDetected" to faceDetected,
                     "faceDetectionTimestamp" to timestamp
                 )
@@ -362,6 +374,7 @@ class FirebaseRoomRepository {
                 "right" to 0.0,
                 "bottom" to 0.0
             ),
+            "faceBoxes" to emptyList<Map<String, Double>>(),
             "faceDetected" to false,
             "faceDetectionTimestamp" to 0L,
             "lensFacing" to "back",
@@ -550,6 +563,17 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 val box = snapshot?.get("faceBox") as? Map<*, *>
+                val boxes = (snapshot?.get("faceBoxes") as? List<*>)
+                    ?.mapNotNull { entry ->
+                        val faceBox = entry as? Map<*, *> ?: return@mapNotNull null
+                        NormalizedFaceBounds(
+                            left = (faceBox["left"] as? Number)?.toDouble() ?: 0.0,
+                            top = (faceBox["top"] as? Number)?.toDouble() ?: 0.0,
+                            right = (faceBox["right"] as? Number)?.toDouble() ?: 0.0,
+                            bottom = (faceBox["bottom"] as? Number)?.toDouble() ?: 0.0
+                        )
+                    }
+                    .orEmpty()
                 trySend(
                     FaceDetectionOverlayState(
                         faceDetected = snapshot?.getBoolean("faceDetected") ?: false,
@@ -559,6 +583,7 @@ class FirebaseRoomRepository {
                             right = (box?.get("right") as? Number)?.toDouble() ?: 0.0,
                             bottom = (box?.get("bottom") as? Number)?.toDouble() ?: 0.0
                         ),
+                        faceBoxes = boxes,
                         timestamp = snapshot?.getLong("faceDetectionTimestamp") ?: 0L
                     )
                 )

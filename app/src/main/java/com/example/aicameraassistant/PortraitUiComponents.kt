@@ -55,6 +55,7 @@ fun PortraitPreviewOverlay(
     faceTop: Double = 0.0,
     faceRight: Double = 0.0,
     faceBottom: Double = 0.0,
+    faceBoxes: List<NormalizedFaceBounds> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val effect = PortraitEffect.fromKey(effectKey)
@@ -173,20 +174,38 @@ fun PortraitPreviewOverlay(
             )
         }
 
-        val hasFaceFrame =
-            faceRight > faceLeft &&
-                faceBottom > faceTop &&
-                faceLeft in 0.0..1.0 &&
-                faceTop in 0.0..1.0
+        val visibleFaceBoxes = faceBoxes
+            .filter { it.isValid() }
+            .ifEmpty {
+                if (
+                    faceRight > faceLeft &&
+                    faceBottom > faceTop &&
+                    faceLeft in 0.0..1.0 &&
+                    faceTop in 0.0..1.0
+                ) {
+                    listOf(
+                        NormalizedFaceBounds(
+                            left = faceLeft,
+                            top = faceTop,
+                            right = faceRight,
+                            bottom = faceBottom
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+            }
 
-        if (hasFaceFrame) {
-            BoxWithNormalizedBounds(
-                left = faceLeft,
-                top = faceTop,
-                right = faceRight,
-                bottom = faceBottom,
-                borderColor = portraitFrameColor(effect)
-            )
+        if (visibleFaceBoxes.isNotEmpty()) {
+            visibleFaceBoxes.forEach { box ->
+                BoxWithNormalizedBounds(
+                    left = box.left,
+                    top = box.top,
+                    right = box.right,
+                    bottom = box.bottom,
+                    borderColor = portraitFrameColor(effect)
+                )
+            }
         } else {
             Box(
                 modifier = Modifier

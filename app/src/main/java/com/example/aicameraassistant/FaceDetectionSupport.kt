@@ -69,6 +69,12 @@ data class PortraitFaceBounds(
 
 class FaceBoundsMapper {
     fun mapAnalysisBoundsToPreview(
+        bounds: List<NormalizedFaceBounds>,
+        isFrontCamera: Boolean
+    ): List<PortraitFaceBounds> =
+        bounds.map { mapAnalysisBoundsToPreview(it, isFrontCamera) }
+
+    fun mapAnalysisBoundsToPreview(
         bounds: NormalizedFaceBounds,
         isFrontCamera: Boolean
     ): PortraitFaceBounds {
@@ -93,46 +99,55 @@ class FaceBoundsMapper {
             right = bounds.right.coerceIn(0.0, 1.0),
             bottom = bounds.bottom.coerceIn(0.0, 1.0)
         )
+
+    fun mapPreviewBounds(bounds: List<NormalizedFaceBounds>): List<PortraitFaceBounds> =
+        bounds.map { mapPreviewBounds(it) }
+}
+
+fun List<PortraitFaceBounds>.isStableCandidateAfter(other: List<PortraitFaceBounds>): Boolean {
+    if (isEmpty() || other.isEmpty()) return false
+    return first().isStableCandidateAfter(other.first())
+}
+
+fun List<PortraitFaceBounds>.haveMovedSignificantlyFrom(other: List<PortraitFaceBounds>): Boolean {
+    if (size != other.size) return true
+    return zip(other).any { (current, previous) ->
+        current.hasMovedSignificantlyFrom(previous)
+    }
 }
 
 class PreviewBitmapFaceDetector(
     private val detector: FaceDetector,
     private val previewRectProvider: (Bitmap) -> Rect?
 ) {
-    suspend fun detect(bitmap: Bitmap): NormalizedFaceBounds? {
+    suspend fun detect(bitmap: Bitmap): List<NormalizedFaceBounds> {
         return try {
-            if (bitmap.width <= 0 || bitmap.height <= 0) return null
+            if (bitmap.width <= 0 || bitmap.height <= 0) return emptyList()
             val image = InputImage.fromBitmap(bitmap, 0)
             val faces = detector.process(image).await()
-            val selectedFace = faces.maxByOrNull { face ->
-                val box = face.boundingBox
-                val area = (box.width() * box.height()).coerceAtLeast(0)
-                val centerX = (box.left + box.right).toDouble() / 2.0
-                val centerY = (box.top + box.bottom).toDouble() / 2.0
-                val centeredness =
-                    1.0 - (
-                        kotlin.math.abs((centerX / bitmap.width.coerceAtLeast(1)) - 0.5) +
-                            kotlin.math.abs((centerY / bitmap.height.coerceAtLeast(1)) - 0.5)
-                        ).coerceIn(0.0, 1.0)
-                area.toDouble() * (0.75 + (0.25 * centeredness))
-            } ?: return null
-
-            val box = selectedFace.boundingBox
             val previewRect = previewRectProvider(bitmap)
                 ?: Rect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
-            NormalizedFaceBounds(
-                left = ((box.left - previewRect.left).toDouble() / previewRect.width)
-                    .coerceIn(0.0, 1.0),
-                top = ((box.top - previewRect.top).toDouble() / previewRect.height)
-                    .coerceIn(0.0, 1.0),
-                right = ((box.right - previewRect.left).toDouble() / previewRect.width)
-                    .coerceIn(0.0, 1.0),
-                bottom = ((box.bottom - previewRect.top).toDouble() / previewRect.height)
-                    .coerceIn(0.0, 1.0)
-            )
+            faces
+                .sortedByDescending { face ->
+                    val box = face.boundingBox
+                    box.width() * box.height()
+                }
+                .map { face ->
+                    val box = face.boundingBox
+                    NormalizedFaceBounds(
+                        left = ((box.left - previewRect.left).toDouble() / previewRect.width)
+                            .coerceIn(0.0, 1.0),
+                        top = ((box.top - previewRect.top).toDouble() / previewRect.height)
+                            .coerceIn(0.0, 1.0),
+                        right = ((box.right - previewRect.left).toDouble() / previewRect.width)
+                            .coerceIn(0.0, 1.0),
+                        bottom = ((box.bottom - previewRect.top).toDouble() / previewRect.height)
+                            .coerceIn(0.0, 1.0)
+                    )
+                }
         } catch (t: Throwable) {
             Log.w("FACE_DETECTION", "Preview bitmap face detection failed", t)
-            null
+            emptyList()
         } finally {
             if (!bitmap.isRecycled) {
                 bitmap.recycle()
@@ -148,29 +163,44 @@ class FaceOverlayPublisher(
 ) {
     private var lastPublishMs = 0L
     private var lastDetected = false
-    private var lastBounds = PortraitFaceBounds()
+    private var lastBounds = emptyList<PortraitFaceBounds>()
+
+    fun publish(
+        detected: Boolean,
+        bounds: List<PortraitFaceBounds> = emptyList(),
+        force: Boolean = false
+    ) {
+        val now = System.currentTimeMillis()
+        val stateChanged = detected != lastDetected
+        val movedSignificantly = detected && bounds.haveMovedSignificantlyFrom(lastBounds)
+        if (!force && now - lastPublishMs < 300L) return
+        if (!force && !stateChanged && !movedSignificantly) return
+
+        lastPublishMs = now
+        lastDetected = detected
+        lastBounds = if (detected) bounds else emptyList()
+        val primaryFace = bounds.firstOrNull() ?: PortraitFaceBounds()
+        scope.launch {
+            repository.updateFaceDetectionOverlay(
+                roomCode = roomCode,
+                faceDetected = detected,
+                faceBox = if (detected) primaryFace.toNormalizedFaceBounds() else NormalizedFaceBounds(),
+                faceBoxes = if (detected) bounds.map { it.toNormalizedFaceBounds() } else emptyList(),
+                timestamp = now
+            )
+        }
+    }
 
     fun publish(
         detected: Boolean,
         bounds: PortraitFaceBounds = PortraitFaceBounds(),
         force: Boolean = false
     ) {
-        val now = System.currentTimeMillis()
-        val stateChanged = detected != lastDetected
-        val movedSignificantly = detected && bounds.hasMovedSignificantlyFrom(lastBounds)
-        if (!force && now - lastPublishMs < 300L) return
-        if (!force && !stateChanged && !movedSignificantly) return
-
-        lastPublishMs = now
-        lastDetected = detected
-        lastBounds = if (detected) bounds else PortraitFaceBounds()
-        scope.launch {
-            repository.updateFaceDetectionOverlay(
-                roomCode = roomCode,
-                faceDetected = detected,
-                faceBox = if (detected) bounds.toNormalizedFaceBounds() else NormalizedFaceBounds(),
-                timestamp = now
-            )
-        }
+        publish(
+            detected = detected,
+            bounds = if (detected && bounds.isValid()) listOf(bounds) else emptyList(),
+            force = force
+        )
     }
+
 }

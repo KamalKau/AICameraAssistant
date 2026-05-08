@@ -135,6 +135,7 @@ fun CameraScreen(
     val firebasePortraitFaceTop = remoteUiState.portraitFaceTop
     val firebasePortraitFaceRight = remoteUiState.portraitFaceRight
     val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
+    val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
@@ -190,10 +191,10 @@ fun CameraScreen(
     var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
     var lastPortraitStatus by remember { mutableStateOf("Finding subject...") }
     var lastPortraitFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
-    var photoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var photoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var photoFaceBoxVisible by remember { mutableStateOf(false) }
     var photoFaceBoxToken by remember { mutableLongStateOf(0L) }
-    var pendingPhotoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var pendingPhotoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var consecutivePhotoFaceHits by remember { mutableIntStateOf(0) }
     var consecutivePhotoFaceMisses by remember { mutableIntStateOf(0) }
     var lastPhotoFaceSeenMs by remember { mutableLongStateOf(0L) }
@@ -559,9 +560,9 @@ fun CameraScreen(
     }
 
     fun clearPhotoFaceDetection() {
-        photoFaceBounds = PortraitFaceBounds()
+        photoFaceBounds = emptyList()
         photoFaceBoxVisible = false
-        pendingPhotoFaceBounds = PortraitFaceBounds()
+        pendingPhotoFaceBounds = emptyList()
         consecutivePhotoFaceHits = 0
         consecutivePhotoFaceMisses = 0
         lastPhotoFaceSeenMs = 0L
@@ -570,21 +571,22 @@ fun CameraScreen(
 
     fun registerPhotoFaceMiss() {
         consecutivePhotoFaceHits = 0
-        pendingPhotoFaceBounds = PortraitFaceBounds()
+        pendingPhotoFaceBounds = emptyList()
         consecutivePhotoFaceMisses += 1
         val now = System.currentTimeMillis()
         if (lastPhotoFaceSeenMs > 0L && now - lastPhotoFaceSeenMs >= 700L) {
-            photoFaceBounds = PortraitFaceBounds()
+            photoFaceBounds = emptyList()
             photoFaceBoxVisible = false
             publishFaceDetectionOverlay(detected = false)
         } else if (consecutivePhotoFaceMisses >= 2 && lastPhotoFaceSeenMs == 0L) {
-            photoFaceBounds = PortraitFaceBounds()
+            photoFaceBounds = emptyList()
             photoFaceBoxVisible = false
         }
     }
 
-    fun acceptPhotoFaceCandidate(bounds: PortraitFaceBounds) {
-        if (!bounds.isPlausiblePhotoFace()) {
+    fun acceptPhotoFaceCandidate(bounds: List<PortraitFaceBounds>) {
+        val plausibleBounds = bounds.filter { it.isPlausiblePhotoFace() }
+        if (plausibleBounds.isEmpty()) {
             registerPhotoFaceMiss()
             return
         }
@@ -592,44 +594,34 @@ fun CameraScreen(
         consecutivePhotoFaceMisses = 0
         lastPhotoFaceSeenMs = System.currentTimeMillis()
         consecutivePhotoFaceHits =
-            if (bounds.isStableCandidateAfter(pendingPhotoFaceBounds)) {
+            if (plausibleBounds.isStableCandidateAfter(pendingPhotoFaceBounds)) {
                 consecutivePhotoFaceHits + 1
             } else {
                 1
             }
-        pendingPhotoFaceBounds = bounds
+        pendingPhotoFaceBounds = plausibleBounds
 
         if (consecutivePhotoFaceHits >= 1) {
             val shouldShowBox =
-                !photoFaceBounds.isValid() || bounds.hasMovedSignificantlyFrom(photoFaceBounds)
-            photoFaceBounds = bounds
+                photoFaceBounds.isEmpty() || plausibleBounds.haveMovedSignificantlyFrom(photoFaceBounds)
+            photoFaceBounds = plausibleBounds
             if (shouldShowBox) {
                 photoFaceBoxVisible = true
                 val pulseTimestamp = System.currentTimeMillis()
                 photoFaceBoxToken = pulseTimestamp
-                publishFaceDetectionOverlay(detected = true, bounds = bounds, force = true)
+                faceOverlayPublisher.publish(detected = true, bounds = plausibleBounds, force = true)
             }
-            applyPhotoFaceMetering(bounds)
+            plausibleBounds.firstOrNull()?.let { applyPhotoFaceMetering(it) }
         }
     }
 
-    fun mapAnalysisBoundsToPreview(bounds: NormalizedFaceBounds): PortraitFaceBounds {
-        return faceBoundsMapper.mapAnalysisBoundsToPreview(
-            bounds = bounds,
-            isFrontCamera = isFrontCamera
-        )
-    }
-
-    fun mapPreviewBoundsToFaceBounds(bounds: NormalizedFaceBounds): PortraitFaceBounds =
-        faceBoundsMapper.mapPreviewBounds(bounds)
-
-    suspend fun detectPreviewBitmapFace(): NormalizedFaceBounds? {
-        val bitmap = previewView.bitmap ?: return null
+    suspend fun detectPreviewBitmapFace(): List<NormalizedFaceBounds> {
+        val bitmap = previewView.bitmap ?: return emptyList()
         return previewBitmapFaceDetector.detect(bitmap)
     }
 
-    fun handlePreviewFace(bounds: PortraitFaceBounds?) {
-        if (bounds == null) {
+    fun handlePreviewFaces(bounds: List<PortraitFaceBounds>) {
+        if (bounds.isEmpty()) {
             if (isPortraitMode) {
                 publishPortraitSubjectState(
                     status = "Finding subject...",
@@ -646,31 +638,32 @@ fun CameraScreen(
         }
 
         lastPhotoFaceSeenMs = System.currentTimeMillis()
+        val primaryBounds = bounds.first()
         if (isPortraitMode) {
-            val status = if (bounds.area < 0.035) {
+            val status = if (primaryBounds.area < 0.035) {
                 "Move closer"
             } else {
                 "Portrait ready"
             }
-            publishFaceDetectionOverlay(detected = false)
+            faceOverlayPublisher.publish(detected = true, bounds = bounds, force = false)
             publishPortraitSubjectState(
                 status = status,
-                bounds = bounds
+                bounds = primaryBounds
             )
         } else {
             acceptPhotoFaceCandidate(bounds)
         }
     }
 
-    fun handleAnalyzedFace(bounds: NormalizedFaceBounds?) {
-        handlePreviewFace(bounds?.let { mapAnalysisBoundsToPreview(it) })
+    fun handleAnalyzedFaces(bounds: List<NormalizedFaceBounds>) {
+        handlePreviewFaces(faceBoundsMapper.mapAnalysisBoundsToPreview(bounds, isFrontCamera))
     }
 
-    val currentFaceResultHandler by rememberUpdatedState<(NormalizedFaceBounds?) -> Unit>(
-        newValue = { bounds -> handleAnalyzedFace(bounds) }
+    val currentFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
+        newValue = { bounds -> handleAnalyzedFaces(bounds) }
     )
-    val currentPreviewFaceResultHandler by rememberUpdatedState<(NormalizedFaceBounds?) -> Unit>(
-        newValue = { bounds -> handlePreviewFace(bounds?.let { mapPreviewBoundsToFaceBounds(it) }) }
+    val currentPreviewFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
+        newValue = { bounds -> handlePreviewFaces(faceBoundsMapper.mapPreviewBounds(bounds)) }
     )
 
     LaunchedEffect(photoFaceBoxToken) {
@@ -1620,11 +1613,11 @@ fun CameraScreen(
             }
         }
 
-        if (!isPortraitMode && photoFaceBounds.isValid()) {
+        if (!isPortraitMode && photoFaceBounds.isNotEmpty()) {
             val previewRect =
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
-            FaceDetectionFocusBox(
-                bounds = photoFaceBounds.toNormalizedFaceBounds(),
+            FaceDetectionFocusBoxes(
+                bounds = photoFaceBounds.map { it.toNormalizedFaceBounds() },
                 visible = photoFaceBoxVisible,
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -1652,6 +1645,7 @@ fun CameraScreen(
                 faceTop = firebasePortraitFaceTop,
                 faceRight = firebasePortraitFaceRight,
                 faceBottom = firebasePortraitFaceBottom,
+                faceBoxes = firebaseFaceBoxes,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {

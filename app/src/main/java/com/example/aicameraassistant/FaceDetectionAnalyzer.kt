@@ -20,13 +20,14 @@ data class NormalizedFaceBounds(
 data class FaceDetectionOverlayState(
     val faceDetected: Boolean = false,
     val faceBox: NormalizedFaceBounds = NormalizedFaceBounds(),
+    val faceBoxes: List<NormalizedFaceBounds> = emptyList(),
     val timestamp: Long = 0L
 )
 
 class MlKitFaceDetectionAnalyzer(
     private val detector: FaceDetector,
     private val minProcessIntervalMs: Long = 800L,
-    private val onFaceResult: (NormalizedFaceBounds?) -> Unit
+    private val onFaceResult: (List<NormalizedFaceBounds>) -> Unit
 ) : ImageAnalysis.Analyzer {
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessStartedMs = 0L
@@ -60,36 +61,31 @@ class MlKitFaceDetectionAnalyzer(
 
         detector.process(image)
             .addOnSuccessListener { faces ->
-                val selectedFace = faces.maxByOrNull { face ->
-                    val box = face.boundingBox
-                    val area = (box.width() * box.height()).coerceAtLeast(0)
-                    val centerX = (box.left + box.right).toDouble() / 2.0
-                    val centerY = (box.top + box.bottom).toDouble() / 2.0
-                    val centeredness =
-                        1.0 - (
-                            kotlin.math.abs((centerX / uprightWidth.coerceAtLeast(1)) - 0.5) +
-                                kotlin.math.abs((centerY / uprightHeight.coerceAtLeast(1)) - 0.5)
-                            ).coerceIn(0.0, 1.0)
-                    area.toDouble() * (0.75 + (0.25 * centeredness))
-                }
-                if (selectedFace == null || uprightWidth <= 0 || uprightHeight <= 0) {
-                    onFaceResult(null)
+                if (faces.isEmpty() || uprightWidth <= 0 || uprightHeight <= 0) {
+                    onFaceResult(emptyList())
                     return@addOnSuccessListener
                 }
 
-                val box = selectedFace.boundingBox
                 onFaceResult(
-                    NormalizedFaceBounds(
-                        left = (box.left.toDouble() / uprightWidth).coerceIn(0.0, 1.0),
-                        top = (box.top.toDouble() / uprightHeight).coerceIn(0.0, 1.0),
-                        right = (box.right.toDouble() / uprightWidth).coerceIn(0.0, 1.0),
-                        bottom = (box.bottom.toDouble() / uprightHeight).coerceIn(0.0, 1.0)
-                    )
+                    faces
+                        .sortedByDescending { face ->
+                            val box = face.boundingBox
+                            box.width() * box.height()
+                        }
+                        .map { face ->
+                            val box = face.boundingBox
+                            NormalizedFaceBounds(
+                                left = (box.left.toDouble() / uprightWidth).coerceIn(0.0, 1.0),
+                                top = (box.top.toDouble() / uprightHeight).coerceIn(0.0, 1.0),
+                                right = (box.right.toDouble() / uprightWidth).coerceIn(0.0, 1.0),
+                                bottom = (box.bottom.toDouble() / uprightHeight).coerceIn(0.0, 1.0)
+                            )
+                        }
                 )
             }
             .addOnFailureListener {
                 Log.w("FACE_DETECTION", "ML Kit face detection failed", it)
-                onFaceResult(null)
+                onFaceResult(emptyList())
             }
             .addOnCompleteListener {
                 isProcessing.set(false)

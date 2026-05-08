@@ -142,6 +142,7 @@ class ControllerScreenViewModel : ViewModel() {
                     portraitFaceBottom = (values[11] as PortraitSubjectState).bottom,
                     faceDetected = (values[12] as FaceDetectionOverlayState).faceDetected,
                     faceBox = (values[12] as FaceDetectionOverlayState).faceBox,
+                    faceBoxes = (values[12] as FaceDetectionOverlayState).faceBoxes,
                     faceDetectionTimestamp = (values[12] as FaceDetectionOverlayState).timestamp,
                     flashSupported = values[13] as Boolean,
                     gridEnabled = values[14] as Boolean,
