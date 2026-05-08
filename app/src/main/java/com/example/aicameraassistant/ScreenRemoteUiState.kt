@@ -10,6 +10,14 @@ data class CameraRemoteUiState(
     val portraitBlurLevel: String = "blur",
     val portraitStrength: Int = 5,
     val portraitEffect: String = "blur",
+    val portraitStatus: String = "Finding subject...",
+    val portraitFaceLeft: Double = 0.0,
+    val portraitFaceTop: Double = 0.0,
+    val portraitFaceRight: Double = 0.0,
+    val portraitFaceBottom: Double = 0.0,
+    val faceDetected: Boolean = false,
+    val faceBox: NormalizedFaceBounds = NormalizedFaceBounds(),
+    val faceDetectionTimestamp: Long = 0L,
     val gridEnabled: Boolean = false,
     val nightModeEnabled: Boolean = false,
     val toolbarExpanded: Boolean = false,
@@ -32,6 +40,14 @@ data class CaptureRequestState(
     val requestType: String = "photo"
 )
 
+data class PortraitSubjectState(
+    val status: String = "Finding subject...",
+    val left: Double = 0.0,
+    val top: Double = 0.0,
+    val right: Double = 0.0,
+    val bottom: Double = 0.0
+)
+
 data class ControllerRemoteUiState(
     val roomStatus: String = "waiting",
     val connectionState: AppConnectionState = AppConnectionState.IDLE,
@@ -44,6 +60,14 @@ data class ControllerRemoteUiState(
     val portraitBlurLevel: String = "blur",
     val portraitStrength: Int = 5,
     val portraitEffect: String = "blur",
+    val portraitStatus: String = "Finding subject...",
+    val portraitFaceLeft: Double = 0.0,
+    val portraitFaceTop: Double = 0.0,
+    val portraitFaceRight: Double = 0.0,
+    val portraitFaceBottom: Double = 0.0,
+    val faceDetected: Boolean = false,
+    val faceBox: NormalizedFaceBounds = NormalizedFaceBounds(),
+    val faceDetectionTimestamp: Long = 0L,
     val flashSupported: Boolean = false,
     val gridEnabled: Boolean = false,
     val nightModeEnabled: Boolean = false,

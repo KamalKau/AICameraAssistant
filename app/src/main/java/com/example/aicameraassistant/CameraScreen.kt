@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -64,13 +65,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -89,13 +93,78 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import kotlinx.coroutines.tasks.await
+import java.util.concurrent.Executors
 import org.webrtc.IceCandidate
+
+private data class PortraitFaceBounds(
+    val left: Double = 0.0,
+    val top: Double = 0.0,
+    val right: Double = 0.0,
+    val bottom: Double = 0.0
+) {
+    fun isValid(): Boolean =
+        right > left && bottom > top
+
+    val width: Double
+        get() = (right - left).coerceAtLeast(0.0)
+
+    val height: Double
+        get() = (bottom - top).coerceAtLeast(0.0)
+
+    val area: Double
+        get() = width * height
+
+    val centerX: Double
+        get() = (left + right) / 2.0
+
+    val centerY: Double
+        get() = (top + bottom) / 2.0
+
+    fun nearlyEquals(other: PortraitFaceBounds): Boolean =
+        kotlin.math.abs(left - other.left) < 0.015 &&
+            kotlin.math.abs(top - other.top) < 0.015 &&
+            kotlin.math.abs(right - other.right) < 0.015 &&
+            kotlin.math.abs(bottom - other.bottom) < 0.015
+
+    fun hasMovedSignificantlyFrom(other: PortraitFaceBounds): Boolean {
+        if (!isValid() || !other.isValid()) return isValid() != other.isValid()
+        val centerDistance =
+            kotlin.math.abs(centerX - other.centerX) + kotlin.math.abs(centerY - other.centerY)
+        val sizeDistance =
+            kotlin.math.abs(width - other.width) + kotlin.math.abs(height - other.height)
+        return centerDistance > 0.045 || sizeDistance > 0.070
+    }
+
+    fun toNormalizedFaceBounds(): NormalizedFaceBounds =
+        NormalizedFaceBounds(left = left, top = top, right = right, bottom = bottom)
+
+    fun isStableCandidateAfter(other: PortraitFaceBounds): Boolean {
+        if (!isValid() || !other.isValid()) return false
+        val centerDistance =
+            kotlin.math.abs(centerX - other.centerX) + kotlin.math.abs(centerY - other.centerY)
+        val sizeDistance =
+            kotlin.math.abs(width - other.width) + kotlin.math.abs(height - other.height)
+        return centerDistance < 0.12 && sizeDistance < 0.16
+    }
+
+    fun isPlausiblePhotoFace(): Boolean {
+        if (!isValid()) return false
+        val aspect = width / height.coerceAtLeast(0.001)
+        return area in 0.018..0.45 && aspect in 0.55..1.8
+    }
+}
 
 @ExperimentalPreviewViewScreenFlash
 @Composable
@@ -121,6 +190,11 @@ fun CameraScreen(
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
     val firebasePortraitEffect = remoteUiState.portraitEffect
+    val firebasePortraitStatus = remoteUiState.portraitStatus
+    val firebasePortraitFaceLeft = remoteUiState.portraitFaceLeft
+    val firebasePortraitFaceTop = remoteUiState.portraitFaceTop
+    val firebasePortraitFaceRight = remoteUiState.portraitFaceRight
+    val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
@@ -173,6 +247,36 @@ fun CameraScreen(
     var captureMode by screenViewModel::captureMode
     var selfieLightVisible by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
+    var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
+    var lastPortraitStatus by remember { mutableStateOf("Finding subject...") }
+    var lastPortraitFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var photoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var photoFaceBoxVisible by remember { mutableStateOf(false) }
+    var photoFaceBoxToken by remember { mutableLongStateOf(0L) }
+    var pendingPhotoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var consecutivePhotoFaceHits by remember { mutableIntStateOf(0) }
+    var consecutivePhotoFaceMisses by remember { mutableIntStateOf(0) }
+    var lastPhotoFaceSeenMs by remember { mutableLongStateOf(0L) }
+    var lastPhotoFaceMeteringMs by remember { mutableStateOf(0L) }
+    var lastMeteredPhotoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var lastFaceOverlayPublishMs by remember { mutableLongStateOf(0L) }
+    var lastPublishedFaceDetected by remember { mutableStateOf(false) }
+    var lastPublishedFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var cameraAnalysisActive by remember { mutableStateOf(false) }
+    var lastCameraAnalysisResultMs by remember { mutableLongStateOf(0L) }
+    val faceDetector = remember {
+        FaceDetection.getClient(
+            FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+                .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                .setMinFaceSize(0.08f)
+                .enableTracking()
+                .build()
+        )
+    }
+    val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
@@ -431,6 +535,283 @@ fun CameraScreen(
         }
     }
 
+    fun publishPortraitSubjectState(
+        status: String,
+        bounds: PortraitFaceBounds,
+        force: Boolean = false
+    ) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastPortraitFacePublishMs < 350L) return
+        if (!force && status == lastPortraitStatus && bounds.nearlyEquals(lastPortraitFaceBounds)) return
+
+        lastPortraitFacePublishMs = now
+        lastPortraitStatus = status
+        lastPortraitFaceBounds = bounds
+        scope.launch {
+            repository.updatePortraitSubjectState(
+                roomCode = roomCode,
+                status = status,
+                left = bounds.left,
+                top = bounds.top,
+                right = bounds.right,
+                bottom = bounds.bottom
+            )
+        }
+    }
+
+    fun publishFaceDetectionOverlay(
+        detected: Boolean,
+        bounds: PortraitFaceBounds = PortraitFaceBounds(),
+        force: Boolean = false
+    ) {
+        val now = System.currentTimeMillis()
+        val stateChanged = detected != lastPublishedFaceDetected
+        val movedSignificantly =
+            detected && bounds.hasMovedSignificantlyFrom(lastPublishedFaceBounds)
+        if (!force && now - lastFaceOverlayPublishMs < 300L) return
+        if (!force && !stateChanged && !movedSignificantly) return
+
+        lastFaceOverlayPublishMs = now
+        lastPublishedFaceDetected = detected
+        lastPublishedFaceBounds = if (detected) bounds else PortraitFaceBounds()
+        scope.launch {
+            repository.updateFaceDetectionOverlay(
+                roomCode = roomCode,
+                faceDetected = detected,
+                faceBox = if (detected) bounds.toNormalizedFaceBounds() else NormalizedFaceBounds(),
+                timestamp = now
+            )
+        }
+    }
+
+    fun applyPhotoFaceMetering(bounds: PortraitFaceBounds) {
+        if (isPortraitMode || !bounds.isValid()) return
+        val currentCamera = camera ?: return
+        val width = previewView.width.toFloat()
+        val height = previewView.height.toFloat()
+        if (width <= 0f || height <= 0f) return
+
+        val now = System.currentTimeMillis()
+        val elapsedSinceLastMeteringMs = now - lastPhotoFaceMeteringMs
+        val facePositionUnchanged = bounds.nearlyEquals(lastMeteredPhotoFaceBounds)
+        if (elapsedSinceLastMeteringMs < 1200L) {
+            return
+        }
+        if (facePositionUnchanged && elapsedSinceLastMeteringMs < 2400L) {
+            return
+        }
+
+        lastPhotoFaceMeteringMs = now
+        lastMeteredPhotoFaceBounds = bounds
+        val centerX = (((bounds.left + bounds.right) / 2.0).toFloat() * width).coerceIn(0f, width)
+        val centerY = (((bounds.top + bounds.bottom) / 2.0).toFloat() * height).coerceIn(0f, height)
+        val action = FocusMeteringAction.Builder(
+            previewView.meteringPointFactory.createPoint(centerX, centerY),
+            FocusMeteringAction.FLAG_AF or
+                FocusMeteringAction.FLAG_AE or
+                FocusMeteringAction.FLAG_AWB
+        )
+            .setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
+        runCatching {
+            currentCamera.cameraControl.startFocusAndMetering(action)
+        }.onFailure {
+            Log.w("PHOTO_FACE", "Face metering request failed", it)
+        }
+    }
+
+    fun clearPhotoFaceDetection() {
+        photoFaceBounds = PortraitFaceBounds()
+        photoFaceBoxVisible = false
+        pendingPhotoFaceBounds = PortraitFaceBounds()
+        consecutivePhotoFaceHits = 0
+        consecutivePhotoFaceMisses = 0
+        lastPhotoFaceSeenMs = 0L
+        publishFaceDetectionOverlay(detected = false, force = true)
+    }
+
+    fun registerPhotoFaceMiss() {
+        consecutivePhotoFaceHits = 0
+        pendingPhotoFaceBounds = PortraitFaceBounds()
+        consecutivePhotoFaceMisses += 1
+        val now = System.currentTimeMillis()
+        if (lastPhotoFaceSeenMs > 0L && now - lastPhotoFaceSeenMs >= 700L) {
+            photoFaceBounds = PortraitFaceBounds()
+            photoFaceBoxVisible = false
+            publishFaceDetectionOverlay(detected = false)
+        } else if (consecutivePhotoFaceMisses >= 2 && lastPhotoFaceSeenMs == 0L) {
+            photoFaceBounds = PortraitFaceBounds()
+            photoFaceBoxVisible = false
+        }
+    }
+
+    fun acceptPhotoFaceCandidate(bounds: PortraitFaceBounds) {
+        if (!bounds.isPlausiblePhotoFace()) {
+            registerPhotoFaceMiss()
+            return
+        }
+
+        consecutivePhotoFaceMisses = 0
+        lastPhotoFaceSeenMs = System.currentTimeMillis()
+        consecutivePhotoFaceHits =
+            if (bounds.isStableCandidateAfter(pendingPhotoFaceBounds)) {
+                consecutivePhotoFaceHits + 1
+            } else {
+                1
+            }
+        pendingPhotoFaceBounds = bounds
+
+        if (consecutivePhotoFaceHits >= 1) {
+            val shouldShowBox =
+                !photoFaceBounds.isValid() || bounds.hasMovedSignificantlyFrom(photoFaceBounds)
+            photoFaceBounds = bounds
+            if (shouldShowBox) {
+                photoFaceBoxVisible = true
+                val pulseTimestamp = System.currentTimeMillis()
+                photoFaceBoxToken = pulseTimestamp
+                publishFaceDetectionOverlay(detected = true, bounds = bounds, force = true)
+            }
+            applyPhotoFaceMetering(bounds)
+        }
+    }
+
+    fun mapAnalysisBoundsToPreview(bounds: NormalizedFaceBounds): PortraitFaceBounds {
+        val left = bounds.left.coerceIn(0.0, 1.0)
+        val right = bounds.right.coerceIn(0.0, 1.0)
+        return if (isFrontCamera) {
+            PortraitFaceBounds(
+                left = (1.0 - right).coerceIn(0.0, 1.0),
+                top = bounds.top.coerceIn(0.0, 1.0),
+                right = (1.0 - left).coerceIn(0.0, 1.0),
+                bottom = bounds.bottom.coerceIn(0.0, 1.0)
+            )
+        } else {
+            PortraitFaceBounds(
+                left = left,
+                top = bounds.top.coerceIn(0.0, 1.0),
+                right = right,
+                bottom = bounds.bottom.coerceIn(0.0, 1.0)
+            )
+        }
+    }
+
+    fun mapPreviewBoundsToFaceBounds(bounds: NormalizedFaceBounds): PortraitFaceBounds =
+        PortraitFaceBounds(
+            left = bounds.left.coerceIn(0.0, 1.0),
+            top = bounds.top.coerceIn(0.0, 1.0),
+            right = bounds.right.coerceIn(0.0, 1.0),
+            bottom = bounds.bottom.coerceIn(0.0, 1.0)
+        )
+
+    suspend fun detectPreviewBitmapFace(): NormalizedFaceBounds? {
+        val bitmap = previewView.bitmap ?: return null
+        return try {
+            if (bitmap.width <= 0 || bitmap.height <= 0) return null
+            val image = InputImage.fromBitmap(bitmap, 0)
+            val faces = faceDetector.process(image).await()
+            val selectedFace = faces.maxByOrNull { face ->
+                val box = face.boundingBox
+                val area = (box.width() * box.height()).coerceAtLeast(0)
+                val centerX = (box.left + box.right).toDouble() / 2.0
+                val centerY = (box.top + box.bottom).toDouble() / 2.0
+                val centeredness =
+                    1.0 - (
+                        kotlin.math.abs((centerX / bitmap.width.coerceAtLeast(1)) - 0.5) +
+                            kotlin.math.abs((centerY / bitmap.height.coerceAtLeast(1)) - 0.5)
+                        ).coerceIn(0.0, 1.0)
+                area.toDouble() * (0.75 + (0.25 * centeredness))
+            } ?: return null
+
+            val box = selectedFace.boundingBox
+            val previewRect =
+                fittedPreviewRect(
+                    containerWidth = bitmap.width.toFloat(),
+                    containerHeight = bitmap.height.toFloat(),
+                    contentWidth = resolvedWidth.toFloat(),
+                    contentHeight = resolvedHeight.toFloat()
+                ) ?: Rect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+
+            NormalizedFaceBounds(
+                left = ((box.left - previewRect.left).toDouble() / previewRect.width)
+                    .coerceIn(0.0, 1.0),
+                top = ((box.top - previewRect.top).toDouble() / previewRect.height)
+                    .coerceIn(0.0, 1.0),
+                right = ((box.right - previewRect.left).toDouble() / previewRect.width)
+                    .coerceIn(0.0, 1.0),
+                bottom = ((box.bottom - previewRect.top).toDouble() / previewRect.height)
+                    .coerceIn(0.0, 1.0)
+            )
+        } catch (t: Throwable) {
+            Log.w("FACE_DETECTION", "Preview bitmap face detection failed", t)
+            null
+        } finally {
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
+        }
+    }
+
+    fun handlePreviewFace(bounds: PortraitFaceBounds?) {
+        if (bounds == null) {
+            if (isPortraitMode) {
+                publishPortraitSubjectState(
+                    status = "Finding subject...",
+                    bounds = PortraitFaceBounds()
+                )
+                val now = System.currentTimeMillis()
+                if (lastPhotoFaceSeenMs > 0L && now - lastPhotoFaceSeenMs >= 700L) {
+                    publishFaceDetectionOverlay(detected = false)
+                }
+            } else {
+                registerPhotoFaceMiss()
+            }
+            return
+        }
+
+        lastPhotoFaceSeenMs = System.currentTimeMillis()
+        if (isPortraitMode) {
+            val status = if (bounds.area < 0.035) {
+                "Move closer"
+            } else {
+                "Portrait ready"
+            }
+            publishFaceDetectionOverlay(detected = false)
+            publishPortraitSubjectState(
+                status = status,
+                bounds = bounds
+            )
+        } else {
+            acceptPhotoFaceCandidate(bounds)
+        }
+    }
+
+    fun handleAnalyzedFace(bounds: NormalizedFaceBounds?) {
+        handlePreviewFace(bounds?.let { mapAnalysisBoundsToPreview(it) })
+    }
+
+    val currentFaceResultHandler by rememberUpdatedState<(NormalizedFaceBounds?) -> Unit>(
+        newValue = { bounds -> handleAnalyzedFace(bounds) }
+    )
+    val currentPreviewFaceResultHandler by rememberUpdatedState<(NormalizedFaceBounds?) -> Unit>(
+        newValue = { bounds -> handlePreviewFace(bounds?.let { mapPreviewBoundsToFaceBounds(it) }) }
+    )
+
+    LaunchedEffect(photoFaceBoxToken) {
+        if (photoFaceBoxToken == 0L) return@LaunchedEffect
+        delay(1500L)
+        photoFaceBoxVisible = false
+        publishFaceDetectionOverlay(detected = false, force = true)
+    }
+
+    LaunchedEffect(isStreaming, cameraAnalysisActive, isPortraitMode, lensFacing) {
+        while (isStreaming && isActive) {
+            val detectedBounds = detectPreviewBitmapFace()
+            currentPreviewFaceResultHandler(detectedBounds)
+            delay(300L)
+        }
+    }
+
     LaunchedEffect(offerSdp, firebaseRtcSessionId, isStreaming, webRtcSourceReady) {
         val currentOfferSdp = offerSdp
         val currentRtcSessionId = firebaseRtcSessionId
@@ -608,7 +989,6 @@ fun CameraScreen(
                         playShutterClick()
                     }
                 }
-
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bytes = runCatching {
                         val buffer = image.planes.first().buffer
@@ -1020,8 +1400,55 @@ fun CameraScreen(
             }
 
             cameraProvider.unbindAll()
+            cameraAnalysisActive = false
+            lastCameraAnalysisResultMs = 0L
 
             val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
+            val analysisSize = Size(320, 240)
+            val analysisResolutionSelector = ResolutionSelector.Builder()
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        analysisSize,
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+                    )
+                )
+                .build()
+            val faceAnalysis = ImageAnalysis.Builder()
+                .setResolutionSelector(analysisResolutionSelector)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetRotation(targetRotation)
+                .build()
+                .apply {
+                    val mainExecutor = ContextCompat.getMainExecutor(context)
+                    setAnalyzer(
+                        faceAnalysisExecutor,
+                        MlKitFaceDetectionAnalyzer(
+                            detector = faceDetector,
+                            minProcessIntervalMs = 300L,
+                            onFaceResult = { bounds ->
+                                mainExecutor.execute {
+                                    lastCameraAnalysisResultMs = System.currentTimeMillis()
+                                    currentFaceResultHandler(bounds)
+                                }
+                            }
+                        )
+                    )
+                }
+            if (!isStreaming) {
+                finalUseCases.add(faceAnalysis)
+            } else {
+                faceAnalysis.clearAnalyzer()
+                cameraAnalysisActive = false
+                lastCameraAnalysisResultMs = 0L
+            }
+
+            if (!isPortraitMode) {
+                publishPortraitSubjectState(
+                    status = "Finding subject...",
+                    bounds = PortraitFaceBounds(),
+                    force = true
+                )
+            }
 
             if (isStreaming) {
                 webRtcSourceReady = false
@@ -1059,16 +1486,43 @@ fun CameraScreen(
                 WebRtcSessionManager.stopLocalCamera()
             }
 
-            val finalCamera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                *finalUseCases.toTypedArray()
-            )
+            val finalCamera = try {
+                val boundCamera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    *finalUseCases.toTypedArray()
+                )
+                cameraAnalysisActive = true
+                boundCamera
+            } catch (bindWithAnalysisError: Exception) {
+                Log.w(
+                    "FACE_DETECTION",
+                    "Camera bind with face analysis failed; retrying without analysis",
+                    bindWithAnalysisError
+                )
+                faceAnalysis.clearAnalyzer()
+                finalUseCases.remove(faceAnalysis)
+                cameraAnalysisActive = false
+                lastCameraAnalysisResultMs = 0L
+                clearPhotoFaceDetection()
+                publishPortraitSubjectState(
+                    status = "Finding subject...",
+                    bounds = PortraitFaceBounds(),
+                    force = true
+                )
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    *finalUseCases.toTypedArray()
+                )
+            }
 
             camera = finalCamera
             imageCapture = newImageCapture
             publishExposureState(finalCamera)
         } catch (e: Exception) {
+            cameraAnalysisActive = false
+            lastCameraAnalysisResultMs = 0L
             Log.e("CAMERA_BIND", "Camera bind failed", e)
         }
     }
@@ -1085,6 +1539,29 @@ fun CameraScreen(
                 repository.updateZoomLevel(roomCode, clampedZoom.toDouble())
             }
         }
+    }
+
+    LaunchedEffect(firebaseCameraMode, camera, resolvedWidth, resolvedHeight) {
+        if (camera == null) {
+            clearPhotoFaceDetection()
+            publishPortraitSubjectState(
+                status = "Finding subject...",
+                bounds = PortraitFaceBounds(),
+                force = true
+            )
+            return@LaunchedEffect
+        }
+        if (isPortraitMode) {
+            clearPhotoFaceDetection()
+        } else {
+            publishPortraitSubjectState(
+                status = "Finding subject...",
+                bounds = PortraitFaceBounds(),
+                force = true
+            )
+        }
+
+        awaitCancellation()
     }
 
     LaunchedEffect(flashAlpha) {
@@ -1159,6 +1636,8 @@ fun CameraScreen(
     DisposableEffect(Unit) {
         onDispose {
             shutterSound.release()
+            faceDetector.close()
+            faceAnalysisExecutor.shutdown()
             WebRtcSessionManager.stopLocalCamera()
             WebRtcSessionManager.clearConnections()
         }
@@ -1265,12 +1744,38 @@ fun CameraScreen(
             }
         }
 
+        if (!isPortraitMode && photoFaceBounds.isValid()) {
+            val previewRect =
+                previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+            FaceDetectionFocusBox(
+                bounds = photoFaceBounds.toNormalizedFaceBounds(),
+                visible = photoFaceBoxVisible,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            previewRect.left.roundToInt(),
+                            previewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { previewRect.width.toDp() },
+                        height = with(density) { previewRect.height.toDp() }
+                    )
+            )
+        }
+
         if (isPortraitMode) {
             val previewRect =
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
             PortraitPreviewOverlay(
                 effectKey = firebasePortraitEffect,
                 strength = firebasePortraitStrength,
+                status = firebasePortraitStatus,
+                faceLeft = firebasePortraitFaceLeft,
+                faceTop = firebasePortraitFaceTop,
+                faceRight = firebasePortraitFaceRight,
+                faceBottom = firebasePortraitFaceBottom,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {
@@ -1702,6 +2207,44 @@ private fun ExposureSliderOverlay(
 }
 
 @Composable
+private fun PhotoFaceFocusBox(
+    bounds: PortraitFaceBounds,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val paddingPx = 10.dp.toPx()
+        val left = (bounds.left.toFloat() * size.width - paddingPx).coerceIn(0f, size.width)
+        val top = (bounds.top.toFloat() * size.height - paddingPx).coerceIn(0f, size.height)
+        val right = (bounds.right.toFloat() * size.width + paddingPx).coerceIn(left, size.width)
+        val bottom = (bounds.bottom.toFloat() * size.height + paddingPx).coerceIn(top, size.height)
+        val rectSize = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+        val cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx())
+
+        drawRoundRect(
+            color = Color(0xFFFFD54F).copy(alpha = 0.26f),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 6.dp.toPx())
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.84f),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 1.4.dp.toPx())
+        )
+        drawRoundRect(
+            color = Color(0xFFFFD54F),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 2.2.dp.toPx())
+        )
+    }
+}
+
+@Composable
 private fun FocusExposureConnector(
     focusPoint: Offset,
     sliderTopLeft: Offset,
@@ -1907,5 +2450,3 @@ private fun FocusExposureHandleSamsung(
         }
     }
 }
-
-

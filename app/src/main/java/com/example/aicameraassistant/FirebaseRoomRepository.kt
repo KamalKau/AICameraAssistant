@@ -114,6 +114,67 @@ class FirebaseRoomRepository {
         updateStringIfChanged(roomCode, "portraitEffect", portraitEffect)
     }
 
+    suspend fun updatePortraitSubjectState(
+        roomCode: String,
+        status: String,
+        left: Double,
+        top: Double,
+        right: Double,
+        bottom: Double
+    ) {
+        val safeStatus = when (status) {
+            "Portrait ready", "Move closer" -> status
+            else -> "Finding subject..."
+        }
+        val safeLeft = left.coerceIn(0.0, 1.0)
+        val safeTop = top.coerceIn(0.0, 1.0)
+        val safeRight = right.coerceIn(0.0, 1.0)
+        val safeBottom = bottom.coerceIn(0.0, 1.0)
+        val docRef = db.collection("rooms").document(roomCode)
+        val snapshot = docRef.get().await()
+        val unchanged =
+            snapshot.getString("portraitStatus") == safeStatus &&
+                (snapshot.getDouble("portraitFaceLeft") ?: 0.0) == safeLeft &&
+                (snapshot.getDouble("portraitFaceTop") ?: 0.0) == safeTop &&
+                (snapshot.getDouble("portraitFaceRight") ?: 0.0) == safeRight &&
+                (snapshot.getDouble("portraitFaceBottom") ?: 0.0) == safeBottom
+        if (unchanged) return
+
+        docRef.update(
+            mapOf(
+                "portraitStatus" to safeStatus,
+                "portraitFaceLeft" to safeLeft,
+                "portraitFaceTop" to safeTop,
+                "portraitFaceRight" to safeRight,
+                "portraitFaceBottom" to safeBottom
+            )
+        ).await()
+    }
+
+    suspend fun updateFaceDetectionOverlay(
+        roomCode: String,
+        faceDetected: Boolean,
+        faceBox: NormalizedFaceBounds,
+        timestamp: Long
+    ) {
+        val safeBox = mapOf(
+            "left" to faceBox.left.coerceIn(0.0, 1.0),
+            "top" to faceBox.top.coerceIn(0.0, 1.0),
+            "right" to faceBox.right.coerceIn(0.0, 1.0),
+            "bottom" to faceBox.bottom.coerceIn(0.0, 1.0)
+        )
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "faceBox" to safeBox,
+                    "faceDetected" to faceDetected,
+                    "faceDetectionTimestamp" to timestamp
+                )
+            )
+            .await()
+    }
+
     suspend fun updateFlashSupported(roomCode: String, flashSupported: Boolean) {
         db.collection("rooms")
             .document(roomCode)
@@ -290,6 +351,19 @@ class FirebaseRoomRepository {
             "portraitBlurLevel" to "blur",
             "portraitStrength" to 5L,
             "portraitEffect" to "blur",
+            "portraitStatus" to "Finding subject...",
+            "portraitFaceLeft" to 0.0,
+            "portraitFaceTop" to 0.0,
+            "portraitFaceRight" to 0.0,
+            "portraitFaceBottom" to 0.0,
+            "faceBox" to mapOf(
+                "left" to 0.0,
+                "top" to 0.0,
+                "right" to 0.0,
+                "bottom" to 0.0
+            ),
+            "faceDetected" to false,
+            "faceDetectionTimestamp" to 0L,
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -447,6 +521,46 @@ class FirebaseRoomRepository {
                         "studio", "mono", "backdrop", "low_key_mono", "high_key_mono", "color_point" -> effect
                         else -> "blur"
                     }
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getPortraitSubjectState(roomCode: String): Flow<PortraitSubjectState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val status = snapshot?.getString("portraitStatus") ?: "Finding subject..."
+                trySend(
+                    PortraitSubjectState(
+                        status = when (status) {
+                            "Portrait ready", "Move closer" -> status
+                            else -> "Finding subject..."
+                        },
+                        left = snapshot?.getDouble("portraitFaceLeft") ?: 0.0,
+                        top = snapshot?.getDouble("portraitFaceTop") ?: 0.0,
+                        right = snapshot?.getDouble("portraitFaceRight") ?: 0.0,
+                        bottom = snapshot?.getDouble("portraitFaceBottom") ?: 0.0
+                    )
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getFaceDetectionOverlayState(roomCode: String): Flow<FaceDetectionOverlayState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val box = snapshot?.get("faceBox") as? Map<*, *>
+                trySend(
+                    FaceDetectionOverlayState(
+                        faceDetected = snapshot?.getBoolean("faceDetected") ?: false,
+                        faceBox = NormalizedFaceBounds(
+                            left = (box?.get("left") as? Number)?.toDouble() ?: 0.0,
+                            top = (box?.get("top") as? Number)?.toDouble() ?: 0.0,
+                            right = (box?.get("right") as? Number)?.toDouble() ?: 0.0,
+                            bottom = (box?.get("bottom") as? Number)?.toDouble() ?: 0.0
+                        ),
+                        timestamp = snapshot?.getLong("faceDetectionTimestamp") ?: 0L
+                    )
                 )
             }
         awaitClose { listener.remove() }

@@ -1,10 +1,15 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.animation.ValueAnimator
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
+import androidx.core.animation.doOnEnd
 import org.webrtc.SurfaceViewRenderer
 
 class ControllerPreviewContainer @JvmOverloads constructor(
@@ -13,6 +18,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 ) : FrameLayout(context, attrs) {
 
     val renderer = SurfaceViewRenderer(context)
+    private val faceOverlay = ControllerFaceDetectionOverlayView(context)
 
     private var videoAspectRatio = 9f / 16f
     private var rotateContent = false
@@ -27,6 +33,16 @@ class ControllerPreviewContainer @JvmOverloads constructor(
             renderer,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
+        renderer.setZOrderMediaOverlay(false)
+        addView(
+            faceOverlay,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
+        faceOverlay.bringToFront()
+    }
+
+    fun setFaceDetectionOverlay(bounds: NormalizedFaceBounds, visible: Boolean) {
+        faceOverlay.setFaceDetectionOverlay(bounds, visible)
     }
 
     fun setVideoLayout(width: Int, height: Int, rotateClockwise: Boolean) {
@@ -101,6 +117,8 @@ class ControllerPreviewContainer @JvmOverloads constructor(
             childLeft + childWidth,
             childTop + childHeight
         )
+        faceOverlay.layout(0, 0, measuredWidth, measuredHeight)
+        faceOverlay.bringToFront()
 
         val visibleLeft = (measuredWidth - displayWidthPx) / 2f
         val visibleTop = (measuredHeight - displayHeightPx) / 2f
@@ -112,5 +130,86 @@ class ControllerPreviewContainer @JvmOverloads constructor(
                 visibleTop + displayHeightPx
             )
         )
+        faceOverlay.setVideoRect(
+            RectF(
+                visibleLeft,
+                visibleTop,
+                visibleLeft + displayWidthPx,
+                visibleTop + displayHeightPx
+            )
+        )
+    }
+}
+
+private class ControllerFaceDetectionOverlayView(context: Context) : View(context) {
+    private val videoRect = RectF()
+    private var bounds = NormalizedFaceBounds()
+    private var overlayAlpha = 0f
+    private var alphaAnimator: ValueAnimator? = null
+
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 6f * resources.displayMetrics.density
+        color = Color.argb(61, 255, 213, 79)
+    }
+    private val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.4f * resources.displayMetrics.density
+        color = Color.argb(199, 255, 255, 255)
+    }
+    private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f * resources.displayMetrics.density
+        color = Color.rgb(255, 213, 79)
+    }
+
+    fun setVideoRect(rect: RectF) {
+        videoRect.set(rect)
+        invalidate()
+    }
+
+    fun setFaceDetectionOverlay(nextBounds: NormalizedFaceBounds, visible: Boolean) {
+        bounds = nextBounds
+        animateAlpha(if (visible && nextBounds.isValid()) 1f else 0f)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (overlayAlpha <= 0.01f || !bounds.isValid() || videoRect.isEmpty) return
+
+        val density = resources.displayMetrics.density
+        val paddingPx = 10f * density
+        val left = (videoRect.left + (bounds.left.toFloat() * videoRect.width()) - paddingPx)
+            .coerceIn(videoRect.left, videoRect.right)
+        val top = (videoRect.top + (bounds.top.toFloat() * videoRect.height()) - paddingPx)
+            .coerceIn(videoRect.top, videoRect.bottom)
+        val right = (videoRect.left + (bounds.right.toFloat() * videoRect.width()) + paddingPx)
+            .coerceIn(left, videoRect.right)
+        val bottom = (videoRect.top + (bounds.bottom.toFloat() * videoRect.height()) + paddingPx)
+            .coerceIn(top, videoRect.bottom)
+        val radius = 18f * density
+
+        glowPaint.alpha = (61 * overlayAlpha).toInt().coerceIn(0, 255)
+        whitePaint.alpha = (199 * overlayAlpha).toInt().coerceIn(0, 255)
+        accentPaint.alpha = (255 * overlayAlpha).toInt().coerceIn(0, 255)
+
+        val rect = RectF(left, top, right, bottom)
+        canvas.drawRoundRect(rect, radius, radius, glowPaint)
+        canvas.drawRoundRect(rect, radius, radius, whitePaint)
+        canvas.drawRoundRect(rect, radius, radius, accentPaint)
+    }
+
+    private fun animateAlpha(targetAlpha: Float) {
+        if (overlayAlpha == targetAlpha) return
+        alphaAnimator?.cancel()
+        alphaAnimator = ValueAnimator.ofFloat(overlayAlpha, targetAlpha).apply {
+            duration = if (targetAlpha > overlayAlpha) 120L else 220L
+            addUpdateListener { animator ->
+                overlayAlpha = animator.animatedValue as Float
+                invalidate()
+            }
+            doOnEnd { alphaAnimator = null }
+            start()
+        }
     }
 }

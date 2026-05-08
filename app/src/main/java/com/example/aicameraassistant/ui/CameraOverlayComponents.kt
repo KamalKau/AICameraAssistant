@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -83,6 +84,51 @@ fun NightModeAssistLight(
             radius = circleRadius,
             center = center,
             style = Stroke(width = 1.6.dp.toPx())
+        )
+    }
+}
+
+@Composable
+fun FaceDetectionFocusBox(
+    bounds: NormalizedFaceBounds,
+    visible: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val alpha by animateFloatAsState(
+        targetValue = if (visible && bounds.isValid()) 1f else 0f,
+        label = "face_detection_box_alpha"
+    )
+    if (alpha <= 0.01f || !bounds.isValid()) return
+
+    Canvas(modifier = modifier) {
+        val paddingPx = 10.dp.toPx()
+        val left = (bounds.left.toFloat() * size.width - paddingPx).coerceIn(0f, size.width)
+        val top = (bounds.top.toFloat() * size.height - paddingPx).coerceIn(0f, size.height)
+        val right = (bounds.right.toFloat() * size.width + paddingPx).coerceIn(left, size.width)
+        val bottom = (bounds.bottom.toFloat() * size.height + paddingPx).coerceIn(top, size.height)
+        val rectSize = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+        val cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx())
+
+        drawRoundRect(
+            color = Color(0xFFFFD54F).copy(alpha = 0.24f * alpha),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 6.dp.toPx())
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.78f * alpha),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 1.4.dp.toPx())
+        )
+        drawRoundRect(
+            color = Color(0xFFFFD54F).copy(alpha = alpha),
+            topLeft = Offset(left, top),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = 2.2.dp.toPx())
         )
     }
 }

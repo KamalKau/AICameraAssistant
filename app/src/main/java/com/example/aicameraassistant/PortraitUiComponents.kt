@@ -5,11 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +50,11 @@ enum class PortraitEffect(
 fun PortraitPreviewOverlay(
     effectKey: String,
     strength: Int,
+    status: String = "Portrait ready",
+    faceLeft: Double = 0.0,
+    faceTop: Double = 0.0,
+    faceRight: Double = 0.0,
+    faceBottom: Double = 0.0,
     modifier: Modifier = Modifier
 ) {
     val effect = PortraitEffect.fromKey(effectKey)
@@ -166,15 +173,31 @@ fun PortraitPreviewOverlay(
             )
         }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.58f)
-                .height(220.dp)
-                .clip(RoundedCornerShape(34.dp))
-                .border(2.dp, portraitFrameColor(effect), RoundedCornerShape(34.dp))
-                .background(Color.White.copy(alpha = 0.035f))
-        )
+        val hasFaceFrame =
+            faceRight > faceLeft &&
+                faceBottom > faceTop &&
+                faceLeft in 0.0..1.0 &&
+                faceTop in 0.0..1.0
+
+        if (hasFaceFrame) {
+            BoxWithNormalizedBounds(
+                left = faceLeft,
+                top = faceTop,
+                right = faceRight,
+                bottom = faceBottom,
+                borderColor = portraitFrameColor(effect)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(0.58f)
+                    .height(220.dp)
+                    .clip(RoundedCornerShape(34.dp))
+                    .border(2.dp, portraitFrameColor(effect), RoundedCornerShape(34.dp))
+                    .background(Color.White.copy(alpha = 0.035f))
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -186,7 +209,7 @@ fun PortraitPreviewOverlay(
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
-                text = "Portrait ready",
+                text = status,
                 color = Color.White,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
@@ -198,6 +221,34 @@ fun PortraitPreviewOverlay(
                 fontWeight = FontWeight.Medium
             )
         }
+    }
+}
+
+@Composable
+private fun BoxWithNormalizedBounds(
+    left: Double,
+    top: Double,
+    right: Double,
+    bottom: Double,
+    borderColor: Color
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val width = maxWidth
+        val height = maxHeight
+        val boxWidth = (width * (right - left).toFloat()).coerceAtLeast(96.dp)
+        val boxHeight = (height * (bottom - top).toFloat()).coerceAtLeast(128.dp)
+        val x = (width * left.toFloat()).coerceIn(0.dp, width - boxWidth)
+        val y = (height * top.toFloat()).coerceIn(0.dp, height - boxHeight)
+
+        Box(
+            modifier = Modifier
+                .padding(start = x, top = y)
+                .width(boxWidth)
+                .height(boxHeight)
+                .clip(RoundedCornerShape(34.dp))
+                .border(2.dp, borderColor, RoundedCornerShape(34.dp))
+                .background(Color.White.copy(alpha = 0.035f))
+        )
     }
 }
 

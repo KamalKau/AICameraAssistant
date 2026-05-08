@@ -135,6 +135,14 @@ fun WaitingForApprovalScreen(
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
     val firebasePortraitEffect = remoteUiState.portraitEffect
+    val firebasePortraitStatus = remoteUiState.portraitStatus
+    val firebasePortraitFaceLeft = remoteUiState.portraitFaceLeft
+    val firebasePortraitFaceTop = remoteUiState.portraitFaceTop
+    val firebasePortraitFaceRight = remoteUiState.portraitFaceRight
+    val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
+    val firebaseFaceDetected = remoteUiState.faceDetected
+    val firebaseFaceBox = remoteUiState.faceBox
+    val firebaseFaceDetectionTimestamp = remoteUiState.faceDetectionTimestamp
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
@@ -185,6 +193,8 @@ fun WaitingForApprovalScreen(
     var currentOfferSessionId by screenViewModel::currentOfferSessionId
     var lastOfferCreatedAtMs by screenViewModel::lastOfferCreatedAtMs
     var previewRetryCount by screenViewModel::previewRetryCount
+    var remoteFaceBoxBounds by remember { mutableStateOf(NormalizedFaceBounds()) }
+    var remoteFaceBoxVisible by remember { mutableStateOf(false) }
 
     val shouldSwapRemoteFrame =
         (remoteFrameRotation == 90 || remoteFrameRotation == 270) ||
@@ -208,6 +218,28 @@ fun WaitingForApprovalScreen(
         remoteFrameRotation == 0 &&
             cameraPreviewHeight > cameraPreviewWidth &&
             remoteFrameWidth > remoteFrameHeight
+
+    LaunchedEffect(firebaseFaceDetected, firebaseFaceDetectionTimestamp) {
+        if (firebaseFaceDetected && firebaseFaceBox.isValid()) {
+            remoteFaceBoxBounds = firebaseFaceBox
+            remoteFaceBoxVisible = true
+        } else {
+            remoteFaceBoxVisible = false
+            remoteFaceBoxBounds = NormalizedFaceBounds()
+        }
+    }
+
+    LaunchedEffect(
+        previewContainerRef,
+        firebaseCameraMode,
+        remoteFaceBoxBounds,
+        remoteFaceBoxVisible
+    ) {
+        previewContainerRef?.setFaceDetectionOverlay(
+            bounds = remoteFaceBoxBounds,
+            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+        )
+    }
 
     val controllerDisplayWidth = normalizedRemoteFrameWidth
     val controllerDisplayHeight = normalizedRemoteFrameHeight
@@ -898,6 +930,10 @@ fun WaitingForApprovalScreen(
                                     shouldRotatePreviewContent
                                 )
                             }
+                            container.setFaceDetectionOverlay(
+                                bounds = remoteFaceBoxBounds,
+                                visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+                            )
                             remoteTrack?.let { track ->
                                 track.setEnabled(true)
                                 runCatching { track.removeSink(renderer) }
@@ -923,6 +959,10 @@ fun WaitingForApprovalScreen(
                                 shouldRotatePreviewContent
                             )
                         }
+                        container.setFaceDetectionOverlay(
+                            bounds = remoteFaceBoxBounds,
+                            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+                        )
                         container.onVideoRectChanged = { rect ->
                             previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
                         }
@@ -1025,6 +1065,11 @@ fun WaitingForApprovalScreen(
                     PortraitPreviewOverlay(
                         effectKey = firebasePortraitEffect,
                         strength = firebasePortraitStrength,
+                        status = firebasePortraitStatus,
+                        faceLeft = firebasePortraitFaceLeft,
+                        faceTop = firebasePortraitFaceTop,
+                        faceRight = firebasePortraitFaceRight,
+                        faceBottom = firebasePortraitFaceBottom,
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .offset {
