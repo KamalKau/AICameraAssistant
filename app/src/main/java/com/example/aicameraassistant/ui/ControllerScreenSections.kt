@@ -173,18 +173,10 @@ private fun CompactPortraitControls(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(20.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            PortraitStrengthBar(
-                strength = strength,
-                onStrengthChange = onStrengthSelected
-            )
-        }
+        PortraitStrengthBar(
+            strength = strength,
+            onStrengthChange = onStrengthSelected
+        )
 
         Column(
             modifier = Modifier
@@ -219,26 +211,40 @@ private fun PortraitStrengthBar(
     onStrengthChange: (Int) -> Unit
 ) {
     val clampedStrength = strength.coerceIn(1, 7)
+    val progress = (clampedStrength - 1).toFloat() / 6f
+
     fun strengthFromX(x: Float, width: Int): Int {
         if (width <= 0) return clampedStrength
         val progressFromLeft = (x / width.toFloat()).coerceIn(0f, 1f)
         return (1 + (progressFromLeft * 6f)).roundToInt().coerceIn(1, 7)
     }
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
+    Row(
+        modifier = Modifier
+            .background(Color(0xFF2E2E2E).copy(alpha = 0.95f), RoundedCornerShape(24.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(24.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "Effect strength",
-            color = Color.White,
-            fontSize = 13.sp
+            text = "S",
+            color = Color.White.copy(alpha = 0.82f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = clampedStrength.toString(),
+            color = Color(0xFFFFD54F),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
 
-        Row(
+        Box(
             modifier = Modifier
-                .width(148.dp)
+                .width(134.dp)
+                .height(24.dp)
                 .pointerInput(clampedStrength) {
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -251,44 +257,50 @@ private fun PortraitStrengthBar(
                             change.consume()
                         }
                     )
-                },
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+                }
         ) {
-            (1..7).forEach { value ->
-                Box(
-                    modifier = Modifier
-                        .size(width = 14.dp, height = 28.dp)
-                        .clickable {
-                            if (value != clampedStrength) onStrengthChange(value)
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                val centerY = size.height / 2f
+                val startX = 5.dp.toPx()
+                val endX = size.width - 5.dp.toPx()
+                val trackWidth = endX - startX
+                val indicatorX = startX + (trackWidth * progress.coerceIn(0f, 1f))
+
+                repeat(11) { index ->
+                    val tickX = startX + (trackWidth * (index / 10f))
+                    val distanceFromCenter = kotlin.math.abs(index - 5)
+                    val tickHeight = when (distanceFromCenter) {
+                        0 -> 14.dp.toPx()
+                        1, 2 -> 9.dp.toPx()
+                        else -> 6.dp.toPx()
+                    }
+                    drawLine(
+                        color = if (index == 5) {
+                            Color.White.copy(alpha = 0.64f)
+                        } else {
+                            Color.White.copy(alpha = 0.22f)
                         },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .width(2.dp)
-                            .height(if (value == clampedStrength) 24.dp else 12.dp)
-                            .background(
-                                if (value == clampedStrength) {
-                                    Color(0xFFFFD54F)
-                                } else {
-                                    Color.White.copy(alpha = 0.65f)
-                                },
-                                RoundedCornerShape(50)
-                            )
+                        start = Offset(tickX, centerY - (tickHeight / 2f)),
+                        end = Offset(tickX, centerY + (tickHeight / 2f)),
+                        strokeWidth = if (index == 5) 1.25.dp.toPx() else 0.95.dp.toPx(),
+                        cap = StrokeCap.Round
                     )
                 }
+
+                drawLine(
+                    color = Color(0xFFFFD54F),
+                    start = Offset(indicatorX, centerY - 11.dp.toPx()),
+                    end = Offset(indicatorX, centerY + 11.dp.toPx()),
+                    strokeWidth = 1.8.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                drawCircle(
+                    color = Color(0xFFFFD54F),
+                    radius = 2.4.dp.toPx(),
+                    center = Offset(indicatorX, centerY)
+                )
             }
         }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = clampedStrength.toString(),
-            color = Color(0xFFFFD54F),
-            fontWeight = FontWeight.Bold,
-            fontSize = 16.sp
-        )
     }
 }
 
