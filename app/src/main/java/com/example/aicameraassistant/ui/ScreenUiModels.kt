@@ -71,6 +71,8 @@ data class ControllerBottomControlsUiState(
     val maxZoom: Float,
     val commonZoomOptions: List<Float>,
     val isBurstCapturing: Boolean,
+    val isVideoMode: Boolean,
+    val isVideoRecording: Boolean,
     val burstCaptureCount: Int,
     val shutterScale: Float,
     val shutterCoreScale: Float,

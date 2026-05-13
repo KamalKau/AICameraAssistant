@@ -86,7 +86,10 @@ class FirebaseRoomRepository {
     }
 
     suspend fun updateCameraMode(roomCode: String, mode: String) {
-        val cameraMode = if (mode == "portrait") "portrait" else "photo"
+        val cameraMode = when (mode) {
+            "portrait", "video" -> mode
+            else -> "photo"
+        }
         updateStringIfChanged(roomCode, "cameraMode", cameraMode)
     }
 
@@ -498,7 +501,12 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 val cameraMode = snapshot?.getString("cameraMode")
-                trySend(if (cameraMode == "portrait") "portrait" else "photo")
+                trySend(
+                    when (cameraMode) {
+                        "portrait", "video" -> cameraMode
+                        else -> "photo"
+                    }
+                )
             }
         awaitClose { listener.remove() }
     }

@@ -21,6 +21,11 @@ import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.VideoCapture
 import androidx.camera.view.ExperimentalPreviewViewScreenFlash
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animateFloatAsState
@@ -154,6 +159,7 @@ fun CameraScreen(
 
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
 
     var resolvedWidth by remember { mutableIntStateOf(0) }
@@ -186,6 +192,8 @@ fun CameraScreen(
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
     var boomerangInProgress by screenViewModel::boomerangInProgress
     var captureMode by screenViewModel::captureMode
+    var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
+    val videoRecorder = remember(context) { CameraVideoRecorder(context) }
     var selfieLightVisible by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
     var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
@@ -1032,9 +1040,30 @@ fun CameraScreen(
         }
     }
 
+    fun toggleVideoRecording(onRequestHandled: () -> Unit): Boolean {
+        return videoRecorder.toggle(
+            videoCapture = videoCapture,
+            onRecordingStateChanged = { videoRecordingInProgress = it },
+            onRequestHandled = onRequestHandled
+        )
+    }
+
     suspend fun handleCaptureRequest(requestId: Long, requestType: String) {
         Log.d("AICameraAssistant", "CAPTURE_REQUEST")
         Log.d("AICameraAssistant", "Handling capture request type=$requestType id=$requestId")
+
+        if (requestType == "video") {
+            val toggled = toggleVideoRecording {
+                lastHandledCaptureRequestId = requestId
+                scope.launch {
+                    repository.resetCaptureRequest(roomCode)
+                }
+            }
+            if (!toggled) {
+                Toast.makeText(context, "Video is not ready", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
 
         if (requestType == "boomerang") {
             if (boomerangInProgress) return
@@ -1149,7 +1178,13 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(firebaseCaptureRequestId, firebaseCaptureRequestType, imageCapture) {
+    LaunchedEffect(
+        firebaseCaptureRequestId,
+        firebaseCaptureRequestType,
+        imageCapture,
+        videoCapture,
+        firebaseCameraMode
+    ) {
         if (firebaseCaptureRequestId <= 0L || firebaseCaptureRequestId == lastHandledCaptureRequestId) {
             return@LaunchedEffect
         }
@@ -1166,7 +1201,8 @@ fun CameraScreen(
     }
 
 
-    LaunchedEffect(lensFacing, isStreaming) {
+    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode) {
+        videoRecorder.stop { videoRecordingInProgress = it }
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = try {
             cameraProviderFuture.get()
@@ -1176,7 +1212,11 @@ fun CameraScreen(
 
         delay(300)
 
-        val targetSize = Size(1080, 1920)
+        val targetSize = if (firebaseCameraMode == "video") {
+            Size(720, 1280)
+        } else {
+            Size(1080, 1920)
+        }
         val targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
 
         val resolutionSelector = ResolutionSelector.Builder()
@@ -1200,6 +1240,16 @@ fun CameraScreen(
             .setResolutionSelector(resolutionSelector)
             .setTargetRotation(targetRotation)
             .build()
+
+        val recorder = Recorder.Builder()
+            .setQualitySelector(
+                QualitySelector.fromOrderedList(
+                    listOf(Quality.HD, Quality.SD),
+                    FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+                )
+            )
+            .build()
+        val newVideoCapture = VideoCapture.withOutput(recorder)
 
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
@@ -1272,7 +1322,7 @@ fun CameraScreen(
             cameraAnalysisActive = false
             lastCameraAnalysisResultMs = 0L
 
-            val finalUseCases = mutableListOf<UseCase>(localPreview, newImageCapture)
+            val finalUseCases = mutableListOf<UseCase>(localPreview)
             val analysisSize = Size(320, 240)
             val analysisResolutionSelector = ResolutionSelector.Builder()
                 .setResolutionStrategy(
@@ -1319,9 +1369,10 @@ fun CameraScreen(
                 )
             }
 
+            var streamingPreview: Preview? = null
             if (isStreaming) {
                 webRtcSourceReady = false
-                val streamMaxLongEdge = 1920
+                val streamMaxLongEdge = if (firebaseCameraMode == "video") 1280 else 1920
                 val streamScale =
                     (streamMaxLongEdge.toFloat() / maxOf(rawSize.width, rawSize.height)).coerceAtMost(1f)
                 val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
@@ -1335,19 +1386,19 @@ fun CameraScreen(
                 )
 
                 if (webRtcSurface != null) {
-                    val streamingPreview = Preview.Builder()
+                    streamingPreview = Preview.Builder()
                         .setResolutionSelector(resolutionSelector)
                         .setTargetRotation(targetRotation)
                         .build()
 
-                    streamingPreview.setSurfaceProvider { request ->
+                    streamingPreview?.setSurfaceProvider { request ->
                         request.provideSurface(
                             webRtcSurface,
                             ContextCompat.getMainExecutor(context)
                         ) {}
                     }
 
-                    finalUseCases.add(streamingPreview)
+                    streamingPreview?.let { finalUseCases.add(it) }
                     webRtcSourceReady = true
                 }
             } else {
@@ -1355,14 +1406,24 @@ fun CameraScreen(
                 WebRtcSessionManager.stopLocalCamera()
             }
 
-            val finalCamera = try {
-                val boundCamera = cameraProvider.bindToLifecycle(
+            if (firebaseCameraMode != "video") {
+                finalUseCases.add(newImageCapture)
+            }
+            if (firebaseCameraMode == "video") {
+                finalUseCases.add(newVideoCapture)
+            }
+
+            fun bindFinalUseCases(useCases: List<UseCase>): Camera =
+                cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
-                    *finalUseCases.toTypedArray()
+                    *useCases.toTypedArray()
                 )
-                cameraAnalysisActive = true
-                boundCamera
+
+            val finalCamera = try {
+                bindFinalUseCases(finalUseCases).also {
+                    cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                }
             } catch (bindWithAnalysisError: Exception) {
                 Log.w(
                     "FACE_DETECTION",
@@ -1379,19 +1440,51 @@ fun CameraScreen(
                     bounds = PortraitFaceBounds(),
                     force = true
                 )
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    *finalUseCases.toTypedArray()
-                )
+                try {
+                    bindFinalUseCases(finalUseCases).also {
+                        cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                    }
+                } catch (bindWithStreamingVideoError: Exception) {
+                    val removedStreamingPreview =
+                        firebaseCameraMode == "video" &&
+                            streamingPreview != null &&
+                            finalUseCases.remove(streamingPreview)
+                    if (removedStreamingPreview) {
+                        Log.w(
+                            "CAMERA_BIND",
+                            "Camera bind with streaming preview and video failed; retrying without streaming preview",
+                            bindWithStreamingVideoError
+                        )
+                        webRtcSourceReady = false
+                        WebRtcSessionManager.stopLocalCamera()
+                    }
+                    try {
+                        bindFinalUseCases(finalUseCases).also {
+                            cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                        }
+                    } catch (bindWithVideoError: Exception) {
+                        Log.w(
+                            "CAMERA_BIND",
+                            "Camera bind with video capture failed; retrying without video",
+                            bindWithVideoError
+                        )
+                        finalUseCases.remove(newVideoCapture)
+                        videoCapture = null
+                        bindFinalUseCases(finalUseCases).also {
+                            cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                        }
+                    }
+                }
             }
 
             camera = finalCamera
-            imageCapture = newImageCapture
+            imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
+            videoCapture = if (finalUseCases.contains(newVideoCapture)) newVideoCapture else null
             publishExposureState(finalCamera)
         } catch (e: Exception) {
             cameraAnalysisActive = false
             lastCameraAnalysisResultMs = 0L
+            videoCapture = null
             Log.e("CAMERA_BIND", "Camera bind failed", e)
         }
     }
@@ -1411,6 +1504,9 @@ fun CameraScreen(
     }
 
     LaunchedEffect(firebaseCameraMode, camera, resolvedWidth, resolvedHeight) {
+        if (firebaseCameraMode != "video" && videoRecorder.isRecording) {
+            videoRecorder.stop { videoRecordingInProgress = it }
+        }
         if (camera == null) {
             clearPhotoFaceDetection()
             publishPortraitSubjectState(
@@ -1504,6 +1600,7 @@ fun CameraScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            videoRecorder.stop { videoRecordingInProgress = it }
             shutterSound.release()
             faceDetector.close()
             faceAnalysisExecutor.shutdown()
@@ -1766,6 +1863,11 @@ private fun HostCameraModeStatus(
     portraitBlurLevel: String
 ) {
     val isPortrait = cameraMode == "portrait"
+    val modeLabel = when (cameraMode) {
+        "video" -> "Video"
+        "portrait" -> "Portrait"
+        else -> "Photo"
+    }
     Row(
         modifier = Modifier
             .background(Color.Black.copy(alpha = 0.34f), RoundedCornerShape(16.dp))
@@ -1774,7 +1876,7 @@ private fun HostCameraModeStatus(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "Mode: ${if (isPortrait) "Portrait" else "Photo"}",
+            text = "Mode: $modeLabel",
             color = Color.White.copy(alpha = 0.88f),
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium
@@ -1814,6 +1916,12 @@ private fun HostCameraModeStrip(
         verticalAlignment = Alignment.CenterVertically
     ) {
         HostCameraModeItem(
+            label = "VIDEO",
+            mode = "video",
+            selected = selectedMode == "video",
+            onModeSelected = onModeSelected
+        )
+        HostCameraModeItem(
             label = "PORTRAIT",
             mode = "portrait",
             selected = selectedMode == "portrait",
@@ -1822,7 +1930,7 @@ private fun HostCameraModeStrip(
         HostCameraModeItem(
             label = "PHOTO",
             mode = "photo",
-            selected = selectedMode != "portrait",
+            selected = selectedMode == "photo",
             onModeSelected = onModeSelected
         )
     }

@@ -40,6 +40,7 @@ class CameraScreenViewModel : ViewModel() {
     var lastHandledOfferSessionId by mutableStateOf<String?>(null)
     var boomerangInProgress by mutableStateOf(false)
     var captureMode by mutableStateOf("photo")
+    var videoRecordingInProgress by mutableStateOf(false)
 
     private fun resetSessionState() {
         flashAlpha = 0f
@@ -57,6 +58,7 @@ class CameraScreenViewModel : ViewModel() {
         lastHandledOfferSessionId = null
         boomerangInProgress = false
         captureMode = "photo"
+        videoRecordingInProgress = false
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {

@@ -106,19 +106,10 @@ fun ControllerBottomControls(
         )
     }
 
-    if (state.isBurstCapturing) {
-        Box(
-            modifier = Modifier
-                .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 7.dp)
-        ) {
-            Text(
-                text = state.burstCaptureCount.toString(),
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp
-            )
-        }
+    if (state.isVideoRecording) {
+        RecordingStatusPill()
+    } else if (state.isBurstCapturing) {
+        BurstStatusPill(count = state.burstCaptureCount)
     }
 
     Row(
@@ -131,34 +122,105 @@ fun ControllerBottomControls(
             onClick = actions.onPortraitControlsClick
         )
 
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .graphicsLayer {
-                    scaleX = state.shutterScale
-                    scaleY = state.shutterScale
-                }
-                .border(4.dp, Color.White, CircleShape)
-                .padding(6.dp)
-                .clip(CircleShape)
-                .background(Color.White)
-                .pointerInput(state.roomCode) {
-                    detectTapGestures(onPress = actions.onShutterPress)
-                }
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = state.shutterCoreScale
-                        scaleY = state.shutterCoreScale
-                    }
-                    .clip(if (state.isBurstCapturing) RoundedCornerShape(18.dp) else CircleShape)
-                    .background(Color.White)
-            )
-        }
+        ControllerShutterButton(
+            state = state,
+            onShutterPress = actions.onShutterPress
+        )
 
         Spacer(modifier = Modifier.width(36.dp))
+    }
+}
+
+@Composable
+private fun RecordingStatusPill() {
+    Row(
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFFF2D2D))
+        )
+        Text(
+            text = "REC",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
+        )
+    }
+}
+
+@Composable
+private fun BurstStatusPill(count: Int) {
+    Box(
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.44f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = count.toString(),
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp
+        )
+    }
+}
+
+@Composable
+private fun ControllerShutterButton(
+    state: ControllerBottomControlsUiState,
+    onShutterPress: suspend androidx.compose.foundation.gestures.PressGestureScope.(Offset) -> Unit
+) {
+    val recordingRed = Color(0xFFD32F2F)
+    val outerColor = when {
+        state.isVideoRecording -> Color.White
+        state.isVideoMode -> recordingRed
+        else -> Color.White
+    }
+    val coreColor = when {
+        state.isVideoRecording -> recordingRed
+        state.isVideoMode -> recordingRed
+        else -> Color.White
+    }
+    val coreShape = when {
+        state.isVideoRecording -> RoundedCornerShape(8.dp)
+        state.isBurstCapturing -> RoundedCornerShape(18.dp)
+        else -> CircleShape
+    }
+    val coreSize = if (state.isVideoRecording) 30.dp else 64.dp
+
+    Box(
+        modifier = Modifier
+            .size(80.dp)
+            .graphicsLayer {
+                scaleX = state.shutterScale
+                scaleY = state.shutterScale
+            }
+            .border(4.dp, Color.White, CircleShape)
+            .padding(6.dp)
+            .clip(CircleShape)
+            .background(outerColor)
+            .pointerInput(state.roomCode, state.isVideoMode, state.isVideoRecording) {
+                detectTapGestures(onPress = onShutterPress)
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(coreSize)
+                .graphicsLayer {
+                    scaleX = state.shutterCoreScale
+                    scaleY = state.shutterCoreScale
+                }
+                .clip(coreShape)
+                .background(coreColor)
+        )
     }
 }
 

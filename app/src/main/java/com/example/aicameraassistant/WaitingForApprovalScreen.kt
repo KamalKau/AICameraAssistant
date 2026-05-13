@@ -179,6 +179,7 @@ fun WaitingForApprovalScreen(
     var shutterPressed by screenViewModel::shutterPressed
     var captureRequestSequence by screenViewModel::captureRequestSequence
     var captureMode by screenViewModel::captureMode
+    var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
     var showPortraitControls by screenViewModel::showPortraitControls
     var burstJob by screenViewModel::burstJob
     var isBurstCapturing by screenViewModel::isBurstCapturing
@@ -384,6 +385,8 @@ fun WaitingForApprovalScreen(
         maxZoom = maxZoom.toFloat(),
         commonZoomOptions = commonZoomOptions,
         isBurstCapturing = isBurstCapturing,
+        isVideoMode = firebaseCameraMode == "video",
+        isVideoRecording = videoRecordingInProgress,
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
         shutterCoreScale = shutterCoreScale,
@@ -399,11 +402,7 @@ fun WaitingForApprovalScreen(
     }
 
     fun releaseControllerPreview() {
-        previewContainerRef?.renderer?.let { renderer ->
-            remoteTrack?.let { track ->
-                runCatching { track.removeSink(renderer) }
-            }
-        }
+        previewContainerRef?.detachRemoteTrack()
         remoteTrack = null
         remoteFrameWidth = 0
         remoteFrameHeight = 0
@@ -430,7 +429,7 @@ fun WaitingForApprovalScreen(
     }
 
     fun triggerCaptureRequest() {
-        val requestType = captureMode
+        val requestType = if (firebaseCameraMode == "video") "video" else captureMode
         controllerCoordinator.triggerCaptureRequest(
             nextRequestId = nextCaptureRequestId(captureRequestSequence),
             setCaptureRequestSequence = { captureRequestSequence = it },
@@ -440,6 +439,8 @@ fun WaitingForApprovalScreen(
         )
         if (requestType == "boomerang") {
             captureMode = "photo"
+        } else if (requestType == "video") {
+            videoRecordingInProgress = !videoRecordingInProgress
         }
     }
 
@@ -519,6 +520,9 @@ fun WaitingForApprovalScreen(
     }
 
     LaunchedEffect(firebaseCameraMode) {
+        if (firebaseCameraMode != "video") {
+            videoRecordingInProgress = false
+        }
         if (firebaseCameraMode != "portrait") {
             showPortraitControls = false
         }
@@ -552,7 +556,7 @@ fun WaitingForApprovalScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            remoteTrack?.removeSink(previewContainerRef?.renderer)
+            previewContainerRef?.detachRemoteTrack()
             previewContainerRef?.renderer?.release()
             previewContainerRef = null
             remoteTrack = null
@@ -617,10 +621,8 @@ fun WaitingForApprovalScreen(
                     scope.launch(Dispatchers.Main) {
                         Log.d("WEBRTC_LOG", "Controller received remote track")
                         remoteTrack = track
-                        previewContainerRef?.renderer?.let { renderer ->
-                            track.setEnabled(true)
-                            runCatching { track.removeSink(renderer) }
-                            track.addSink(renderer)
+                        previewContainerRef?.attachRemoteTrack(track) {
+                            lastFrameTimestampMs = SystemClock.elapsedRealtime()
                         }
                     }
                 }
@@ -697,18 +699,18 @@ fun WaitingForApprovalScreen(
     }
 
     DisposableEffect(previewContainerRef, remoteTrack) {
-        val renderer = previewContainerRef?.renderer
+        val container = previewContainerRef
         val track = remoteTrack
-        if (renderer == null || track == null) {
+        if (container == null || track == null) {
             onDispose { }
         } else {
             Log.d("WEBRTC_LOG", "Controller rendering remote track")
-            track.setEnabled(true)
-            track.removeSink(renderer)
-            track.addSink(renderer)
+            container.attachRemoteTrack(track) {
+                lastFrameTimestampMs = SystemClock.elapsedRealtime()
+            }
 
             onDispose {
-                runCatching { track.removeSink(renderer) }
+                container.detachRemoteTrack()
             }
         }
     }
@@ -936,9 +938,9 @@ fun WaitingForApprovalScreen(
                                 visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
                             )
                             remoteTrack?.let { track ->
-                                track.setEnabled(true)
-                                runCatching { track.removeSink(renderer) }
-                                track.addSink(renderer)
+                                container.attachRemoteTrack(track) {
+                                    lastFrameTimestampMs = SystemClock.elapsedRealtime()
+                                }
                             }
                             container.onVideoRectChanged = { rect ->
                                 previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
@@ -1231,14 +1233,18 @@ fun WaitingForApprovalScreen(
                     },
                         onShutterPress = { _ ->
                         var burstStarted = false
-                        val startBurstJob = scope.launch {
-                            delay(350)
-                            burstStarted = true
-                            startBurstCapture()
+                        val startBurstJob = if (firebaseCameraMode == "video") {
+                            null
+                        } else {
+                            scope.launch {
+                                delay(350)
+                                burstStarted = true
+                                startBurstCapture()
+                            }
                         }
 
                         val released = tryAwaitRelease()
-                        startBurstJob.cancel()
+                        startBurstJob?.cancel()
 
                         if (burstStarted || isBurstCapturing) {
                             stopBurstCapture()
@@ -1283,6 +1289,12 @@ private fun ControllerCameraModeStrip(
         verticalAlignment = Alignment.CenterVertically
     ) {
         ControllerCameraModeItem(
+            label = "VIDEO",
+            mode = "video",
+            selected = selectedMode == "video",
+            onModeSelected = onModeSelected
+        )
+        ControllerCameraModeItem(
             label = "PORTRAIT",
             mode = "portrait",
             selected = selectedMode == "portrait",
@@ -1291,7 +1303,7 @@ private fun ControllerCameraModeStrip(
         ControllerCameraModeItem(
             label = "PHOTO",
             mode = "photo",
-            selected = selectedMode != "portrait",
+            selected = selectedMode == "photo",
             onModeSelected = onModeSelected
         )
     }

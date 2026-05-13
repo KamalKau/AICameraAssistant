@@ -6,11 +6,17 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
 import androidx.core.animation.doOnEnd
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoFrame
+import org.webrtc.VideoSink
+import org.webrtc.VideoTrack
 
 class ControllerPreviewContainer @JvmOverloads constructor(
     context: Context,
@@ -19,6 +25,8 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
     val renderer = SurfaceViewRenderer(context)
     private val faceOverlay = ControllerFaceDetectionOverlayView(context)
+    private var attachedTrack: VideoTrack? = null
+    private var frameSink: FrameTimestampVideoSink? = null
 
     private var videoAspectRatio = 9f / 16f
     private var rotateContent = false
@@ -61,6 +69,32 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         videoAspectRatio = nextAspectRatio
         rotateContent = rotateClockwise
         requestLayout()
+    }
+
+    fun attachRemoteTrack(track: VideoTrack?, onFrameReceived: () -> Unit) {
+        if (attachedTrack == track && frameSink != null) return
+
+        detachRemoteTrack()
+        if (track == null) return
+
+        val sink = FrameTimestampVideoSink(
+            renderer = renderer,
+            onFrameReceived = onFrameReceived
+        )
+        attachedTrack = track
+        frameSink = sink
+        track.setEnabled(true)
+        track.addSink(sink)
+    }
+
+    fun detachRemoteTrack() {
+        val track = attachedTrack
+        val sink = frameSink
+        if (track != null && sink != null) {
+            runCatching { track.removeSink(sink) }
+        }
+        attachedTrack = null
+        frameSink = null
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -145,6 +179,28 @@ class ControllerPreviewContainer @JvmOverloads constructor(
                 visibleTop + displayHeightPx
             )
         )
+    }
+}
+
+private class FrameTimestampVideoSink(
+    private val renderer: VideoSink,
+    private val onFrameReceived: () -> Unit
+) : VideoSink {
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var lastTimestampPostedMs = 0L
+
+    override fun onFrame(frame: VideoFrame) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTimestampPostedMs >= FRAME_TIMESTAMP_INTERVAL_MS) {
+            lastTimestampPostedMs = now
+            mainHandler.post(onFrameReceived)
+        }
+        renderer.onFrame(frame)
+    }
+
+    private companion object {
+        const val FRAME_TIMESTAMP_INTERVAL_MS = 500L
     }
 }
 
