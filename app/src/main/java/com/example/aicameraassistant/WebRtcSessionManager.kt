@@ -4,8 +4,6 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
-import androidx.camera.core.ImageProxy
-import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -247,9 +245,9 @@ object WebRtcSessionManager {
     }
 
     @Synchronized
-    fun startImageFrameSource(context: Context, width: Int, height: Int): Boolean {
+    fun startImageFrameSource(context: Context, width: Int, height: Int): VideoSource? {
         initialize(context)
-        val f = factory ?: return false
+        val f = factory ?: return null
 
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
@@ -260,7 +258,7 @@ object WebRtcSessionManager {
             captureWidth == safeWidth &&
             captureHeight == safeHeight
         ) {
-            return true
+            return videoSource
         }
 
         stopLocalCamera()
@@ -275,30 +273,10 @@ object WebRtcSessionManager {
             imageFrameSourceActive = true
             attachLocalTracksToCameraPeer()
             Log.d("WEBRTC_LOG", "Image WebRTC source started with size: ${captureWidth}x${captureHeight}")
-            true
+            vSource
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Failed to start image frame source", t)
-            false
-        }
-    }
-
-    fun pushImageFrame(image: ImageProxy, mirrorHorizontally: Boolean = false): Boolean {
-        val source: VideoSource
-        synchronized(this) {
-            if (!imageFrameSourceActive) return false
-            source = videoSource ?: return false
-        }
-
-        val buffer = imageProxyToI420Buffer(image, mirrorHorizontally)
-        val frame = VideoFrame(buffer, image.imageInfo.rotationDegrees, System.nanoTime())
-        return try {
-            source.capturerObserver.onFrameCaptured(frame)
-            true
-        } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to push image frame", t)
-            false
-        } finally {
-            frame.release()
+            null
         }
     }
 
@@ -342,68 +320,6 @@ object WebRtcSessionManager {
         }
     }
 
-    private fun imageProxyToI420Buffer(
-        image: ImageProxy,
-        mirrorHorizontally: Boolean
-    ): JavaI420Buffer {
-        val width = image.width
-        val height = image.height
-        val buffer = JavaI420Buffer.allocate(width, height)
-
-        copyPlane(
-            source = image.planes[0].buffer,
-            sourceRowStride = image.planes[0].rowStride,
-            sourcePixelStride = image.planes[0].pixelStride,
-            dest = buffer.dataY,
-            destRowStride = buffer.strideY,
-            width = width,
-            height = height,
-            mirrorHorizontally = mirrorHorizontally
-        )
-        copyPlane(
-            source = image.planes[1].buffer,
-            sourceRowStride = image.planes[1].rowStride,
-            sourcePixelStride = image.planes[1].pixelStride,
-            dest = buffer.dataU,
-            destRowStride = buffer.strideU,
-            width = (width + 1) / 2,
-            height = (height + 1) / 2,
-            mirrorHorizontally = mirrorHorizontally
-        )
-        copyPlane(
-            source = image.planes[2].buffer,
-            sourceRowStride = image.planes[2].rowStride,
-            sourcePixelStride = image.planes[2].pixelStride,
-            dest = buffer.dataV,
-            destRowStride = buffer.strideV,
-            width = (width + 1) / 2,
-            height = (height + 1) / 2,
-            mirrorHorizontally = mirrorHorizontally
-        )
-
-        return buffer
-    }
-
-    private fun copyPlane(
-        source: ByteBuffer,
-        sourceRowStride: Int,
-        sourcePixelStride: Int,
-        dest: ByteBuffer,
-        destRowStride: Int,
-        width: Int,
-        height: Int,
-        mirrorHorizontally: Boolean
-    ) {
-        val sourceBuffer = source.duplicate()
-        for (row in 0 until height) {
-            val sourceRowOffset = row * sourceRowStride
-            val destRowOffset = row * destRowStride
-            for (col in 0 until width) {
-                val destCol = if (mirrorHorizontally) width - 1 - col else col
-                dest.put(destRowOffset + destCol, sourceBuffer.get(sourceRowOffset + col * sourcePixelStride))
-            }
-        }
-    }
 
     @Synchronized
     fun createCameraPeerConnection(onIceCandidate: (IceCandidate) -> Unit): PeerConnection? {

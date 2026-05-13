@@ -194,6 +194,7 @@ fun CameraScreen(
     var captureMode by screenViewModel::captureMode
     var videoRecordingState by screenViewModel::videoRecordingState
     val videoRecorder = remember(context) { CameraVideoRecorder(context) }
+    val videoFrameSource = remember { WebRtcImageFrameSource() }
     var selfieLightVisible by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
     var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
@@ -1415,13 +1416,12 @@ fun CameraScreen(
 
                 val webRtcSurface = if (firebaseCameraMode == "video") {
                     if (
-                        WebRtcSessionManager.startImageFrameSource(
+                        videoFrameSource.start(
                             context = context,
                             width = streamWidth,
                             height = streamHeight
                         )
                     ) {
-                        var lastVideoStreamFrameMs = 0L
                         val videoStreamResolutionSelector = ResolutionSelector.Builder()
                             .setResolutionStrategy(
                                 ResolutionStrategy(
@@ -1436,17 +1436,10 @@ fun CameraScreen(
                             .setTargetRotation(targetRotation)
                             .build()
                             .apply {
-                                setAnalyzer(faceAnalysisExecutor) { imageProxy ->
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastVideoStreamFrameMs >= 66L) {
-                                        lastVideoStreamFrameMs = now
-                                        WebRtcSessionManager.pushImageFrame(
-                                            image = imageProxy,
-                                            mirrorHorizontally = isFrontCamera
-                                        )
-                                    }
-                                    imageProxy.close()
-                                }
+                                setAnalyzer(
+                                    faceAnalysisExecutor,
+                                    videoFrameSource.buildAnalyzer(mirrorHorizontally = isFrontCamera)
+                                )
                             }
                         videoStreamAnalysis?.let { finalUseCases.add(it) }
                         webRtcSourceReady = true
