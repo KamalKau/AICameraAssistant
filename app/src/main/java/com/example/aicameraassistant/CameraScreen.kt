@@ -192,7 +192,7 @@ fun CameraScreen(
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
     var boomerangInProgress by screenViewModel::boomerangInProgress
     var captureMode by screenViewModel::captureMode
-    var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
+    var videoRecordingState by screenViewModel::videoRecordingState
     val videoRecorder = remember(context) { CameraVideoRecorder(context) }
     var selfieLightVisible by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
@@ -1040,26 +1040,60 @@ fun CameraScreen(
         }
     }
 
-    fun toggleVideoRecording(onRequestHandled: () -> Unit): Boolean {
-        return videoRecorder.toggle(
-            videoCapture = videoCapture,
-            onRecordingStateChanged = { videoRecordingInProgress = it },
-            onRequestHandled = onRequestHandled
-        )
+    fun updateVideoRecordingState(state: VideoRecordingState) {
+        videoRecordingState = state
+    }
+
+    fun handleVideoRequest(requestType: String, onRequestHandled: () -> Unit): Boolean {
+        return when (requestType) {
+            "video_start" -> videoRecorder.start(
+                videoCapture = videoCapture,
+                onRecordingStateChanged = ::updateVideoRecordingState,
+                onRequestHandled = onRequestHandled
+            )
+
+            "video_stop" -> videoRecorder.stop(
+                onRecordingStateChanged = ::updateVideoRecordingState,
+                onRequestHandled = onRequestHandled
+            )
+
+            "video_pause" -> videoRecorder.pause(
+                onRecordingStateChanged = ::updateVideoRecordingState,
+                onRequestHandled = onRequestHandled
+            )
+
+            "video_resume" -> videoRecorder.resume(
+                onRecordingStateChanged = ::updateVideoRecordingState,
+                onRequestHandled = onRequestHandled
+            )
+
+            else -> if (videoRecorder.isRecording) {
+                videoRecorder.stop(
+                    onRecordingStateChanged = ::updateVideoRecordingState,
+                    onRequestHandled = onRequestHandled
+                )
+            } else {
+                videoRecorder.start(
+                    videoCapture = videoCapture,
+                    onRecordingStateChanged = ::updateVideoRecordingState,
+                    onRequestHandled = onRequestHandled
+                )
+            }
+        }
     }
 
     suspend fun handleCaptureRequest(requestId: Long, requestType: String) {
         Log.d("AICameraAssistant", "CAPTURE_REQUEST")
         Log.d("AICameraAssistant", "Handling capture request type=$requestType id=$requestId")
 
-        if (requestType == "video") {
-            val toggled = toggleVideoRecording {
+        if (requestType.startsWith("video")) {
+            val handled = handleVideoRequest(requestType) {
                 lastHandledCaptureRequestId = requestId
                 scope.launch {
                     repository.resetCaptureRequest(roomCode)
                 }
             }
-            if (!toggled) {
+            if (!handled) {
                 Toast.makeText(context, "Video is not ready", Toast.LENGTH_SHORT).show()
             }
             return
@@ -1202,7 +1236,7 @@ fun CameraScreen(
 
 
     LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode) {
-        videoRecorder.stop { videoRecordingInProgress = it }
+        videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = try {
             cameraProviderFuture.get()
@@ -1370,6 +1404,7 @@ fun CameraScreen(
             }
 
             var streamingPreview: Preview? = null
+            var videoStreamAnalysis: ImageAnalysis? = null
             if (isStreaming) {
                 webRtcSourceReady = false
                 val streamMaxLongEdge = if (firebaseCameraMode == "video") 1280 else 1920
@@ -1378,12 +1413,53 @@ fun CameraScreen(
                 val streamWidth = (rawSize.width * streamScale).toInt().coerceAtLeast(1)
                 val streamHeight = (rawSize.height * streamScale).toInt().coerceAtLeast(1)
 
-                val webRtcSurface = WebRtcSessionManager.startWebRtcCameraSource(
-                    context = context,
-                    width = streamWidth,
-                    height = streamHeight,
-                    rotationDegrees = rotationDegrees
-                )
+                val webRtcSurface = if (firebaseCameraMode == "video") {
+                    if (
+                        WebRtcSessionManager.startImageFrameSource(
+                            context = context,
+                            width = streamWidth,
+                            height = streamHeight
+                        )
+                    ) {
+                        var lastVideoStreamFrameMs = 0L
+                        val videoStreamResolutionSelector = ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    Size(streamWidth, streamHeight),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                                )
+                            )
+                            .build()
+                        videoStreamAnalysis = ImageAnalysis.Builder()
+                            .setResolutionSelector(videoStreamResolutionSelector)
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setTargetRotation(targetRotation)
+                            .build()
+                            .apply {
+                                setAnalyzer(faceAnalysisExecutor) { imageProxy ->
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastVideoStreamFrameMs >= 66L) {
+                                        lastVideoStreamFrameMs = now
+                                        WebRtcSessionManager.pushImageFrame(
+                                            image = imageProxy,
+                                            mirrorHorizontally = isFrontCamera
+                                        )
+                                    }
+                                    imageProxy.close()
+                                }
+                            }
+                        videoStreamAnalysis?.let { finalUseCases.add(it) }
+                        webRtcSourceReady = true
+                    }
+                    null
+                } else {
+                    WebRtcSessionManager.startWebRtcCameraSource(
+                        context = context,
+                        width = streamWidth,
+                        height = streamHeight,
+                        rotationDegrees = rotationDegrees
+                    )
+                }
 
                 if (webRtcSurface != null) {
                     streamingPreview = Preview.Builder()
@@ -1449,10 +1525,23 @@ fun CameraScreen(
                         firebaseCameraMode == "video" &&
                             streamingPreview != null &&
                             finalUseCases.remove(streamingPreview)
+                    val removedVideoStreamAnalysis =
+                        firebaseCameraMode == "video" &&
+                            videoStreamAnalysis != null &&
+                            finalUseCases.remove(videoStreamAnalysis)
                     if (removedStreamingPreview) {
                         Log.w(
                             "CAMERA_BIND",
                             "Camera bind with streaming preview and video failed; retrying without streaming preview",
+                            bindWithStreamingVideoError
+                        )
+                        webRtcSourceReady = false
+                        WebRtcSessionManager.stopLocalCamera()
+                    }
+                    if (removedVideoStreamAnalysis) {
+                        Log.w(
+                            "CAMERA_BIND",
+                            "Camera bind with video analysis stream failed; retrying without controller stream",
                             bindWithStreamingVideoError
                         )
                         webRtcSourceReady = false
@@ -1505,7 +1594,7 @@ fun CameraScreen(
 
     LaunchedEffect(firebaseCameraMode, camera, resolvedWidth, resolvedHeight) {
         if (firebaseCameraMode != "video" && videoRecorder.isRecording) {
-            videoRecorder.stop { videoRecordingInProgress = it }
+            videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
         }
         if (camera == null) {
             clearPhotoFaceDetection()
@@ -1600,7 +1689,7 @@ fun CameraScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            videoRecorder.stop { videoRecordingInProgress = it }
+            videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
             shutterSound.release()
             faceDetector.close()
             faceAnalysisExecutor.shutdown()

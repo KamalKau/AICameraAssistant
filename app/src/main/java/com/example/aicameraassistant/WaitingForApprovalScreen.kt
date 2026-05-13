@@ -180,6 +180,7 @@ fun WaitingForApprovalScreen(
     var captureRequestSequence by screenViewModel::captureRequestSequence
     var captureMode by screenViewModel::captureMode
     var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
+    var videoRecordingPaused by screenViewModel::videoRecordingPaused
     var showPortraitControls by screenViewModel::showPortraitControls
     var burstJob by screenViewModel::burstJob
     var isBurstCapturing by screenViewModel::isBurstCapturing
@@ -387,6 +388,7 @@ fun WaitingForApprovalScreen(
         isBurstCapturing = isBurstCapturing,
         isVideoMode = firebaseCameraMode == "video",
         isVideoRecording = videoRecordingInProgress,
+        isVideoPaused = videoRecordingPaused,
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
         shutterCoreScale = shutterCoreScale,
@@ -428,8 +430,12 @@ fun WaitingForApprovalScreen(
         )
     }
 
-    fun triggerCaptureRequest() {
-        val requestType = if (firebaseCameraMode == "video") "video" else captureMode
+    fun triggerCaptureRequest(requestTypeOverride: String? = null) {
+        val requestType = requestTypeOverride ?: if (firebaseCameraMode == "video") {
+            if (videoRecordingInProgress) "video_stop" else "video_start"
+        } else {
+            captureMode
+        }
         controllerCoordinator.triggerCaptureRequest(
             nextRequestId = nextCaptureRequestId(captureRequestSequence),
             setCaptureRequestSequence = { captureRequestSequence = it },
@@ -441,6 +447,17 @@ fun WaitingForApprovalScreen(
             captureMode = "photo"
         } else if (requestType == "video") {
             videoRecordingInProgress = !videoRecordingInProgress
+            videoRecordingPaused = false
+        } else if (requestType == "video_start") {
+            videoRecordingInProgress = true
+            videoRecordingPaused = false
+        } else if (requestType == "video_stop") {
+            videoRecordingInProgress = false
+            videoRecordingPaused = false
+        } else if (requestType == "video_pause") {
+            videoRecordingPaused = true
+        } else if (requestType == "video_resume") {
+            videoRecordingPaused = false
         }
     }
 
@@ -522,6 +539,7 @@ fun WaitingForApprovalScreen(
     LaunchedEffect(firebaseCameraMode) {
         if (firebaseCameraMode != "video") {
             videoRecordingInProgress = false
+            videoRecordingPaused = false
         }
         if (firebaseCameraMode != "portrait") {
             showPortraitControls = false
@@ -1204,54 +1222,63 @@ fun WaitingForApprovalScreen(
                     state = controllerBottomControlsUiState,
                     actions = ControllerBottomControlsActions(
                         onZoomBarValueChange = { newValue ->
-                        isZoomDragging = true
-                        zoomUiValue = newValue
-                        sendZoomUpdate(newValue)
-                    },
+                            isZoomDragging = true
+                            zoomUiValue = newValue
+                            sendZoomUpdate(newValue)
+                        },
                         onZoomBarFinished = {
-                        isZoomDragging = false
-                        sendZoomUpdate(zoomUiValue, force = true)
-                        showZoomRing = false
-                    },
+                            isZoomDragging = false
+                            sendZoomUpdate(zoomUiValue, force = true)
+                            showZoomRing = false
+                        },
                         onZoomPresetClick = { selectedZoom ->
-                        zoomUiValue = selectedZoom
-                        isZoomDragging = false
-                        sendZoomUpdate(selectedZoom, force = true)
-                        showZoomRing = false
-                    },
+                            zoomUiValue = selectedZoom
+                            isZoomDragging = false
+                            sendZoomUpdate(selectedZoom, force = true)
+                            showZoomRing = false
+                        },
                         onZoomPresetLongPress = { showZoomRing = true },
                         onPortraitControlsClick = {
-                        if (firebaseCameraMode == "portrait") {
-                            showPortraitControls = !showPortraitControls
-                        }
-                    },
+                            if (firebaseCameraMode == "portrait") {
+                                showPortraitControls = !showPortraitControls
+                            }
+                        },
                         onPortraitStrengthSelected = { strength ->
-                        updatePortraitStrength(strength)
-                    },
+                            updatePortraitStrength(strength)
+                        },
                         onPortraitEffectSelected = { effect ->
-                        updatePortraitEffect(effect)
-                    },
+                            updatePortraitEffect(effect)
+                        },
+                        onVideoPauseToggle = {
+                            triggerCaptureRequest(
+                                if (videoRecordingPaused) "video_resume" else "video_pause"
+                            )
+                        },
+                        onVideoStop = {
+                            triggerCaptureRequest("video_stop")
+                        },
                         onShutterPress = { _ ->
-                        var burstStarted = false
-                        val startBurstJob = if (firebaseCameraMode == "video") {
-                            null
-                        } else {
-                            scope.launch {
-                                delay(350)
-                                burstStarted = true
-                                startBurstCapture()
+                            var burstStarted = false
+                            val startBurstJob = if (firebaseCameraMode == "video") {
+                                null
+                            } else {
+                                scope.launch {
+                                    delay(350)
+                                    burstStarted = true
+                                    startBurstCapture()
+                                }
+                            }
+
+                            val released = tryAwaitRelease()
+                            startBurstJob?.cancel()
+
+                            if (burstStarted || isBurstCapturing) {
+                                stopBurstCapture()
+                            } else if (released) {
+                                triggerCaptureRequest()
                             }
                         }
-
-                        val released = tryAwaitRelease()
-                        startBurstJob?.cancel()
-
-                        if (burstStarted || isBurstCapturing) {
-                            stopBurstCapture()
-                        } else if (released) {
-                            triggerCaptureRequest()
-                        }
-                    })
+                    )
                 )
                 ControllerCameraModeStrip(
                     selectedMode = firebaseCameraMode,

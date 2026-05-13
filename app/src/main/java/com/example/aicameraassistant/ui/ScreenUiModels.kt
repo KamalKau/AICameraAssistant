@@ -73,6 +73,7 @@ data class ControllerBottomControlsUiState(
     val isBurstCapturing: Boolean,
     val isVideoMode: Boolean,
     val isVideoRecording: Boolean,
+    val isVideoPaused: Boolean,
     val burstCaptureCount: Int,
     val shutterScale: Float,
     val shutterCoreScale: Float,
@@ -90,5 +91,7 @@ data class ControllerBottomControlsActions(
     val onPortraitControlsClick: () -> Unit,
     val onPortraitStrengthSelected: (Int) -> Unit,
     val onPortraitEffectSelected: (String) -> Unit,
+    val onVideoPauseToggle: () -> Unit,
+    val onVideoStop: () -> Unit,
     val onShutterPress: suspend androidx.compose.foundation.gestures.PressGestureScope.(androidx.compose.ui.geometry.Offset) -> Unit
 )

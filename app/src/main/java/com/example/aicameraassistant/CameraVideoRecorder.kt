@@ -14,22 +14,26 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 
+enum class VideoRecordingState {
+    Idle,
+    Recording,
+    Paused
+}
+
 class CameraVideoRecorder(private val context: Context) {
     private var activeRecording: Recording? = null
+    private var recordingState: VideoRecordingState = VideoRecordingState.Idle
 
     val isRecording: Boolean
         get() = activeRecording != null
 
     @SuppressLint("MissingPermission")
-    fun toggle(
+    fun start(
         videoCapture: VideoCapture<Recorder>?,
-        onRecordingStateChanged: (Boolean) -> Unit,
+        onRecordingStateChanged: (VideoRecordingState) -> Unit,
         onRequestHandled: () -> Unit
     ): Boolean {
-        activeRecording?.let { recording ->
-            recording.stop()
-            activeRecording = null
-            onRecordingStateChanged(false)
+        if (activeRecording != null) {
             onRequestHandled()
             return true
         }
@@ -47,14 +51,26 @@ class CameraVideoRecorder(private val context: Context) {
         activeRecording = pendingRecording.start(ContextCompat.getMainExecutor(context)) { event ->
             when (event) {
                 is VideoRecordEvent.Start -> {
-                    onRecordingStateChanged(true)
+                    recordingState = VideoRecordingState.Recording
+                    onRecordingStateChanged(recordingState)
                     onRequestHandled()
                     Toast.makeText(context, "Video recording started", Toast.LENGTH_SHORT).show()
                 }
 
+                is VideoRecordEvent.Pause -> {
+                    recordingState = VideoRecordingState.Paused
+                    onRecordingStateChanged(recordingState)
+                }
+
+                is VideoRecordEvent.Resume -> {
+                    recordingState = VideoRecordingState.Recording
+                    onRecordingStateChanged(recordingState)
+                }
+
                 is VideoRecordEvent.Finalize -> {
                     activeRecording = null
-                    onRecordingStateChanged(false)
+                    recordingState = VideoRecordingState.Idle
+                    onRecordingStateChanged(recordingState)
                     if (event.hasError()) {
                         Log.e("AICameraAssistant", "Video recording failed: ${event.error}")
                         Toast.makeText(context, "Video recording failed", Toast.LENGTH_SHORT).show()
@@ -69,10 +85,56 @@ class CameraVideoRecorder(private val context: Context) {
         return true
     }
 
-    fun stop(onRecordingStateChanged: (Boolean) -> Unit = {}) {
-        activeRecording?.stop()
+    fun pause(
+        onRecordingStateChanged: (VideoRecordingState) -> Unit,
+        onRequestHandled: () -> Unit
+    ): Boolean {
+        val recording = activeRecording ?: return false
+        if (recordingState == VideoRecordingState.Paused) {
+            onRequestHandled()
+            return true
+        }
+        recording.pause()
+        recordingState = VideoRecordingState.Paused
+        onRecordingStateChanged(recordingState)
+        onRequestHandled()
+        Toast.makeText(context, "Video paused", Toast.LENGTH_SHORT).show()
+        return true
+    }
+
+    fun resume(
+        onRecordingStateChanged: (VideoRecordingState) -> Unit,
+        onRequestHandled: () -> Unit
+    ): Boolean {
+        val recording = activeRecording ?: return false
+        if (recordingState == VideoRecordingState.Recording) {
+            onRequestHandled()
+            return true
+        }
+        recording.resume()
+        recordingState = VideoRecordingState.Recording
+        onRecordingStateChanged(recordingState)
+        onRequestHandled()
+        Toast.makeText(context, "Video resumed", Toast.LENGTH_SHORT).show()
+        return true
+    }
+
+    fun stop(
+        onRecordingStateChanged: (VideoRecordingState) -> Unit = {},
+        onRequestHandled: () -> Unit = {}
+    ): Boolean {
+        val recording = activeRecording ?: run {
+            recordingState = VideoRecordingState.Idle
+            onRecordingStateChanged(recordingState)
+            onRequestHandled()
+            return true
+        }
+        recording.stop()
         activeRecording = null
-        onRecordingStateChanged(false)
+        recordingState = VideoRecordingState.Idle
+        onRecordingStateChanged(recordingState)
+        onRequestHandled()
+        return true
     }
 
     private fun buildOutputOptions(): MediaStoreOutputOptions {

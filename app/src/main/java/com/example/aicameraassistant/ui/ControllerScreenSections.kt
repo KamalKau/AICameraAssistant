@@ -21,6 +21,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.rememberScrollState
@@ -107,32 +113,48 @@ fun ControllerBottomControls(
     }
 
     if (state.isVideoRecording) {
-        RecordingStatusPill()
+        RecordingStatusPill(isPaused = state.isVideoPaused)
     } else if (state.isBurstCapturing) {
         BurstStatusPill(count = state.burstCaptureCount)
     }
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(34.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        PortraitFeatureButton(
-            enabled = state.portraitControlsEnabled,
-            selected = state.portraitControlsVisible,
-            onClick = actions.onPortraitControlsClick
-        )
+    if (state.isVideoRecording) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(28.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            VideoPauseResumeButton(
+                paused = state.isVideoPaused,
+                onClick = actions.onVideoPauseToggle
+            )
 
-        ControllerShutterButton(
-            state = state,
-            onShutterPress = actions.onShutterPress
-        )
+            VideoStopButton(onClick = actions.onVideoStop)
 
-        Spacer(modifier = Modifier.width(36.dp))
+            Spacer(modifier = Modifier.width(44.dp))
+        }
+    } else {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(34.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            PortraitFeatureButton(
+                enabled = state.portraitControlsEnabled,
+                selected = state.portraitControlsVisible,
+                onClick = actions.onPortraitControlsClick
+            )
+
+            ControllerShutterButton(
+                state = state,
+                onShutterPress = actions.onShutterPress
+            )
+
+            Spacer(modifier = Modifier.width(36.dp))
+        }
     }
 }
 
 @Composable
-private fun RecordingStatusPill() {
+private fun RecordingStatusPill(isPaused: Boolean) {
     Row(
         modifier = Modifier
             .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp))
@@ -148,10 +170,51 @@ private fun RecordingStatusPill() {
                 .background(Color(0xFFFF2D2D))
         )
         Text(
-            text = "REC",
+            text = if (isPaused) "PAUSED" else "REC",
             color = Color.White,
             fontWeight = FontWeight.Bold,
             fontSize = 15.sp
+        )
+    }
+}
+
+@Composable
+private fun VideoPauseResumeButton(
+    paused: Boolean,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.46f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+    ) {
+        Icon(
+            imageVector = if (paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+            contentDescription = if (paused) "Resume video" else "Pause video",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoStopButton(onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(Color.White)
+            .border(3.dp, Color.White.copy(alpha = 0.82f), CircleShape)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Stop,
+            contentDescription = "Stop video",
+            tint = Color(0xFFD32F2F),
+            modifier = Modifier.size(34.dp)
         )
     }
 }

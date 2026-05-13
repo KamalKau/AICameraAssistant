@@ -44,6 +44,7 @@ class ControllerScreenViewModel : ViewModel() {
     var captureRequestSequence by mutableLongStateOf(0L)
     var captureMode by mutableStateOf("photo")
     var videoRecordingInProgress by mutableStateOf(false)
+    var videoRecordingPaused by mutableStateOf(false)
     var showPortraitControls by mutableStateOf(false)
     var burstJob by mutableStateOf<Job?>(null)
     var isBurstCapturing by mutableStateOf(false)
@@ -74,6 +75,7 @@ class ControllerScreenViewModel : ViewModel() {
         shutterPressed = false
         captureMode = "photo"
         videoRecordingInProgress = false
+        videoRecordingPaused = false
         showPortraitControls = false
         burstJob?.cancel()
         burstJob = null
