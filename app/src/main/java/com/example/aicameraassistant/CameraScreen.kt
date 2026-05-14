@@ -196,6 +196,7 @@ fun CameraScreen(
     val videoRecorder = remember(context) { CameraVideoRecorder(context) }
     val videoFrameSource = remember { WebRtcImageFrameSource() }
     var selfieLightVisible by remember { mutableStateOf(false) }
+    var restartRecordingAfterCameraBind by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
     var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
     var lastPortraitStatus by remember { mutableStateOf("Finding subject...") }
@@ -1237,15 +1238,24 @@ fun CameraScreen(
 
 
     LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode) {
-        videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
+        val shouldRestartRecordingAfterBind =
+            videoRecorder.isRecording && firebaseCameraMode == "video"
+        restartRecordingAfterCameraBind = shouldRestartRecordingAfterBind
+        if (shouldRestartRecordingAfterBind) {
+            videoRecorder.stopForCameraSwitch(onRecordingStateChanged = ::updateVideoRecordingState)
+        } else {
+            videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
+        }
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = try {
             cameraProviderFuture.get()
         } catch (_: Exception) {
+            restartRecordingAfterCameraBind = false
+            if (shouldRestartRecordingAfterBind) {
+                updateVideoRecordingState(VideoRecordingState.Idle)
+            }
             return@LaunchedEffect
         }
-
-        delay(300)
 
         val targetSize = if (firebaseCameraMode == "video") {
             Size(720, 1280)
@@ -1285,6 +1295,9 @@ fun CameraScreen(
             )
             .build()
         val newVideoCapture = VideoCapture.withOutput(recorder)
+        if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+            newVideoCapture.targetRotation = targetRotation
+        }
 
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
@@ -1563,10 +1576,27 @@ fun CameraScreen(
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(newVideoCapture)) newVideoCapture else null
             publishExposureState(finalCamera)
+            if (restartRecordingAfterCameraBind) {
+                val restarted = videoRecorder.start(
+                    videoCapture = videoCapture,
+                    onRecordingStateChanged = ::updateVideoRecordingState,
+                    onRequestHandled = {},
+                    showStartToast = false
+                )
+                restartRecordingAfterCameraBind = false
+                if (!restarted) {
+                    updateVideoRecordingState(VideoRecordingState.Idle)
+                    Toast.makeText(context, "Video is not ready", Toast.LENGTH_SHORT).show()
+                }
+            }
         } catch (e: Exception) {
             cameraAnalysisActive = false
             lastCameraAnalysisResultMs = 0L
             videoCapture = null
+            restartRecordingAfterCameraBind = false
+            if (shouldRestartRecordingAfterBind) {
+                updateVideoRecordingState(VideoRecordingState.Idle)
+            }
             Log.e("CAMERA_BIND", "Camera bind failed", e)
         }
     }
