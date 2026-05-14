@@ -47,8 +47,12 @@ class WebRtcImageFrameSource(
         val source = videoSource ?: return false
         lastFrameMs = now
 
-        val buffer = frameConverter.convert(image, mirrorHorizontally)
-        val frame = VideoFrame(buffer, image.imageInfo.rotationDegrees, System.nanoTime())
+        val buffer = frameConverter.convert(
+            image = image,
+            mirrorHorizontally = mirrorHorizontally,
+            rotationDegrees = image.imageInfo.rotationDegrees
+        )
+        val frame = VideoFrame(buffer, 0, System.nanoTime())
         return try {
             source.capturerObserver.onFrameCaptured(frame)
             true

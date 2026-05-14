@@ -7,65 +7,101 @@ import org.webrtc.JavaI420Buffer
 object ImageProxyI420Converter {
     fun convert(
         image: ImageProxy,
-        mirrorHorizontally: Boolean
+        mirrorHorizontally: Boolean,
+        rotationDegrees: Int = 0
     ): JavaI420Buffer {
-        val width = image.width
-        val height = image.height
-        val buffer = JavaI420Buffer.allocate(width, height)
+        val sourceWidth = image.width
+        val sourceHeight = image.height
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+        val swapsDimensions = normalizedRotation == 90 || normalizedRotation == 270
+        val outputWidth = if (swapsDimensions) sourceHeight else sourceWidth
+        val outputHeight = if (swapsDimensions) sourceWidth else sourceHeight
+        val buffer = JavaI420Buffer.allocate(outputWidth, outputHeight)
 
-        copyPlane(
+        copyPlaneTransformed(
             source = image.planes[0].buffer,
             sourceRowStride = image.planes[0].rowStride,
             sourcePixelStride = image.planes[0].pixelStride,
             dest = buffer.dataY,
             destRowStride = buffer.strideY,
-            width = width,
-            height = height,
-            mirrorHorizontally = mirrorHorizontally
+            sourceWidth = sourceWidth,
+            sourceHeight = sourceHeight,
+            outputWidth = outputWidth,
+            outputHeight = outputHeight,
+            mirrorHorizontally = mirrorHorizontally,
+            rotationDegrees = normalizedRotation
         )
-        copyPlane(
+        copyPlaneTransformed(
             source = image.planes[1].buffer,
             sourceRowStride = image.planes[1].rowStride,
             sourcePixelStride = image.planes[1].pixelStride,
             dest = buffer.dataU,
             destRowStride = buffer.strideU,
-            width = (width + 1) / 2,
-            height = (height + 1) / 2,
-            mirrorHorizontally = mirrorHorizontally
+            sourceWidth = (sourceWidth + 1) / 2,
+            sourceHeight = (sourceHeight + 1) / 2,
+            outputWidth = (outputWidth + 1) / 2,
+            outputHeight = (outputHeight + 1) / 2,
+            mirrorHorizontally = mirrorHorizontally,
+            rotationDegrees = normalizedRotation
         )
-        copyPlane(
+        copyPlaneTransformed(
             source = image.planes[2].buffer,
             sourceRowStride = image.planes[2].rowStride,
             sourcePixelStride = image.planes[2].pixelStride,
             dest = buffer.dataV,
             destRowStride = buffer.strideV,
-            width = (width + 1) / 2,
-            height = (height + 1) / 2,
-            mirrorHorizontally = mirrorHorizontally
+            sourceWidth = (sourceWidth + 1) / 2,
+            sourceHeight = (sourceHeight + 1) / 2,
+            outputWidth = (outputWidth + 1) / 2,
+            outputHeight = (outputHeight + 1) / 2,
+            mirrorHorizontally = mirrorHorizontally,
+            rotationDegrees = normalizedRotation
         )
 
         return buffer
     }
 
-    private fun copyPlane(
+    private fun copyPlaneTransformed(
         source: ByteBuffer,
         sourceRowStride: Int,
         sourcePixelStride: Int,
         dest: ByteBuffer,
         destRowStride: Int,
-        width: Int,
-        height: Int,
-        mirrorHorizontally: Boolean
+        sourceWidth: Int,
+        sourceHeight: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+        mirrorHorizontally: Boolean,
+        rotationDegrees: Int
     ) {
         val sourceBuffer = source.duplicate()
-        for (row in 0 until height) {
-            val sourceRowOffset = row * sourceRowStride
+        for (row in 0 until outputHeight) {
             val destRowOffset = row * destRowStride
-            for (col in 0 until width) {
-                val destCol = if (mirrorHorizontally) width - 1 - col else col
+            for (col in 0 until outputWidth) {
+                val orientedCol = if (mirrorHorizontally) outputWidth - 1 - col else col
+                val sourceCol: Int
+                val sourceRow: Int
+                when (rotationDegrees) {
+                    90 -> {
+                        sourceCol = row
+                        sourceRow = sourceHeight - 1 - orientedCol
+                    }
+                    180 -> {
+                        sourceCol = sourceWidth - 1 - orientedCol
+                        sourceRow = sourceHeight - 1 - row
+                    }
+                    270 -> {
+                        sourceCol = sourceWidth - 1 - row
+                        sourceRow = orientedCol
+                    }
+                    else -> {
+                        sourceCol = orientedCol
+                        sourceRow = row
+                    }
+                }
                 dest.put(
-                    destRowOffset + destCol,
-                    sourceBuffer.get(sourceRowOffset + col * sourcePixelStride)
+                    destRowOffset + col,
+                    sourceBuffer.get(sourceRow * sourceRowStride + sourceCol * sourcePixelStride)
                 )
             }
         }
