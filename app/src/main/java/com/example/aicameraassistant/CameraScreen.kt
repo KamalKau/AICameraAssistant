@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -735,7 +736,13 @@ fun CameraScreen(
         }
 
         if (roomStatus == "ended") {
-            Toast.makeText(context, "Session ended", Toast.LENGTH_SHORT).show()
+            showStatusPopup(
+                context = context,
+                title = "Session ended",
+                detail = "Controller closed the session",
+                badge = "END",
+                accentColor = AndroidColor.rgb(255, 122, 69)
+            )
             hostCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
@@ -1874,15 +1881,6 @@ fun CameraScreen(
             focusPoint?.let { rawPoint ->
                 val previewRect =
                     previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
-                val focusUiBounds = with(density) {
-                    focusUiBounds(
-                    previewRect = previewRect,
-                    topInsetPx = 132.dp.toPx(),
-                    rightInsetPx = 116.dp.toPx(),
-                    edgePaddingPx = 12.dp.toPx(),
-                    reticleRadiusPx = 34.dp.toPx()
-                    )
-                }
                 val point = rawPoint.clampOffsetTo(previewRect)
                 SharedFocusReticleSamsung(
                     point = point,
@@ -1907,7 +1905,8 @@ fun CameraScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 28.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
+                .statusBarsPadding()
+                .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
@@ -1930,6 +1929,7 @@ fun CameraScreen(
                 onReset = hostExposureUiActions.onReset,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
                     .padding(bottom = 112.dp)
             )
         }
@@ -2139,8 +2139,8 @@ private fun FocusReticle(
     )
     val ringColor = when {
         isLocked -> Color(0xFFFFC400)
-        true -> Color(0xFFFFD54F)
-        false -> Color.White.copy(alpha = 0.72f)
+        success == true -> Color(0xFFFFD54F)
+        success == false -> Color.White.copy(alpha = 0.72f)
         else -> Color.White
     }
 
@@ -2198,7 +2198,7 @@ private fun FocusReticle(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "−",
+                    text = "-",
                     color = Color.White.copy(alpha = 0.82f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Light
@@ -2378,8 +2378,8 @@ private fun FocusReticleSamsung(
     val density = LocalDensity.current
     val ringColor = when {
         isLocked -> Color(0xFFFFC400)
-        true -> Color(0xFFFFD54F)
-        false -> Color.White.copy(alpha = 0.72f)
+        success == true -> Color(0xFFFFD54F)
+        success == false -> Color.White.copy(alpha = 0.72f)
         else -> Color.White
     }
 

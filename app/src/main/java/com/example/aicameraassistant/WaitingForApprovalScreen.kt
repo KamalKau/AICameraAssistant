@@ -1,6 +1,7 @@
 package com.example.aicameraassistant
 
 import android.content.Context
+import android.graphics.Color as AndroidColor
 import android.media.MediaActionSound
 import android.os.Build
 import android.os.SystemClock
@@ -248,6 +249,7 @@ fun WaitingForApprovalScreen(
     val controllerDisplayHeight = normalizedRemoteFrameHeight
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
+    val controllerMaxZoom = maxZoom.coerceAtLeast(CONTROLLER_ZOOM_BAR_MAX)
     val exposureUiState = buildExposureUiState(
         minIndex = firebaseExposureMinIndex,
         maxIndex = firebaseExposureMaxIndex,
@@ -269,7 +271,7 @@ fun WaitingForApprovalScreen(
         else -> "Connecting video..."
     }
     val commonZoomOptions = remember(minZoom, maxZoom) {
-        buildControllerCommonZoomOptions(minZoom, maxZoom)
+        buildControllerCommonZoomOptions(minZoom, controllerMaxZoom)
     }
     val flashModes = listOf("off", "auto", "on")
     val shutterScale by animateFloatAsState(
@@ -383,7 +385,7 @@ fun WaitingForApprovalScreen(
         showZoomRing = showZoomRing,
         zoomUiValue = zoomUiValue,
         minZoom = minZoom.toFloat(),
-        maxZoom = maxZoom.toFloat(),
+        maxZoom = controllerMaxZoom.toFloat(),
         commonZoomOptions = commonZoomOptions,
         isBurstCapturing = isBurstCapturing,
         isVideoMode = firebaseCameraMode == "video",
@@ -395,7 +397,8 @@ fun WaitingForApprovalScreen(
         portraitControlsVisible = firebaseCameraMode == "portrait" && showPortraitControls,
         portraitControlsEnabled = firebaseCameraMode == "portrait",
         portraitStrength = firebasePortraitStrength,
-        portraitEffect = firebasePortraitEffect
+        portraitEffect = firebasePortraitEffect,
+        lensFacing = firebaseLensFacing
     )
     DisposableEffect(Unit) {
         onDispose {
@@ -416,7 +419,7 @@ fun WaitingForApprovalScreen(
         controllerCoordinator.sendZoomUpdate(
             zoom = zoom,
             minZoom = minZoom,
-            maxZoom = maxZoom,
+            maxZoom = controllerMaxZoom,
             lastSentZoom = lastSentZoom,
             force = force,
             onLastSentZoomChanged = { lastSentZoom = it }
@@ -588,7 +591,13 @@ fun WaitingForApprovalScreen(
         }
 
         if (roomStatus == "ended" && hasSeenConnectedState) {
-            Toast.makeText(context, "Session ended by camera", Toast.LENGTH_SHORT).show()
+            showStatusPopup(
+                context = context,
+                title = "Session ended",
+                detail = "Camera closed the session",
+                badge = "END",
+                accentColor = AndroidColor.rgb(255, 122, 69)
+            )
             controllerCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
@@ -735,7 +744,10 @@ fun WaitingForApprovalScreen(
 
     LaunchedEffect(firebaseZoomLevel, minZoom, maxZoom, isZoomDragging) {
         if (!isZoomDragging) {
-            zoomUiValue = firebaseZoomLevel.toFloat().coerceIn(minZoom.toFloat(), maxZoom.toFloat())
+            zoomUiValue = firebaseZoomLevel.toFloat().coerceIn(
+                minZoom.toFloat(),
+                controllerMaxZoom.toFloat()
+            )
         }
     }
 
@@ -755,61 +767,88 @@ fun WaitingForApprovalScreen(
     }
 
     if (roomStatus != "connected") {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
+                .background(Color(0xFF05070B))
         ) {
-            Text(
-                text = when (roomStatus) {
-                    "denied" -> "Request Denied"
-                    "request_received" -> "Waiting for approval..."
-                    else -> "Connecting..."
-                },
-                style = MaterialTheme.typography.headlineMedium,
-                color = if (roomStatus == "denied") Color.Red else Color.White
-            )
+            HomeWallpaper(modifier = Modifier.fillMaxSize())
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                AppFrontLogo(
+                    modifier = Modifier
+                        .padding(bottom = 20.dp)
+                        .size(76.dp)
+                )
 
-            Text(
-                text = "Room Code: $roomCode",
-                color = Color.White.copy(alpha = 0.7f)
-            )
+                Text(
+                    text = when (roomStatus) {
+                        "denied" -> "Request denied"
+                        "request_received" -> "Waiting for approval"
+                        else -> "Connecting"
+                    },
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = if (roomStatus == "denied") Color(0xFFFF6B72) else Color.White,
+                    fontWeight = FontWeight.Bold
+                )
 
-            Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = {
-                    if (hasSeenConnectedState || roomStatus == "request_received") {
-                        controllerCoordinator.endSession(
-                            isEndingSession = isEndingSession,
-                            setIsEndingSession = { isEndingSession = it },
-                            performCleanup = { releaseControllerPreview() },
-                            sessionVersion = firebaseSessionVersion
+                Text(
+                    text = if (roomStatus == "request_received") {
+                        "The camera phone needs to approve this controller."
+                    } else {
+                        "Room $roomCode"
+                    },
+                    color = Color.White.copy(alpha = 0.68f),
+                    fontSize = 14.sp
+                )
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                Button(
+                    onClick = {
+                        if (hasSeenConnectedState || roomStatus == "request_received") {
+                            controllerCoordinator.endSession(
+                                isEndingSession = isEndingSession,
+                                setIsEndingSession = { isEndingSession = it },
+                                performCleanup = { releaseControllerPreview() },
+                                sessionVersion = firebaseSessionVersion
+                            )
+                        } else {
+                            onBack()
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = if (hasSeenConnectedState || roomStatus == "request_received") {
+                        ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFE53935),
+                            contentColor = Color.White
                         )
                     } else {
-                        onBack()
+                        ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color(0xFF141414)
+                        )
                     }
-                },
-                colors = if (hasSeenConnectedState || roomStatus == "request_received") {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
+                ) {
+                    Text(
+                        if (hasSeenConnectedState || roomStatus == "request_received") {
+                            if (isEndingSession) "Ending..." else "End session"
+                        } else {
+                            "Go back"
+                        },
+                        fontWeight = FontWeight.Bold
                     )
-                } else {
-                    ButtonDefaults.buttonColors()
                 }
-            ) {
-                Text(
-                    if (hasSeenConnectedState || roomStatus == "request_received") {
-                        if (isEndingSession) "Ending..." else "End Session"
-                    } else {
-                        "Go Back"
-                    }
-                )
             }
         }
     } else {
@@ -846,7 +885,7 @@ fun WaitingForApprovalScreen(
                             val nextZoom =
                                 (zoomUiValue * zoomChange).coerceIn(
                                     minZoom.toFloat(),
-                                    maxZoom.toFloat()
+                                    controllerMaxZoom.toFloat()
                                 )
 
                             isZoomDragging = true
@@ -1110,25 +1149,10 @@ fun WaitingForApprovalScreen(
                 focusPoint?.let { rawPoint ->
                     val previewRect =
                         activePreviewRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
-                    val focusUiBounds = with(density) {
-                        focusUiBounds(
-                            previewRect = previewRect,
-                            topInsetPx = 12.dp.toPx(),
-                            rightInsetPx = 88.dp.toPx(),
-                            edgePaddingPx = 12.dp.toPx(),
-                            reticleRadiusPx = 34.dp.toPx()
-                        )
-                    }
                     val point = rawPoint.clampOffsetTo(previewRect)
                     val localPoint = Offset(
                         x = point.x - previewRect.left,
                         y = point.y - previewRect.top
-                    )
-                    val localFocusUiBounds = Rect(
-                        left = focusUiBounds.left - previewRect.left,
-                        top = focusUiBounds.top - previewRect.top,
-                        right = focusUiBounds.right - previewRect.left,
-                        bottom = focusUiBounds.bottom - previewRect.top
                     )
 
                     Box(
@@ -1210,13 +1234,17 @@ fun WaitingForApprovalScreen(
                 )
             }
 
+            val compactBottomControlsActive =
+                showZoomRing ||
+                    (showPortraitControls && firebaseCameraMode == "portrait") ||
+                    (videoRecordingInProgress && firebaseCameraMode == "video")
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = 26.dp),
+                    .padding(bottom = if (compactBottomControlsActive) 6.dp else 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(if (compactBottomControlsActive) 8.dp else 12.dp)
             ) {
                 ControllerBottomControls(
                     state = controllerBottomControlsUiState,
@@ -1249,6 +1277,7 @@ fun WaitingForApprovalScreen(
                         onPortraitEffectSelected = { effect ->
                             updatePortraitEffect(effect)
                         },
+                        onLensClick = controllerToolRailActions.onLensClick,
                         onVideoPauseToggle = {
                             triggerCaptureRequest(
                                 if (videoRecordingPaused) "video_resume" else "video_pause"
@@ -1280,10 +1309,12 @@ fun WaitingForApprovalScreen(
                         }
                     )
                 )
-                ControllerCameraModeStrip(
-                    selectedMode = firebaseCameraMode,
-                    onModeSelected = { mode -> updateCameraMode(mode) }
-                )
+                if (!compactBottomControlsActive) {
+                    ControllerCameraModeStrip(
+                        selectedMode = firebaseCameraMode,
+                        onModeSelected = { mode -> updateCameraMode(mode) }
+                    )
+                }
             }
 
             if (exposureUiState.visible && exposureUiState.supported) {
@@ -1389,8 +1420,8 @@ private fun FocusReticleSamsung(
     val density = LocalDensity.current
     val ringColor = when {
         isLocked -> Color(0xFFFFC400)
-        true -> Color(0xFFFFD54F)
-        false -> Color.White.copy(alpha = 0.72f)
+        success == true -> Color(0xFFFFD54F)
+        success == false -> Color.White.copy(alpha = 0.72f)
         else -> Color.White
     }
 
@@ -1567,8 +1598,8 @@ private fun FocusReticle(
     )
     val ringColor = when {
         isLocked -> Color(0xFFFFC400)
-        true -> Color(0xFFFFD54F)
-        false -> Color.White.copy(alpha = 0.72f)
+        success == true -> Color(0xFFFFD54F)
+        success == false -> Color.White.copy(alpha = 0.72f)
         else -> Color.White
     }
 
@@ -1636,7 +1667,7 @@ private fun FocusReticle(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "−",
+                    text = "-",
                     color = Color.White.copy(alpha = 0.82f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Light
@@ -1759,5 +1790,7 @@ private fun FocusExposureConnector(
         )
     }
 }
+
+private const val CONTROLLER_ZOOM_BAR_MAX = 30.0
 
 

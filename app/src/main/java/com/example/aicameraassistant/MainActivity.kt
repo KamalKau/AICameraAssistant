@@ -16,8 +16,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -126,7 +129,7 @@ fun MainContent() {
                             if (exists) {
                                 currentScreen = "waiting_for_approval"
                             } else {
-                                controlRoomCodeError = "Wrong room code"
+                                controlRoomCodeError = "Room code not found"
                             }
                         }
                     }
@@ -169,9 +172,7 @@ fun MainContent() {
             }
         }
     } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Requesting permissions...")
-        }
+        PermissionsLoadingScreen()
     }
 }
 
@@ -197,6 +198,8 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
                 .padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
@@ -225,6 +228,7 @@ fun HomeScreen(
                 ),
                 borderColor = Color(0xFFFFC7A7),
                 modifier = Modifier
+                    .widthIn(max = 420.dp)
                     .fillMaxWidth()
                     .padding(bottom = 12.dp),
                 onClick = onStartCamera
@@ -240,8 +244,43 @@ fun HomeScreen(
                     )
                 ),
                 borderColor = Color(0xFF82B4FF),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .widthIn(max = 420.dp)
+                    .fillMaxWidth(),
                 onClick = onControlCamera
+            )
+        }
+    }
+}
+
+@Composable
+fun PermissionsLoadingScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF05070B)),
+        contentAlignment = Alignment.Center
+    ) {
+        HomeWallpaper(modifier = Modifier.fillMaxSize())
+        Column(
+            modifier = Modifier
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            AppFrontLogo(modifier = Modifier.size(74.dp))
+            Text(
+                text = "Requesting permissions",
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Camera and microphone access are needed to start a session.",
+                color = Color.White.copy(alpha = 0.68f),
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }

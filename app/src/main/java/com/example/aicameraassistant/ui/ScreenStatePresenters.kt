@@ -203,7 +203,8 @@ fun buildControllerBottomControlsUiState(
     portraitControlsVisible: Boolean,
     portraitControlsEnabled: Boolean,
     portraitStrength: Int,
-    portraitEffect: String
+    portraitEffect: String,
+    lensFacing: String
 ): ControllerBottomControlsUiState =
     ControllerBottomControlsUiState(
         roomCode = roomCode,
@@ -222,5 +223,6 @@ fun buildControllerBottomControlsUiState(
         portraitControlsVisible = portraitControlsVisible,
         portraitControlsEnabled = portraitControlsEnabled,
         portraitStrength = portraitStrength,
-        portraitEffect = portraitEffect
+        portraitEffect = portraitEffect,
+        lensLabel = if (lensFacing == "back") "Front camera" else "Rear camera"
     )

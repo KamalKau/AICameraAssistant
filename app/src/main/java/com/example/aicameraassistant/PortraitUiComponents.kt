@@ -206,39 +206,29 @@ fun PortraitPreviewOverlay(
                     borderColor = portraitFrameColor(effect)
                 )
             }
-        } else {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .fillMaxWidth(0.58f)
-                    .height(220.dp)
-                    .clip(RoundedCornerShape(34.dp))
-                    .border(2.dp, portraitFrameColor(effect), RoundedCornerShape(34.dp))
-                    .background(Color.White.copy(alpha = 0.035f))
-            )
-        }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 116.dp)
-                .background(Color.Black.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            Text(
-                text = status,
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = "${effect.displayName} / Strength $clampedStrength",
-                color = Color(0xFFFFD54F),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 116.dp)
+                    .background(Color.Black.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = status,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "${effect.displayName} / Strength $clampedStrength",
+                    color = Color(0xFFFFD54F),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }

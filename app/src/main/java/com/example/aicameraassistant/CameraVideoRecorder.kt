@@ -3,6 +3,7 @@ package com.example.aicameraassistant
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Color
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
@@ -100,7 +101,13 @@ class CameraVideoRecorder(private val context: Context) {
                     onRecordingStateChanged(recordingState)
                     onRequestHandled()
                     if (showStartToast) {
-                        Toast.makeText(context, "Video recording started", Toast.LENGTH_SHORT).show()
+                        showStatusPopup(
+                            context = context,
+                            title = "Recording started",
+                            detail = "Capturing video",
+                            badge = "REC",
+                            accentColor = Color.rgb(255, 45, 45)
+                        )
                     }
                 }
 
@@ -191,6 +198,16 @@ class CameraVideoRecorder(private val context: Context) {
         onRecordingStateChanged: (VideoRecordingState) -> Unit = {},
         onRequestHandled: () -> Unit = {}
     ): Boolean {
+        if (
+            activeRecording == null &&
+            recordingState == VideoRecordingState.Idle &&
+            segments.isEmpty() &&
+            pendingSegmentCount == 0
+        ) {
+            onRequestHandled()
+            return true
+        }
+
         finalStopRequested = true
         val recording = activeRecording
         if (recording != null) {
@@ -242,7 +259,16 @@ class CameraVideoRecorder(private val context: Context) {
                 context,
                 if (saved) "Video saved" else "Video recording failed",
                 Toast.LENGTH_SHORT
-            ).show()
+            ).takeUnless { saved }?.show()
+            if (saved) {
+                showStatusPopup(
+                    context = context,
+                    title = "Video saved",
+                    detail = "Saved to gallery",
+                    badge = "OK",
+                    accentColor = Color.rgb(56, 217, 145)
+                )
+            }
         }
     }
 

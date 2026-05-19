@@ -25,11 +25,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,8 +87,10 @@ fun ControllerBottomControls(
     state: ControllerBottomControlsUiState,
     actions: ControllerBottomControlsActions
 ) {
+    val straightZoomBarActive = state.showZoomRing
+
     if (state.showZoomRing) {
-        AndroidZoomBar(
+        StraightZoomBar(
             value = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
             minZoom = state.minZoom,
             maxZoom = state.maxZoom,
@@ -103,7 +106,7 @@ fun ControllerBottomControls(
             onStrengthSelected = actions.onPortraitStrengthSelected,
             onEffectSelected = actions.onPortraitEffectSelected
         )
-    } else {
+    } else if (!straightZoomBarActive) {
         ZoomPresetSelector(
             options = state.commonZoomOptions,
             currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
@@ -120,7 +123,7 @@ fun ControllerBottomControls(
 
     if (state.isVideoRecording) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(28.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             VideoPauseResumeButton(
@@ -130,11 +133,11 @@ fun ControllerBottomControls(
 
             VideoStopButton(onClick = actions.onVideoStop)
 
-            Spacer(modifier = Modifier.width(44.dp))
+            Spacer(modifier = Modifier.width(32.dp))
         }
     } else {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(34.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (straightZoomBarActive) 24.dp else 34.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PortraitFeatureButton(
@@ -145,11 +148,128 @@ fun ControllerBottomControls(
 
             ControllerShutterButton(
                 state = state,
+                compact = straightZoomBarActive,
                 onShutterPress = actions.onShutterPress
             )
 
-            Spacer(modifier = Modifier.width(36.dp))
+            LensFlipButton(
+                label = state.lensLabel,
+                onClick = actions.onLensClick
+            )
         }
+    }
+}
+
+@Composable
+private fun StraightZoomBar(
+    value: Float,
+    minZoom: Float,
+    maxZoom: Float,
+    modifier: Modifier = Modifier,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit
+) {
+    val clampedValue = value.coerceIn(minZoom, maxZoom)
+    val normalizedValue =
+        ((clampedValue - minZoom) / (maxZoom - minZoom).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
+
+    fun updateFromX(x: Float, widthPx: Float) {
+        val horizontalPadding = 22f
+        val trackWidth = (widthPx - (horizontalPadding * 2f)).coerceAtLeast(1f)
+        val normalized = ((x - horizontalPadding) / trackWidth).coerceIn(0f, 1f)
+        onValueChange(minZoom + ((maxZoom - minZoom) * normalized))
+    }
+
+    Box(
+        modifier = modifier
+            .width(272.dp)
+            .height(64.dp)
+            .background(Color.Black.copy(alpha = 0.48f), RoundedCornerShape(28.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(28.dp))
+            .pointerInput(minZoom, maxZoom) {
+                detectDragGestures(
+                    onDragStart = { point -> updateFromX(point.x, size.width.toFloat()) },
+                    onDragEnd = { onValueChangeFinished() },
+                    onDragCancel = { onValueChangeFinished() },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        updateFromX(change.position.x, size.width.toFloat())
+                    }
+                )
+            }
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        androidx.compose.foundation.Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 16.dp, bottom = 8.dp)
+        ) {
+            val trackStart = 6.dp.toPx()
+            val trackEnd = size.width - 6.dp.toPx()
+            val centerY = size.height / 2f
+            val trackWidth = trackEnd - trackStart
+            val thumbX = trackStart + (trackWidth * normalizedValue)
+
+            drawLine(
+                color = Color.White.copy(alpha = 0.20f),
+                start = Offset(trackStart, centerY),
+                end = Offset(trackEnd, centerY),
+                strokeWidth = 5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = Color.White.copy(alpha = 0.95f),
+                start = Offset(trackStart, centerY),
+                end = Offset(thumbX, centerY),
+                strokeWidth = 5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+
+            repeat(9) { index ->
+                val tickX = trackStart + (trackWidth * (index / 8f))
+                val tickHeight = if (index == 0 || index == 8 || index == 4) 10.dp.toPx() else 6.dp.toPx()
+                drawLine(
+                    color = Color.White.copy(alpha = 0.38f),
+                    start = Offset(tickX, centerY - 16.dp.toPx()),
+                    end = Offset(tickX, centerY - 16.dp.toPx() - tickHeight),
+                    strokeWidth = 1.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+
+            drawCircle(
+                color = Color.White,
+                radius = 8.dp.toPx(),
+                center = Offset(thumbX, centerY)
+            )
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.45f),
+                radius = 3.dp.toPx(),
+                center = Offset(thumbX, centerY)
+            )
+        }
+
+        Text(
+            text = "${formatZoomLabel(clampedValue)}x",
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+        Text(
+            text = "${formatZoomLabel(minZoom)}x",
+            color = Color.White.copy(alpha = 0.46f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.align(Alignment.BottomStart)
+        )
+        Text(
+            text = "${formatZoomLabel(maxZoom)}x",
+            color = Color.White.copy(alpha = 0.46f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.align(Alignment.BottomEnd)
+        )
     }
 }
 
@@ -238,6 +358,7 @@ private fun BurstStatusPill(count: Int) {
 @Composable
 private fun ControllerShutterButton(
     state: ControllerBottomControlsUiState,
+    compact: Boolean = false,
     onShutterPress: suspend androidx.compose.foundation.gestures.PressGestureScope.(Offset) -> Unit
 ) {
     val recordingRed = Color(0xFFD32F2F)
@@ -256,17 +377,24 @@ private fun ControllerShutterButton(
         state.isBurstCapturing -> RoundedCornerShape(18.dp)
         else -> CircleShape
     }
-    val coreSize = if (state.isVideoRecording) 30.dp else 64.dp
+    val buttonSize = if (compact && !state.isVideoRecording) 64.dp else 80.dp
+    val borderWidth = if (compact && !state.isVideoRecording) 3.dp else 4.dp
+    val buttonPadding = if (compact && !state.isVideoRecording) 5.dp else 6.dp
+    val coreSize = when {
+        state.isVideoRecording -> 30.dp
+        compact -> 50.dp
+        else -> 64.dp
+    }
 
     Box(
         modifier = Modifier
-            .size(80.dp)
+            .size(buttonSize)
             .graphicsLayer {
                 scaleX = state.shutterScale
                 scaleY = state.shutterScale
             }
-            .border(4.dp, Color.White, CircleShape)
-            .padding(6.dp)
+            .border(borderWidth, Color.White, CircleShape)
+            .padding(buttonPadding)
             .clip(CircleShape)
             .background(outerColor)
             .pointerInput(state.roomCode, state.isVideoMode, state.isVideoRecording) {
@@ -283,6 +411,28 @@ private fun ControllerShutterButton(
                 }
                 .clip(coreShape)
                 .background(coreColor)
+        )
+    }
+}
+
+@Composable
+private fun LensFlipButton(
+    label: String,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.46f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+    ) {
+        Icon(
+            imageVector = Icons.Default.SwitchCamera,
+            contentDescription = label,
+            tint = Color.White,
+            modifier = Modifier.size(24.dp)
         )
     }
 }

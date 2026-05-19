@@ -1,3 +1,4 @@
+
 package com.example.aicameraassistant
 
 import androidx.compose.animation.core.RepeatMode
@@ -16,8 +17,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +79,11 @@ fun ControlCameraScreen(
         label = "control_camera_signal_pulse"
     )
 
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -84,6 +94,7 @@ fun ControlCameraScreen(
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
+                .statusBarsPadding()
                 .padding(20.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(
@@ -132,7 +143,9 @@ fun ControlCameraScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
+                .widthIn(max = 420.dp)
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {

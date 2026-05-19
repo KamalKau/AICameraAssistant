@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -291,12 +290,6 @@ fun CameraToolRail(
             showLabel = labelsExpanded,
             selected = state.boomerangSelected,
             onClick = actions.onBoomerangClick
-        )
-        CameraToolButton(
-            icon = Icons.Default.SwitchCamera,
-            label = state.lensLabel,
-            showLabel = labelsExpanded,
-            onClick = actions.onLensClick
         )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -594,7 +587,7 @@ fun ManualExposureSlider(
                 .padding(top = 1.dp)
         )
         Text(
-            text = "−",
+            text = "-",
             color = Color.White.copy(alpha = 0.88f),
             fontSize = 10.sp,
             fontWeight = FontWeight.Light,

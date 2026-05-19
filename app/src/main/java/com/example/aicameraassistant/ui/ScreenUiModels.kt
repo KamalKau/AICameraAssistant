@@ -80,7 +80,8 @@ data class ControllerBottomControlsUiState(
     val portraitControlsVisible: Boolean,
     val portraitControlsEnabled: Boolean,
     val portraitStrength: Int,
-    val portraitEffect: String
+    val portraitEffect: String,
+    val lensLabel: String
 )
 
 data class ControllerBottomControlsActions(
@@ -91,6 +92,7 @@ data class ControllerBottomControlsActions(
     val onPortraitControlsClick: () -> Unit,
     val onPortraitStrengthSelected: (Int) -> Unit,
     val onPortraitEffectSelected: (String) -> Unit,
+    val onLensClick: () -> Unit,
     val onVideoPauseToggle: () -> Unit,
     val onVideoStop: () -> Unit,
     val onShutterPress: suspend androidx.compose.foundation.gestures.PressGestureScope.(androidx.compose.ui.geometry.Offset) -> Unit

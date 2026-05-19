@@ -5,7 +5,8 @@ import android.util.AttributeSet
 import android.view.View
 import org.webrtc.SurfaceViewRenderer
 
-class FixedAspectSurfaceViewRenderer @JvmOverloads constructor(
+class
+FixedAspectSurfaceViewRenderer @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : SurfaceViewRenderer(context, attrs) {
