@@ -239,6 +239,20 @@ class FirebaseRoomRepository {
             .await()
     }
 
+    suspend fun updateVideoHdrSupported(roomCode: String, videoHdrSupported: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("videoHdrSupported", videoHdrSupported)
+            .await()
+    }
+
+    suspend fun updateVideoHdrEnabled(roomCode: String, videoHdrEnabled: Boolean) {
+        db.collection("rooms")
+            .document(roomCode)
+            .update("videoHdrEnabled", videoHdrEnabled)
+            .await()
+    }
+
     suspend fun updateToolbarExpanded(roomCode: String, toolbarExpanded: Boolean) {
         db.collection("rooms")
             .document(roomCode)
@@ -423,6 +437,8 @@ class FirebaseRoomRepository {
             "flashSupported" to false,
             "gridEnabled" to false,
             "nightModeEnabled" to false,
+            "videoHdrSupported" to false,
+            "videoHdrEnabled" to false,
             "toolbarExpanded" to false,
             "focusRequestId" to 0L,
             "focusLockEnabled" to false,
@@ -685,6 +701,22 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getBoolean("nightModeEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getVideoHdrSupported(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("videoHdrSupported") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getVideoHdrEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("videoHdrEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }

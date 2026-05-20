@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,12 +75,12 @@ fun MainContent() {
     val scope = rememberCoroutineScope()
     val repository = remember { FirebaseRoomRepository() }
 
-    var currentScreen by remember { mutableStateOf("home") }
-    var pendingRoomCode by remember { mutableStateOf("") }
-    var cameraRoomCode by remember { mutableStateOf(generateRoomCode()) }
-    var controlRoomCodeError by remember { mutableStateOf<String?>(null) }
+    var currentScreen by rememberSaveable { mutableStateOf("home") }
+    var pendingRoomCode by rememberSaveable { mutableStateOf("") }
+    var cameraRoomCode by rememberSaveable { mutableStateOf(generateRoomCode()) }
+    var controlRoomCodeError by rememberSaveable { mutableStateOf<String?>(null) }
     
-    var permissionsGranted by remember { mutableStateOf(false) }
+    var permissionsGranted by rememberSaveable { mutableStateOf(false) }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()

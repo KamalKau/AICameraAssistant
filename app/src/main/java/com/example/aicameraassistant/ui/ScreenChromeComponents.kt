@@ -374,6 +374,13 @@ fun CameraToolRail(
             )
         }
         if (labelsExpanded) {
+            if (state.videoMode) {
+                HdrToggleButton(
+                    supported = state.videoHdrSupported,
+                    isActive = state.videoHdrEnabled,
+                    onClick = actions.onVideoHdrClick
+                )
+            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -665,6 +672,51 @@ fun ManualExposureSlider(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 1.dp)
         )
+    }
+}
+
+@Composable
+private fun HdrToggleButton(
+    supported: Boolean,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (isActive) "HDR On" else "HDR",
+            color = if (supported) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.width(66.dp)
+        )
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(
+                    if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
+                    CircleShape
+                )
+                .border(
+                    width = if (isActive) 1.dp else 0.8.dp,
+                    color = if (isActive) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f),
+                    shape = CircleShape
+                )
+                .clickable(enabled = supported, onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "HDR",
+                color = if (supported) Color.White else Color.White.copy(alpha = 0.35f),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
     }
 }
 

@@ -150,6 +150,8 @@ fun WaitingForApprovalScreen(
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
+    val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseExposureMinIndex = remoteUiState.exposureMinIndex
     val firebaseExposureMaxIndex = remoteUiState.exposureMaxIndex
@@ -325,6 +327,9 @@ fun WaitingForApprovalScreen(
         aspectRatioMode = firebaseAspectRatioMode,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
+        videoHdrSupported = firebaseVideoHdrSupported,
+        videoHdrEnabled = firebaseVideoHdrEnabled,
+        cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
         boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
@@ -399,6 +404,12 @@ fun WaitingForApprovalScreen(
         },
         onNightModeClick = {
             controllerCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onVideoHdrClick = {
+            controllerCoordinator.updateVideoHdrEnabled(
+                currentEnabled = firebaseVideoHdrEnabled,
+                supported = firebaseVideoHdrSupported
+            )
         },
         onExposureClick = controllerExposureUiActions.onToggle,
         onToolbarExpandedChange = { expanded ->

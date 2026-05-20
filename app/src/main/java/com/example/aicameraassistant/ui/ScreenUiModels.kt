@@ -32,6 +32,9 @@ data class CameraToolRailUiState(
     val aspectRatioLabel: String,
     val gridEnabled: Boolean,
     val nightModeEnabled: Boolean,
+    val videoHdrSupported: Boolean,
+    val videoHdrEnabled: Boolean,
+    val videoMode: Boolean,
     val toolbarExpanded: Boolean,
     val boomerangSelected: Boolean,
     val exposureSupported: Boolean
@@ -44,6 +47,7 @@ data class CameraToolRailActions(
     val onAspectRatioClick: () -> Unit,
     val onGridClick: () -> Unit,
     val onNightModeClick: () -> Unit,
+    val onVideoHdrClick: () -> Unit,
     val onExposureClick: () -> Unit,
     val onToolbarExpandedChange: (Boolean) -> Unit
 )

@@ -125,6 +125,9 @@ fun buildCameraToolRailUiState(
     aspectRatioMode: String,
     gridEnabled: Boolean,
     nightModeEnabled: Boolean,
+    videoHdrSupported: Boolean,
+    videoHdrEnabled: Boolean,
+    cameraMode: String,
     toolbarExpanded: Boolean,
     boomerangSelected: Boolean,
     exposureSupported: Boolean
@@ -147,6 +150,9 @@ fun buildCameraToolRailUiState(
         aspectRatioLabel = AspectRatioMode.fromKey(aspectRatioMode).label,
         gridEnabled = gridEnabled,
         nightModeEnabled = nightModeEnabled,
+        videoHdrSupported = videoHdrSupported,
+        videoHdrEnabled = videoHdrEnabled,
+        videoMode = cameraMode == "video",
         toolbarExpanded = toolbarExpanded,
         boomerangSelected = boomerangSelected,
         exposureSupported = exposureSupported

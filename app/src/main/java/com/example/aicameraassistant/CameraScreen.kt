@@ -11,6 +11,7 @@ import android.view.Surface
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.DynamicRange
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -146,6 +147,8 @@ fun CameraScreen(
     val firebaseSceneDetection = remoteUiState.sceneDetection
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
+    val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseCaptureRequestId = remoteUiState.captureRequestId
     val firebaseCaptureRequestType = remoteUiState.captureRequestType
@@ -316,6 +319,9 @@ fun CameraScreen(
         aspectRatioMode = firebaseAspectRatioMode,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
+        videoHdrSupported = firebaseVideoHdrSupported,
+        videoHdrEnabled = firebaseVideoHdrEnabled,
+        cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
         boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
@@ -390,6 +396,9 @@ fun CameraScreen(
         },
         onNightModeClick = {
             hostCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onVideoHdrClick = {
+            hostCoordinator.updateVideoHdrEnabled(firebaseVideoHdrEnabled, firebaseVideoHdrSupported)
         },
         onExposureClick = hostExposureUiActions.onToggle,
         onToolbarExpandedChange = { expanded ->
@@ -1322,7 +1331,7 @@ fun CameraScreen(
     }
 
 
-    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode) {
+    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode, firebaseVideoHdrEnabled) {
         val shouldRestartRecordingAfterBind =
             videoRecorder.isRecording && firebaseCameraMode == "video"
         restartRecordingAfterCameraBind = shouldRestartRecordingAfterBind
@@ -1371,19 +1380,6 @@ fun CameraScreen(
             .setTargetRotation(targetRotation)
             .build()
 
-        val recorder = Recorder.Builder()
-            .setQualitySelector(
-                QualitySelector.fromOrderedList(
-                    listOf(Quality.HD, Quality.SD),
-                    FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
-                )
-            )
-            .build()
-        val newVideoCapture = VideoCapture.withOutput(recorder)
-        if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-            newVideoCapture.targetRotation = targetRotation
-        }
-
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
             .build()
@@ -1401,6 +1397,43 @@ fun CameraScreen(
             camera = firstCamera
             imageCapture = newImageCapture
             publishExposureState(firstCamera)
+
+            val supportedDynamicRanges = Recorder.getVideoCapabilities(firstCamera.cameraInfo)
+                .supportedDynamicRanges
+            val videoHdrSupportedForLens = supportedDynamicRanges.any { dynamicRange ->
+                dynamicRange != DynamicRange.SDR &&
+                    dynamicRange.bitDepth == DynamicRange.BIT_DEPTH_10_BIT
+            }
+            val enableVideoHdrForBind =
+                firebaseCameraMode == "video" && firebaseVideoHdrEnabled && videoHdrSupportedForLens
+            scope.launch {
+                repository.updateVideoHdrSupported(roomCode, videoHdrSupportedForLens)
+                if (!videoHdrSupportedForLens && firebaseVideoHdrEnabled) {
+                    repository.updateVideoHdrEnabled(roomCode, false)
+                }
+            }
+
+            fun buildVideoCapture(dynamicRange: DynamicRange): VideoCapture<Recorder> {
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(
+                        QualitySelector.fromOrderedList(
+                            listOf(Quality.HD, Quality.SD),
+                            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+                        )
+                    )
+                    .build()
+                return VideoCapture.Builder(recorder)
+                    .setDynamicRange(dynamicRange)
+                    .setTargetRotation(targetRotation)
+                    .build()
+            }
+            var activeVideoCapture = buildVideoCapture(
+                if (enableVideoHdrForBind) {
+                    DynamicRange.HDR_UNSPECIFIED_10_BIT
+                } else {
+                    DynamicRange.SDR
+                }
+            )
 
             scope.launch {
                 repository.updateFlashSupported(
@@ -1595,7 +1628,7 @@ fun CameraScreen(
                 finalUseCases.add(newImageCapture)
             }
             if (firebaseCameraMode == "video") {
-                finalUseCases.add(newVideoCapture)
+                finalUseCases.add(activeVideoCapture)
             }
 
             fun bindFinalUseCases(useCases: List<UseCase>): Camera =
@@ -1661,15 +1694,45 @@ fun CameraScreen(
                             cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
                         }
                     } catch (bindWithVideoError: Exception) {
-                        Log.w(
-                            "CAMERA_BIND",
-                            "Camera bind with video capture failed; retrying without video",
-                            bindWithVideoError
-                        )
-                        finalUseCases.remove(newVideoCapture)
-                        videoCapture = null
-                        bindFinalUseCases(finalUseCases).also {
-                            cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                        if (enableVideoHdrForBind && finalUseCases.contains(activeVideoCapture)) {
+                            Log.w(
+                                "CAMERA_BIND",
+                                "Camera bind with HDR video failed; retrying SDR video",
+                                bindWithVideoError
+                            )
+                            finalUseCases.remove(activeVideoCapture)
+                            activeVideoCapture = buildVideoCapture(DynamicRange.SDR)
+                            finalUseCases.add(activeVideoCapture)
+                            scope.launch {
+                                repository.updateVideoHdrEnabled(roomCode, false)
+                            }
+                            try {
+                                bindFinalUseCases(finalUseCases).also {
+                                    cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                                }
+                            } catch (bindWithSdrVideoError: Exception) {
+                                Log.w(
+                                    "CAMERA_BIND",
+                                    "Camera bind with SDR video capture failed; retrying without video",
+                                    bindWithSdrVideoError
+                                )
+                                finalUseCases.remove(activeVideoCapture)
+                                videoCapture = null
+                                bindFinalUseCases(finalUseCases).also {
+                                    cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                                }
+                            }
+                        } else {
+                            Log.w(
+                                "CAMERA_BIND",
+                                "Camera bind with video capture failed; retrying without video",
+                                bindWithVideoError
+                            )
+                            finalUseCases.remove(activeVideoCapture)
+                            videoCapture = null
+                            bindFinalUseCases(finalUseCases).also {
+                                cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
+                            }
                         }
                     }
                 }
@@ -1677,7 +1740,7 @@ fun CameraScreen(
 
             camera = finalCamera
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
-            videoCapture = if (finalUseCases.contains(newVideoCapture)) newVideoCapture else null
+            videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null
             publishExposureState(finalCamera)
             if (restartRecordingAfterCameraBind) {
                 val restarted = videoRecorder.start(

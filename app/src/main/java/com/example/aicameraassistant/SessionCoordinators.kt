@@ -113,6 +113,13 @@ class HostSessionCoordinator(
         }
     }
 
+    fun updateVideoHdrEnabled(currentEnabled: Boolean, supported: Boolean) {
+        if (!supported) return
+        scope.launch {
+            repository.updateVideoHdrEnabled(roomCode, !currentEnabled)
+        }
+    }
+
     fun updateToolbarExpanded(expanded: Boolean) {
         scope.launch {
             repository.updateToolbarExpanded(roomCode, expanded)
@@ -239,6 +246,13 @@ class ControllerSessionCoordinator(
     fun updateNightModeEnabled(currentEnabled: Boolean) {
         scope.launch {
             repository.updateNightModeEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateVideoHdrEnabled(currentEnabled: Boolean, supported: Boolean) {
+        if (!supported) return
+        scope.launch {
+            repository.updateVideoHdrEnabled(roomCode, !currentEnabled)
         }
     }
 
