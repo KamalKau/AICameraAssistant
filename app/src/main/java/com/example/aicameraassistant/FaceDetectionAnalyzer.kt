@@ -27,6 +27,8 @@ data class FaceDetectionOverlayState(
 class MlKitFaceDetectionAnalyzer(
     private val detector: FaceDetector,
     private val minProcessIntervalMs: Long = 800L,
+    private val sceneAnalyzer: SceneDetectionAnalyzer? = null,
+    private val onSceneResult: (SceneDetectionResult) -> Unit = {},
     private val onFaceResult: (List<NormalizedFaceBounds>) -> Unit
 ) : ImageAnalysis.Analyzer {
     private val isProcessing = AtomicBoolean(false)
@@ -53,6 +55,13 @@ class MlKitFaceDetectionAnalyzer(
         }
 
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+        sceneAnalyzer?.let { analyzer ->
+            runCatching {
+                onSceneResult(analyzer.detect(imageProxy))
+            }.onFailure {
+                Log.w("SCENE_DETECTION", "Scene detection failed", it)
+            }
+        }
         val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
         val uprightWidth =
             if (rotationDegrees == 90 || rotationDegrees == 270) imageProxy.height else imageProxy.width

@@ -7,6 +7,7 @@ data class CameraRemoteUiState(
     val zoomLevel: Double = 1.0,
     val flashMode: String = "off",
     val cameraMode: String = "photo",
+    val aspectRatioMode: String = "full",
     val portraitBlurLevel: String = "blur",
     val portraitStrength: Int = 5,
     val portraitEffect: String = "blur",
@@ -19,6 +20,7 @@ data class CameraRemoteUiState(
     val faceBox: NormalizedFaceBounds = NormalizedFaceBounds(),
     val faceBoxes: List<NormalizedFaceBounds> = emptyList(),
     val faceDetectionTimestamp: Long = 0L,
+    val sceneDetection: SceneDetectionState = SceneDetectionState(),
     val gridEnabled: Boolean = false,
     val nightModeEnabled: Boolean = false,
     val toolbarExpanded: Boolean = false,
@@ -49,6 +51,15 @@ data class PortraitSubjectState(
     val bottom: Double = 0.0
 )
 
+data class SceneDetectionState(
+    val key: String = "auto",
+    val label: String = "Auto",
+    val suggestion: String = "Scene detection ready",
+    val confidence: Double = 0.0,
+    val timestamp: Long = 0L,
+    val autoAdjustment: String = ""
+)
+
 data class ControllerRemoteUiState(
     val roomStatus: String = "waiting",
     val connectionState: AppConnectionState = AppConnectionState.IDLE,
@@ -58,6 +69,7 @@ data class ControllerRemoteUiState(
     val maxZoom: Double = 1.0,
     val flashMode: String = "off",
     val cameraMode: String = "photo",
+    val aspectRatioMode: String = "full",
     val portraitBlurLevel: String = "blur",
     val portraitStrength: Int = 5,
     val portraitEffect: String = "blur",
@@ -70,6 +82,7 @@ data class ControllerRemoteUiState(
     val faceBox: NormalizedFaceBounds = NormalizedFaceBounds(),
     val faceBoxes: List<NormalizedFaceBounds> = emptyList(),
     val faceDetectionTimestamp: Long = 0L,
+    val sceneDetection: SceneDetectionState = SceneDetectionState(),
     val flashSupported: Boolean = false,
     val gridEnabled: Boolean = false,
     val nightModeEnabled: Boolean = false,

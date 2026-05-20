@@ -8,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -129,6 +131,69 @@ fun SessionWarningChip(
         }
     }
 }
+
+@Composable
+fun SceneDetectionChip(
+    state: SceneDetectionState,
+    modifier: Modifier = Modifier
+) {
+    if (state.timestamp <= 0L || state.key == "auto") return
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        color = Color.Black.copy(alpha = 0.46f),
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.14f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(sceneAccentColor(state.key).copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = sceneAccentColor(state.key),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    text = state.label,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = state.autoAdjustment.ifBlank { state.suggestion },
+                    color = Color.White.copy(alpha = 0.78f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+private fun sceneAccentColor(key: String): Color =
+    when (key) {
+        "food" -> Color(0xFFFFB74D)
+        "night" -> Color(0xFF7E9CFF)
+        "face" -> Color(0xFFFFD54F)
+        "text" -> Color(0xFF80CBC4)
+        "landscape" -> Color(0xFF81C784)
+        else -> Color.White
+    }
 
 @Composable
 fun RoomCodeBadge(
@@ -290,6 +355,11 @@ fun CameraToolRail(
             showLabel = labelsExpanded,
             selected = state.boomerangSelected,
             onClick = actions.onBoomerangClick
+        )
+        AspectRatioToolButton(
+            label = state.aspectRatioLabel,
+            showLabel = labelsExpanded,
+            onClick = actions.onAspectRatioClick
         )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -595,6 +665,47 @@ fun ManualExposureSlider(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 1.dp)
         )
+    }
+}
+
+@Composable
+private fun AspectRatioToolButton(
+    label: String,
+    showLabel: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.width(if (showLabel) 104.dp else 34.dp)
+    ) {
+        if (showLabel) {
+            Text(
+                text = "Ratio",
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.width(66.dp)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                .border(0.8.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = if (label == "Full") 8.sp else 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
     }
 }
 

@@ -30,6 +30,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
     private var videoAspectRatio = 9f / 16f
     private var rotateContent = false
+    private var fillFrame = false
     private var displayWidthPx = 0
     private var displayHeightPx = 0
     var onVideoRectChanged: ((RectF) -> Unit)? = null
@@ -60,14 +61,19 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         faceOverlay.setFaceDetectionOverlay(bounds, visible)
     }
 
-    fun setVideoLayout(width: Int, height: Int, rotateClockwise: Boolean) {
+    fun setVideoLayout(width: Int, height: Int, rotateClockwise: Boolean, fillFrame: Boolean = false) {
         if (width <= 0 || height <= 0) return
 
         val nextAspectRatio = width.toFloat() / height.toFloat()
-        if (videoAspectRatio == nextAspectRatio && rotateContent == rotateClockwise) return
+        if (
+            videoAspectRatio == nextAspectRatio &&
+            rotateContent == rotateClockwise &&
+            this.fillFrame == fillFrame
+        ) return
 
         videoAspectRatio = nextAspectRatio
         rotateContent = rotateClockwise
+        this.fillFrame = fillFrame
         requestLayout()
     }
 
@@ -113,7 +119,15 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         val displayWidth: Int
         val displayHeight: Int
 
-        if (videoAspectRatio > containerAspectRatio) {
+        if (fillFrame) {
+            if (videoAspectRatio > containerAspectRatio) {
+                displayHeight = availableHeight
+                displayWidth = (availableHeight * videoAspectRatio).toInt()
+            } else {
+                displayWidth = availableWidth
+                displayHeight = (availableWidth / videoAspectRatio).toInt()
+            }
+        } else if (videoAspectRatio > containerAspectRatio) {
             displayWidth = availableWidth
             displayHeight = (availableWidth / videoAspectRatio).toInt()
         } else {
@@ -161,22 +175,24 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         faceOverlay.layout(0, 0, measuredWidth, measuredHeight)
         faceOverlay.bringToFront()
 
-        val visibleLeft = (measuredWidth - displayWidthPx) / 2f
-        val visibleTop = (measuredHeight - displayHeightPx) / 2f
+        val visibleLeft = if (fillFrame) 0f else (measuredWidth - displayWidthPx) / 2f
+        val visibleTop = if (fillFrame) 0f else (measuredHeight - displayHeightPx) / 2f
+        val visibleRight = if (fillFrame) measuredWidth.toFloat() else visibleLeft + displayWidthPx
+        val visibleBottom = if (fillFrame) measuredHeight.toFloat() else visibleTop + displayHeightPx
         onVideoRectChanged?.invoke(
             RectF(
                 visibleLeft,
                 visibleTop,
-                visibleLeft + displayWidthPx,
-                visibleTop + displayHeightPx
+                visibleRight,
+                visibleBottom
             )
         )
         faceOverlay.setVideoRect(
             RectF(
                 visibleLeft,
                 visibleTop,
-                visibleLeft + displayWidthPx,
-                visibleTop + displayHeightPx
+                visibleRight,
+                visibleBottom
             )
         )
     }

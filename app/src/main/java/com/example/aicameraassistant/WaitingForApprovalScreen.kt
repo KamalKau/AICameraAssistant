@@ -133,6 +133,7 @@ fun WaitingForApprovalScreen(
     val firebaseMaxZoom = remoteUiState.maxZoom
     val firebaseFlashMode = remoteUiState.flashMode
     val firebaseCameraMode = remoteUiState.cameraMode
+    val firebaseAspectRatioMode = remoteUiState.aspectRatioMode
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
     val firebasePortraitEffect = remoteUiState.portraitEffect
@@ -145,6 +146,7 @@ fun WaitingForApprovalScreen(
     val firebaseFaceBox = remoteUiState.faceBox
     val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseFaceDetectionTimestamp = remoteUiState.faceDetectionTimestamp
+    val firebaseSceneDetection = remoteUiState.sceneDetection
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
@@ -201,6 +203,12 @@ fun WaitingForApprovalScreen(
     var previewRetryCount by screenViewModel::previewRetryCount
     var remoteFaceBoxBounds by remember { mutableStateOf(emptyList<NormalizedFaceBounds>()) }
     var remoteFaceBoxVisible by remember { mutableStateOf(false) }
+    val aspectRatioMode = AspectRatioMode.fromKey(firebaseAspectRatioMode)
+    val fillSelectedAspectFrame = aspectRatioMode != AspectRatioMode.Full
+
+    LaunchedEffect(firebaseAspectRatioMode) {
+        previewOverlayRect = null
+    }
 
     val shouldSwapRemoteFrame =
         (remoteFrameRotation == 90 || remoteFrameRotation == 270) ||
@@ -314,6 +322,7 @@ fun WaitingForApprovalScreen(
         flashSupported = firebaseFlashSupported,
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
+        aspectRatioMode = firebaseAspectRatioMode,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
         toolbarExpanded = firebaseToolbarExpanded,
@@ -372,6 +381,14 @@ fun WaitingForApprovalScreen(
                 scope.launch {
                     repository.updateCameraMode(roomCode, "photo")
                 }
+            }
+        },
+        onAspectRatioClick = {
+            scope.launch {
+                repository.updateAspectRatioMode(
+                    roomCode,
+                    AspectRatioMode.next(firebaseAspectRatioMode).key
+                )
             }
         },
         onLensClick = {
@@ -891,16 +908,27 @@ fun WaitingForApprovalScreen(
         val density = LocalDensity.current
         val boxMaxWidthPx = previewContainerSize.width.toFloat()
         val boxMaxHeightPx = previewContainerSize.height.toFloat()
-        val previewContentRect =
-            remember(boxMaxWidthPx, boxMaxHeightPx, controllerDisplayWidth, controllerDisplayHeight) {
-                fittedPreviewRect(
+        val previewFrameRect =
+            remember(boxMaxWidthPx, boxMaxHeightPx, firebaseAspectRatioMode) {
+                aspectRatioFrameRect(
                     containerWidth = boxMaxWidthPx,
                     containerHeight = boxMaxHeightPx,
-                    contentWidth = controllerDisplayWidth.toFloat(),
-                    contentHeight = controllerDisplayHeight.toFloat()
+                    aspectRatioKey = firebaseAspectRatioMode
                 )
             }
-        val activePreviewRect = previewOverlayRect ?: previewContentRect
+        val fallbackPreviewContentRect =
+            remember(previewFrameRect, controllerDisplayWidth, controllerDisplayHeight, fillSelectedAspectFrame) {
+                if (fillSelectedAspectFrame) {
+                    previewFrameRect
+                } else {
+                    fittedPreviewRectInFrame(
+                        frameRect = previewFrameRect,
+                        contentWidth = controllerDisplayWidth.toFloat(),
+                        contentHeight = controllerDisplayHeight.toFloat()
+                    )
+                }
+            }
+        val activePreviewRect = previewOverlayRect ?: fallbackPreviewContentRect
 
             Box(
                 modifier = Modifier
@@ -999,7 +1027,8 @@ fun WaitingForApprovalScreen(
                                             previewContainerRef?.setVideoLayout(
                                                 fittedWidth,
                                                 fittedHeight,
-                                                shouldRotatePreviewContent
+                                                shouldRotatePreviewContent,
+                                                fillSelectedAspectFrame
                                             )
                                         }
                                     }
@@ -1015,7 +1044,8 @@ fun WaitingForApprovalScreen(
                                 container.setVideoLayout(
                                     controllerDisplayWidth,
                                     controllerDisplayHeight,
-                                    shouldRotatePreviewContent
+                                    shouldRotatePreviewContent,
+                                    fillSelectedAspectFrame
                                 )
                             }
                             container.setFaceDetectionOverlay(
@@ -1028,7 +1058,14 @@ fun WaitingForApprovalScreen(
                                 }
                             }
                             container.onVideoRectChanged = { rect ->
-                                previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
+                                val frameLeft = previewFrameRect?.left ?: 0f
+                                val frameTop = previewFrameRect?.top ?: 0f
+                                previewOverlayRect = Rect(
+                                    frameLeft + rect.left,
+                                    frameTop + rect.top,
+                                    frameLeft + rect.right,
+                                    frameTop + rect.bottom
+                                )
                             }
                             previewContainerRef = container
                         }
@@ -1044,7 +1081,8 @@ fun WaitingForApprovalScreen(
                             container.setVideoLayout(
                                 controllerDisplayWidth,
                                 controllerDisplayHeight,
-                                shouldRotatePreviewContent
+                                shouldRotatePreviewContent,
+                                fillSelectedAspectFrame
                             )
                         }
                         container.setFaceDetectionOverlay(
@@ -1052,10 +1090,28 @@ fun WaitingForApprovalScreen(
                             visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
                         )
                         container.onVideoRectChanged = { rect ->
-                            previewOverlayRect = Rect(rect.left, rect.top, rect.right, rect.bottom)
+                            val frameLeft = previewFrameRect?.left ?: 0f
+                            val frameTop = previewFrameRect?.top ?: 0f
+                            previewOverlayRect = Rect(
+                                frameLeft + rect.left,
+                                frameTop + rect.top,
+                                frameLeft + rect.right,
+                                frameTop + rect.bottom
+                            )
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset {
+                            IntOffset(
+                                x = (previewFrameRect?.left ?: 0f).roundToInt(),
+                                y = (previewFrameRect?.top ?: 0f).roundToInt()
+                            )
+                        }
+                        .size(
+                            width = with(density) { (previewFrameRect?.width ?: boxMaxWidthPx).toDp() },
+                            height = with(density) { (previewFrameRect?.height ?: boxMaxHeightPx).toDp() }
+                        )
                 )
 
                 if (shutterFlashAlpha > 0f) {
@@ -1260,11 +1316,13 @@ fun WaitingForApprovalScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 88.dp, start = 16.dp, end = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ControllerStatusOverlay(
                     state = controllerStatusUiState
                 )
+                SceneDetectionChip(state = firebaseSceneDetection)
             }
 
             val compactBottomControlsActive =

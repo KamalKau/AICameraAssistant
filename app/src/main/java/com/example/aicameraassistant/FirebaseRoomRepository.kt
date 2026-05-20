@@ -93,6 +93,11 @@ class FirebaseRoomRepository {
         updateStringIfChanged(roomCode, "cameraMode", cameraMode)
     }
 
+    suspend fun updateAspectRatioMode(roomCode: String, aspectRatioMode: String) {
+        val safeMode = AspectRatioMode.fromKey(aspectRatioMode).key
+        updateStringIfChanged(roomCode, "aspectRatioMode", safeMode)
+    }
+
     suspend fun updatePortraitBlurLevel(roomCode: String, blurLevel: String) {
         val portraitBlurLevel = when (blurLevel) {
             "natural", "strong" -> blurLevel
@@ -185,6 +190,29 @@ class FirebaseRoomRepository {
                     "faceBoxes" to safeBoxes,
                     "faceDetected" to faceDetected,
                     "faceDetectionTimestamp" to timestamp
+                )
+            )
+            .await()
+    }
+
+    suspend fun updateSceneDetectionState(
+        roomCode: String,
+        state: SceneDetectionState
+    ) {
+        val safeKey = when (state.key) {
+            "food", "night", "face", "text", "landscape" -> state.key
+            else -> "auto"
+        }
+        db.collection("rooms")
+            .document(roomCode)
+            .update(
+                mapOf(
+                    "sceneDetectionKey" to safeKey,
+                    "sceneDetectionLabel" to state.label.take(24),
+                    "sceneDetectionSuggestion" to state.suggestion.take(80),
+                    "sceneDetectionConfidence" to state.confidence.coerceIn(0.0, 1.0),
+                    "sceneDetectionTimestamp" to state.timestamp,
+                    "sceneDetectionAutoAdjustment" to state.autoAdjustment.take(48)
                 )
             )
             .await()
@@ -363,6 +391,7 @@ class FirebaseRoomRepository {
             "captureRequestId" to 0L,
             "captureRequestType" to "photo",
             "cameraMode" to "photo",
+            "aspectRatioMode" to "full",
             "portraitBlurLevel" to "blur",
             "portraitStrength" to 5L,
             "portraitEffect" to "blur",
@@ -380,6 +409,12 @@ class FirebaseRoomRepository {
             "faceBoxes" to emptyList<Map<String, Double>>(),
             "faceDetected" to false,
             "faceDetectionTimestamp" to 0L,
+            "sceneDetectionKey" to "auto",
+            "sceneDetectionLabel" to "Auto",
+            "sceneDetectionSuggestion" to "Scene detection ready",
+            "sceneDetectionConfidence" to 0.0,
+            "sceneDetectionTimestamp" to 0L,
+            "sceneDetectionAutoAdjustment" to "",
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -511,6 +546,14 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getAspectRatioMode(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(AspectRatioMode.fromKey(snapshot?.getString("aspectRatioMode") ?: "full").key)
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getPortraitBlurLevel(roomCode: String): Flow<String> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
@@ -593,6 +636,29 @@ class FirebaseRoomRepository {
                         ),
                         faceBoxes = boxes,
                         timestamp = snapshot?.getLong("faceDetectionTimestamp") ?: 0L
+                    )
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getSceneDetectionState(roomCode: String): Flow<SceneDetectionState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val key = when (snapshot?.getString("sceneDetectionKey")) {
+                    "food", "night", "face", "text", "landscape" -> snapshot.getString("sceneDetectionKey")
+                    else -> "auto"
+                } ?: "auto"
+                trySend(
+                    SceneDetectionState(
+                        key = key,
+                        label = snapshot?.getString("sceneDetectionLabel") ?: sceneLabelForKey(key),
+                        suggestion = snapshot?.getString("sceneDetectionSuggestion")
+                            ?: "Scene detection ready",
+                        confidence = (snapshot?.getDouble("sceneDetectionConfidence") ?: 0.0)
+                            .coerceIn(0.0, 1.0),
+                        timestamp = snapshot?.getLong("sceneDetectionTimestamp") ?: 0L,
+                        autoAdjustment = snapshot?.getString("sceneDetectionAutoAdjustment") ?: ""
                     )
                 )
             }

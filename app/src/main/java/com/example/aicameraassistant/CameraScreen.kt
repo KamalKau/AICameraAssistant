@@ -133,6 +133,7 @@ fun CameraScreen(
     val firebaseZoomLevel = remoteUiState.zoomLevel
     val firebaseFlashMode = remoteUiState.flashMode
     val firebaseCameraMode = remoteUiState.cameraMode
+    val firebaseAspectRatioMode = remoteUiState.aspectRatioMode
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
     val firebasePortraitEffect = remoteUiState.portraitEffect
@@ -142,6 +143,7 @@ fun CameraScreen(
     val firebasePortraitFaceRight = remoteUiState.portraitFaceRight
     val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
     val firebaseFaceBoxes = remoteUiState.faceBoxes
+    val firebaseSceneDetection = remoteUiState.sceneDetection
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
@@ -171,6 +173,13 @@ fun CameraScreen(
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
+    LaunchedEffect(firebaseAspectRatioMode) {
+        previewView.scaleType = if (AspectRatioMode.fromKey(firebaseAspectRatioMode) == AspectRatioMode.Full) {
+            PreviewView.ScaleType.FIT_CENTER
+        } else {
+            PreviewView.ScaleType.FILL_CENTER
         }
     }
     val activity = context.findActivity()
@@ -211,6 +220,9 @@ fun CameraScreen(
     var lastPhotoFaceSeenMs by remember { mutableLongStateOf(0L) }
     var lastPhotoFaceMeteringMs by remember { mutableStateOf(0L) }
     var lastMeteredPhotoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
+    var lastScenePublishMs by remember { mutableLongStateOf(0L) }
+    var lastSceneKey by remember { mutableStateOf("auto") }
+    var lastNightAutoAppliedMs by remember { mutableLongStateOf(0L) }
     var cameraAnalysisActive by remember { mutableStateOf(false) }
     var lastCameraAnalysisResultMs by remember { mutableLongStateOf(0L) }
     val faceDetector = remember {
@@ -223,8 +235,9 @@ fun CameraScreen(
                 .setMinFaceSize(0.08f)
                 .enableTracking()
                 .build()
-        )
+            )
     }
+    val sceneAnalyzer = remember { SceneDetectionAnalyzer() }
     val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val faceBoundsMapper = remember { FaceBoundsMapper() }
     val faceOverlayPublisher = remember(roomCode, repository, scope) {
@@ -300,6 +313,7 @@ fun CameraScreen(
         flashSupported = flashSupported,
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
+        aspectRatioMode = firebaseAspectRatioMode,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
         toolbarExpanded = firebaseToolbarExpanded,
@@ -358,6 +372,14 @@ fun CameraScreen(
                 scope.launch {
                     repository.updateCameraMode(roomCode, "photo")
                 }
+            }
+        },
+        onAspectRatioClick = {
+            scope.launch {
+                repository.updateAspectRatioMode(
+                    roomCode,
+                    AspectRatioMode.next(firebaseAspectRatioMode).key
+                )
             }
         },
         onLensClick = {
@@ -539,6 +561,28 @@ fun CameraScreen(
         faceOverlayPublisher.publish(detected = detected, bounds = bounds, force = force)
     }
 
+    fun publishSceneDetection(
+        result: SceneDetectionResult,
+        force: Boolean = false,
+        autoAdjustment: String = ""
+    ) {
+        val now = System.currentTimeMillis()
+        val shouldPublish =
+            force ||
+                result.key != lastSceneKey ||
+                now - lastScenePublishMs >= 1400L
+        if (!shouldPublish) return
+
+        lastScenePublishMs = now
+        lastSceneKey = result.key
+        scope.launch {
+            repository.updateSceneDetectionState(
+                roomCode = roomCode,
+                state = result.copy(timestamp = now).toState(autoAdjustment = autoAdjustment)
+            )
+        }
+    }
+
     fun applyPhotoFaceMetering(bounds: PortraitFaceBounds) {
         if (isPortraitMode || !bounds.isValid()) return
         val currentCamera = camera ?: return
@@ -655,6 +699,11 @@ fun CameraScreen(
         }
 
         lastPhotoFaceSeenMs = System.currentTimeMillis()
+        publishSceneDetection(
+            result = sceneDetectionResult("face", 0.92),
+            force = lastSceneKey != "face",
+            autoAdjustment = "Face metering"
+        )
         val primaryBounds = bounds.first()
         if (isPortraitMode) {
             val status = if (primaryBounds.area < 0.035) {
@@ -678,6 +727,19 @@ fun CameraScreen(
 
     val currentFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
         newValue = { bounds -> handleAnalyzedFaces(bounds) }
+    )
+    val currentSceneResultHandler by rememberUpdatedState<(SceneDetectionResult) -> Unit>(
+        newValue = { result ->
+            val now = System.currentTimeMillis()
+            if (lastPhotoFaceSeenMs > 0L && now - lastPhotoFaceSeenMs < 900L) {
+                publishSceneDetection(
+                    result = sceneDetectionResult("face", 0.92),
+                    autoAdjustment = "Face metering"
+                )
+            } else {
+                publishSceneDetection(result)
+            }
+        }
     )
     val currentPreviewFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
         newValue = { bounds -> handlePreviewFaces(faceBoundsMapper.mapPreviewBounds(bounds)) }
@@ -1415,6 +1477,12 @@ fun CameraScreen(
                         MlKitFaceDetectionAnalyzer(
                             detector = faceDetector,
                             minProcessIntervalMs = 300L,
+                            sceneAnalyzer = sceneAnalyzer,
+                            onSceneResult = { result ->
+                                mainExecutor.execute {
+                                    currentSceneResultHandler(result)
+                                }
+                            },
                             onFaceResult = { bounds ->
                                 mainExecutor.execute {
                                     lastCameraAnalysisResultMs = System.currentTimeMillis()
@@ -1472,9 +1540,21 @@ fun CameraScreen(
                             .setTargetRotation(targetRotation)
                             .build()
                             .apply {
+                                val streamAnalyzer = videoFrameSource.buildAnalyzer(mirrorHorizontally = isFrontCamera)
+                                val mainExecutor = ContextCompat.getMainExecutor(context)
                                 setAnalyzer(
                                     faceAnalysisExecutor,
-                                    videoFrameSource.buildAnalyzer(mirrorHorizontally = isFrontCamera)
+                                    ImageAnalysis.Analyzer { imageProxy ->
+                                        runCatching {
+                                            val result = sceneAnalyzer.detect(imageProxy)
+                                            mainExecutor.execute {
+                                                currentSceneResultHandler(result)
+                                            }
+                                        }.onFailure {
+                                            Log.w("SCENE_DETECTION", "Video scene detection failed", it)
+                                        }
+                                        streamAnalyzer.analyze(imageProxy)
+                                    }
                                 )
                             }
                         videoStreamAnalysis?.let { finalUseCases.add(it) }
@@ -1707,6 +1787,27 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(firebaseSceneDetection.key, firebaseSceneDetection.confidence, firebaseNightModeEnabled) {
+        if (
+            firebaseSceneDetection.key == "night" &&
+                firebaseSceneDetection.confidence >= 0.62 &&
+                !firebaseNightModeEnabled
+        ) {
+            val now = System.currentTimeMillis()
+            if (now - lastNightAutoAppliedMs > 10_000L) {
+                lastNightAutoAppliedMs = now
+                repository.updateNightModeEnabled(roomCode, true)
+                repository.updateSceneDetectionState(
+                    roomCode = roomCode,
+                    state = firebaseSceneDetection.copy(
+                        timestamp = now,
+                        autoAdjustment = "Night mode enabled"
+                    )
+                )
+            }
+        }
+    }
+
     LaunchedEffect(focusUiToken) {
         if (focusUiToken == 0) return@LaunchedEffect
         if (focusLocked) return@LaunchedEffect
@@ -1755,19 +1856,41 @@ fun CameraScreen(
         val density = LocalDensity.current
         val boxMaxWidthPx = previewContainerSize.width.toFloat()
         val boxMaxHeightPx = previewContainerSize.height.toFloat()
-        val previewContentRect =
-            remember(boxMaxWidthPx, boxMaxHeightPx, resolvedWidth, resolvedHeight) {
-                fittedPreviewRect(
+        val previewFrameRect =
+            remember(boxMaxWidthPx, boxMaxHeightPx, firebaseAspectRatioMode) {
+                aspectRatioFrameRect(
                     containerWidth = boxMaxWidthPx,
                     containerHeight = boxMaxHeightPx,
-                    contentWidth = resolvedWidth.toFloat(),
-                    contentHeight = resolvedHeight.toFloat()
+                    aspectRatioKey = firebaseAspectRatioMode
                 )
             }
+        val previewContentRect =
+            remember(previewFrameRect, resolvedWidth, resolvedHeight, firebaseAspectRatioMode) {
+                if (AspectRatioMode.fromKey(firebaseAspectRatioMode) == AspectRatioMode.Full) {
+                    fittedPreviewRectInFrame(
+                        frameRect = previewFrameRect,
+                        contentWidth = resolvedWidth.toFloat(),
+                        contentHeight = resolvedHeight.toFloat()
+                    )
+                } else {
+                    previewFrameRect
+                }
+        }
 
         AndroidView(
             factory = { previewView },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset {
+                    IntOffset(
+                        x = (previewFrameRect?.left ?: 0f).roundToInt(),
+                        y = (previewFrameRect?.top ?: 0f).roundToInt()
+                    )
+                }
+                .size(
+                    width = with(density) { (previewFrameRect?.width ?: boxMaxWidthPx).toDp() },
+                    height = with(density) { (previewFrameRect?.height ?: boxMaxHeightPx).toDp() }
+                )
         )
 
         if (flashAlpha > 0f) {
@@ -1926,6 +2049,12 @@ fun CameraScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                SceneDetectionChip(state = firebaseSceneDetection)
+            }
         }
 
         CameraToolRail(
