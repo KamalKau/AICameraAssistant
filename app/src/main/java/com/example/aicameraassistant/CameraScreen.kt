@@ -352,7 +352,13 @@ fun CameraScreen(
             hostCoordinator.updateFlashMode(firebaseFlashMode, flashSupported)
         },
         onBoomerangClick = {
-            captureMode = if (captureMode == "boomerang") "photo" else "boomerang"
+            val selectingBoomerang = captureMode != "boomerang"
+            captureMode = if (selectingBoomerang) "boomerang" else "photo"
+            if (selectingBoomerang && firebaseCameraMode != "photo") {
+                scope.launch {
+                    repository.updateCameraMode(roomCode, "photo")
+                }
+            }
         },
         onLensClick = {
             hostCoordinator.switchLens(firebaseLensFacing)
@@ -1109,7 +1115,13 @@ fun CameraScreen(
         }
 
         if (requestType == "boomerang") {
-            if (boomerangInProgress) return
+            if (boomerangInProgress) {
+                lastHandledCaptureRequestId = requestId
+                scope.launch {
+                    repository.resetCaptureRequest(roomCode)
+                }
+                return
+            }
 
             boomerangInProgress = true
             val saved = BoomerangRecorder(context, previewView).record()
@@ -1118,12 +1130,16 @@ fun CameraScreen(
             scope.launch {
                 repository.resetCaptureRequest(roomCode)
             }
-            Toast.makeText(
-                context,
-                if (saved) "Boomerang saved" else "Boomerang failed",
-                Toast.LENGTH_SHORT
-            ).show()
-            if (!saved) {
+            if (saved) {
+                showStatusPopup(
+                    context = context,
+                    title = "Boomerang saved",
+                    detail = "Saved to gallery",
+                    badge = "∞",
+                    accentColor = AndroidColor.rgb(255, 213, 79)
+                )
+            } else {
+                Toast.makeText(context, "Boomerang failed", Toast.LENGTH_SHORT).show()
                 Log.w("AICameraAssistant", "Boomerang request failed")
             }
             return

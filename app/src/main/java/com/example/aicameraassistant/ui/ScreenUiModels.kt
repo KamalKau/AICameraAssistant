@@ -74,6 +74,7 @@ data class ControllerBottomControlsUiState(
     val isVideoMode: Boolean,
     val isVideoRecording: Boolean,
     val isVideoPaused: Boolean,
+    val boomerangSelected: Boolean,
     val burstCaptureCount: Int,
     val shutterScale: Float,
     val shutterCoreScale: Float,

@@ -370,6 +370,7 @@ private fun ControllerShutterButton(
     val coreColor = when {
         state.isVideoRecording -> recordingRed
         state.isVideoMode -> recordingRed
+        state.boomerangSelected -> Color(0xFFFFD54F)
         else -> Color.White
     }
     val coreShape = when {
@@ -410,8 +411,18 @@ private fun ControllerShutterButton(
                     scaleY = state.shutterCoreScale
                 }
                 .clip(coreShape)
-                .background(coreColor)
-        )
+                .background(coreColor),
+            contentAlignment = Alignment.Center
+        ) {
+            if (state.boomerangSelected && !state.isVideoMode && !state.isVideoRecording) {
+                Text(
+                    text = "∞",
+                    color = Color.Black.copy(alpha = 0.82f),
+                    fontSize = if (compact) 24.sp else 30.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 

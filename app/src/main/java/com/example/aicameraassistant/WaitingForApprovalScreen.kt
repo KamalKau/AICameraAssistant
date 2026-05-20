@@ -178,6 +178,8 @@ fun WaitingForApprovalScreen(
     var previewOverlayRect by screenViewModel::previewOverlayRect
     var shutterFlashAlpha by screenViewModel::shutterFlashAlpha
     var shutterPressed by screenViewModel::shutterPressed
+    var boomerangCaptureEffectVisible by remember { mutableStateOf(false) }
+    var boomerangCaptureEffectToken by remember { mutableLongStateOf(0L) }
     var captureRequestSequence by screenViewModel::captureRequestSequence
     var captureMode by screenViewModel::captureMode
     var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
@@ -364,7 +366,13 @@ fun WaitingForApprovalScreen(
             controllerCoordinator.updateFlashMode(firebaseFlashMode, firebaseFlashSupported)
         },
         onBoomerangClick = {
-            captureMode = if (captureMode == "boomerang") "photo" else "boomerang"
+            val selectingBoomerang = captureMode != "boomerang"
+            captureMode = if (selectingBoomerang) "boomerang" else "photo"
+            if (selectingBoomerang && firebaseCameraMode != "photo") {
+                scope.launch {
+                    repository.updateCameraMode(roomCode, "photo")
+                }
+            }
         },
         onLensClick = {
             controllerCoordinator.switchLens(firebaseLensFacing)
@@ -391,6 +399,7 @@ fun WaitingForApprovalScreen(
         isVideoMode = firebaseCameraMode == "video",
         isVideoRecording = videoRecordingInProgress,
         isVideoPaused = videoRecordingPaused,
+        boomerangSelected = captureMode == "boomerang",
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
         shutterCoreScale = shutterCoreScale,
@@ -447,8 +456,27 @@ fun WaitingForApprovalScreen(
             requestType = requestType
         )
         if (requestType == "boomerang") {
-            captureMode = "photo"
-        } else if (requestType == "video") {
+            val effectToken = boomerangCaptureEffectToken + 1L
+            boomerangCaptureEffectToken = effectToken
+            boomerangCaptureEffectVisible = true
+            scope.launch {
+                repeat(8) { index ->
+                    if (boomerangCaptureEffectToken != effectToken) return@launch
+                    shutterFlashAlpha = if (index % 2 == 0) 0.38f else 0.16f
+                    delay(170)
+                }
+                if (boomerangCaptureEffectToken == effectToken) {
+                    shutterFlashAlpha = 0f
+                }
+            }
+            scope.launch {
+                delay(1_650)
+                if (boomerangCaptureEffectToken == effectToken) {
+                    boomerangCaptureEffectVisible = false
+                }
+            }
+        }
+        if (requestType == "video") {
             videoRecordingInProgress = !videoRecordingInProgress
             videoRecordingPaused = false
         } else if (requestType == "video_start") {
@@ -1038,6 +1066,11 @@ fun WaitingForApprovalScreen(
                     )
                 }
 
+                BoomerangCaptureEffect(
+                    visible = boomerangCaptureEffectVisible,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+
                 if (
                     firebaseLensFacing == "front" &&
                     exposureUiState.supported &&
@@ -1286,7 +1319,14 @@ fun WaitingForApprovalScreen(
                         onVideoStop = {
                             triggerCaptureRequest("video_stop")
                         },
-                        onShutterPress = { _ ->
+                        onShutterPress = shutter@{ _ ->
+                            if (firebaseCameraMode != "video" && captureMode == "boomerang") {
+                                if (tryAwaitRelease()) {
+                                    triggerCaptureRequest("boomerang")
+                                }
+                                return@shutter
+                            }
+
                             var burstStarted = false
                             val startBurstJob = if (firebaseCameraMode == "video") {
                                 null
@@ -1363,6 +1403,58 @@ private fun ControllerCameraModeStrip(
             mode = "photo",
             selected = selectedMode == "photo",
             onModeSelected = onModeSelected
+        )
+    }
+}
+
+@Composable
+private fun BoomerangCaptureEffect(
+    visible: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        label = "boomerang_capture_effect_alpha"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.82f,
+        label = "boomerang_capture_effect_scale"
+    )
+
+    if (alpha <= 0.01f) return
+
+    Column(
+        modifier = modifier.graphicsLayer {
+            this.alpha = alpha
+            scaleX = scale
+            scaleY = scale
+        },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(86.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.48f))
+                .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "∞",
+                color = Color(0xFFFFD54F),
+                fontSize = 48.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Text(
+            text = "Boomerang",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.46f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 7.dp)
         )
     }
 }

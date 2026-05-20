@@ -48,9 +48,16 @@ class BoomerangRecorder(
     private suspend fun capturePreviewFrames(): List<Bitmap> {
         val frames = mutableListOf<Bitmap>()
         var attempts = 0
-        while (frames.size < FRAME_COUNT && attempts < FRAME_COUNT * 3) {
-            previewView.bitmap?.let { bitmap ->
-                frames.add(bitmap.scaleForBoomerang())
+        var lastSignature: Long? = null
+        while (frames.size < FRAME_COUNT && attempts < MAX_CAPTURE_ATTEMPTS) {
+            previewView.bitmap?.scaleForBoomerang()?.let { bitmap ->
+                val signature = bitmap.motionSignature()
+                if (lastSignature == null || kotlin.math.abs(signature - lastSignature!!) > FRAME_DIFFERENCE_THRESHOLD) {
+                    frames.add(bitmap)
+                    lastSignature = signature
+                } else {
+                    bitmap.recycle()
+                }
             }
             attempts += 1
             delay(FRAME_DELAY_MS)
@@ -93,18 +100,44 @@ class BoomerangRecorder(
         return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
     }
 
+    private fun Bitmap.motionSignature(): Long {
+        val sampleWidth = 8
+        val sampleHeight = 8
+        var signature = 0L
+        val stepX = (width / sampleWidth).coerceAtLeast(1)
+        val stepY = (height / sampleHeight).coerceAtLeast(1)
+        var index = 1
+        var y = stepY / 2
+        while (y < height) {
+            var x = stepX / 2
+            while (x < width) {
+                val pixel = getPixel(x, y)
+                val r = pixel shr 16 and 0xff
+                val g = pixel shr 8 and 0xff
+                val b = pixel and 0xff
+                signature += ((r * 3L) + (g * 5L) + (b * 7L)) * index
+                index += 1
+                x += stepX
+            }
+            y += stepY
+        }
+        return signature
+    }
+
     private companion object {
-        const val FRAME_COUNT = 10
-        const val MIN_FRAME_COUNT = 6
-        const val FRAME_DELAY_MS = 45L
+        const val FRAME_COUNT = 24
+        const val MIN_FRAME_COUNT = 10
+        const val FRAME_DELAY_MS = 65L
+        const val MAX_CAPTURE_ATTEMPTS = 48
+        const val FRAME_DIFFERENCE_THRESHOLD = 950L
     }
 }
 
 private object BoomerangMp4Encoder {
     private const val MIME_TYPE = "video/avc"
-    private const val FRAME_RATE = 22
+    private const val FRAME_RATE = 24
     private const val I_FRAME_INTERVAL = 1
-    private const val LOOP_COUNT = 3
+    private const val LOOP_COUNT = 2
     private const val TIMEOUT_US = 10_000L
 
     fun encode(
