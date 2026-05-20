@@ -427,6 +427,8 @@ fun WaitingForApprovalScreen(
         isVideoMode = firebaseCameraMode == "video",
         isVideoRecording = videoRecordingInProgress,
         isVideoPaused = videoRecordingPaused,
+        videoHdrSupported = firebaseVideoHdrSupported,
+        videoHdrEnabled = firebaseVideoHdrEnabled,
         boomerangSelected = captureMode == "boomerang",
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
@@ -1379,6 +1381,7 @@ fun WaitingForApprovalScreen(
                         onPortraitEffectSelected = { effect ->
                             updatePortraitEffect(effect)
                         },
+                        onVideoHdrClick = controllerToolRailActions.onVideoHdrClick,
                         onLensClick = controllerToolRailActions.onLensClick,
                         onVideoPauseToggle = {
                             triggerCaptureRequest(

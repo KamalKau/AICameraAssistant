@@ -140,11 +140,19 @@ fun ControllerBottomControls(
             horizontalArrangement = Arrangement.spacedBy(if (straightZoomBarActive) 24.dp else 34.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PortraitFeatureButton(
-                enabled = state.portraitControlsEnabled,
-                selected = state.portraitControlsVisible,
-                onClick = actions.onPortraitControlsClick
-            )
+            if (state.isVideoMode) {
+                VideoHdrButton(
+                    supported = state.videoHdrSupported,
+                    enabled = state.videoHdrEnabled,
+                    onClick = actions.onVideoHdrClick
+                )
+            } else {
+                PortraitFeatureButton(
+                    enabled = state.portraitControlsEnabled,
+                    selected = state.portraitControlsVisible,
+                    onClick = actions.onPortraitControlsClick
+                )
+            }
 
             ControllerShutterButton(
                 state = state,
@@ -335,6 +343,49 @@ private fun VideoStopButton(onClick: () -> Unit) {
             contentDescription = "Stop video",
             tint = Color(0xFFD32F2F),
             modifier = Modifier.size(34.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoHdrButton(
+    supported: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    !supported -> Color.Black.copy(alpha = 0.22f)
+                    enabled -> Color(0xFFFFD54F).copy(alpha = 0.22f)
+                    else -> Color.Black.copy(alpha = 0.46f)
+                }
+            )
+            .border(
+                width = if (enabled) 1.3.dp else 1.dp,
+                color = when {
+                    !supported -> Color.White.copy(alpha = 0.10f)
+                    enabled -> Color(0xFFFFD54F)
+                    else -> Color.White.copy(alpha = 0.18f)
+                },
+                shape = CircleShape
+            )
+            .clickable(enabled = supported, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "HDR",
+            color = when {
+                !supported -> Color.White.copy(alpha = 0.28f)
+                enabled -> Color(0xFFFFD54F)
+                else -> Color.White.copy(alpha = 0.86f)
+            },
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
         )
     }
 }
