@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Camera Assistant Onboarding & Login</title>
+  <style>
+    :root {
+      --accent: #7C4DFF;
+      --bg: #050507;
+      --panel: rgba(255, 255, 255, 0.09);
+      --line: rgba(255, 255, 255, 0.16);
+      --text: #f7f7fb;
+      --muted: rgba(247, 247, 251, 0.68);
+      --soft: rgba(124, 77, 255, 0.2);
+    }
+
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(124, 77, 255, 0.22), transparent 30%),
+        radial-gradient(circle at 86% 22%, rgba(64, 170, 255, 0.12), transparent 28%),
+        linear-gradient(135deg, #050507 0%, #090911 55%, #030305 100%);
+      overflow-x: hidden;
+    }
+
+    .board {
+      width: min(1540px, 100%);
+      margin: 0 auto;
+      padding: 46px 34px 56px;
+    }
+
+    .header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 34px;
+    }
+
+    .eyebrow {
+      color: rgba(255, 255, 255, 0.56);
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 58px);
+      line-height: 1;
+      letter-spacing: 0;
+      font-weight: 760;
+    }
+
+    .header p {
+      max-width: 480px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(290px, 1fr));
+      gap: 30px;
+      align-items: start;
+    }
+
+    .phone {
+      width: min(100%, 362px);
+      aspect-ratio: 9 / 19.5;
+      margin: 0 auto;
+      padding: 11px;
+      border-radius: 42px;
+      background: linear-gradient(145deg, #2b2c34, #08080d 44%, #1a1a22);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.46), 0 0 44px rgba(124, 77, 255, 0.12);
+      position: relative;
+    }
+
+    .phone::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      width: 86px;
+      height: 24px;
+      transform: translateX(-50%);
+      border-radius: 99px;
+      background: #030306;
+      z-index: 5;
+    }
+
+    .screen {
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+      border-radius: 32px;
+      background: #050507;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .screen::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(115deg, rgba(255, 255, 255, 0.12), transparent 28%, transparent 72%, rgba(255,255,255,0.05));
+      mix-blend-mode: screen;
+      opacity: 0.46;
+    }
+
+    .status {
+      position: absolute;
+      top: 18px;
+      left: 22px;
+      right: 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 680;
+      z-index: 4;
+      color: rgba(255,255,255,0.88);
+    }
+
+    .icons {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .dot, .bar {
+      width: 5px;
+      height: 5px;
+      border-radius: 99px;
+      background: #fff;
+      opacity: 0.82;
+    }
+
+    .bar {
+      width: 18px;
+      height: 8px;
+      border: 1px solid rgba(255,255,255,0.8);
+      background: transparent;
+    }
+
+    .content {
+      position: relative;
+      z-index: 2;
+      height: 100%;
+      padding: 58px 22px 24px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .camera-bg {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(to bottom, rgba(0,0,0,0.28), rgba(0,0,0,0.58)),
+        radial-gradient(circle at 62% 28%, rgba(255,255,255,0.16), transparent 16%),
+        radial-gradient(circle at 30% 54%, rgba(124,77,255,0.22), transparent 24%),
+        linear-gradient(135deg, #181b22, #07080c 52%, #111118);
+    }
+
+    .camera-bg::before {
+      content: "";
+      position: absolute;
+      inset: 18% 12% 30%;
+      border-radius: 30px;
+      background:
+        radial-gradient(circle at 50% 50%, #15171c 0 26%, #08090d 27% 38%, rgba(255,255,255,0.12) 39% 40%, transparent 41%),
+        linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0.02));
+      border: 1px solid rgba(255,255,255,0.12);
+      filter: saturate(1.3);
+    }
+
+    .blur-bg {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.62)),
+        radial-gradient(circle at 30% 24%, rgba(229, 232, 244, 0.2), transparent 18%),
+        radial-gradient(circle at 78% 66%, rgba(124, 77, 255, 0.35), transparent 26%),
+        linear-gradient(140deg, #1d2430, #08090d 46%, #17131f);
+      filter: blur(0.2px);
+    }
+
+    .logo {
+      width: 72px;
+      height: 72px;
+      border-radius: 24px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04));
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 0 34px rgba(124,77,255,0.34);
+      margin-bottom: 18px;
+    }
+
+    .logo-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      position: relative;
+      box-shadow: 0 0 0 6px rgba(124,77,255,0.35);
+    }
+
+    .logo-mark::after {
+      content: "";
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .center { align-items: center; text-align: center; }
+    .spacer { flex: 1; }
+
+    h2 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.05;
+      letter-spacing: 0;
+      font-weight: 760;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.1;
+      letter-spacing: 0;
+      font-weight: 740;
+    }
+
+    .tagline, .sub {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      margin: 12px 0 0;
+    }
+
+    .button-stack {
+      display: grid;
+      gap: 11px;
+      width: 100%;
+    }
+
+    .btn {
+      height: 48px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      font-size: 14px;
+      font-weight: 680;
+      backdrop-filter: blur(18px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);
+    }
+
+    .btn.primary {
+      background: linear-gradient(135deg, #8a62ff, var(--accent));
+      border-color: rgba(255,255,255,0.22);
+      box-shadow: 0 12px 30px rgba(124,77,255,0.32);
+    }
+
+    .btn.dark {
+      background: rgba(0,0,0,0.34);
+    }
+
+    .social {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: rgba(255,255,255,0.92);
+      color: #08080a;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .apple {
+      border-radius: 7px;
+    }
+
+    .focus-ui {
+      position: absolute;
+      inset: 95px 28px auto;
+      height: 214px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 24px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .focus-box {
+      position: absolute;
+      left: 76px;
+      top: 62px;
+      width: 82px;
+      height: 82px;
+      border: 2px solid rgba(255,255,255,0.82);
+      border-radius: 18px;
+      box-shadow: 0 0 28px rgba(124,77,255,0.28);
+    }
+
+    .zoom-pill {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 7px 12px;
+      border-radius: 99px;
+      background: rgba(0,0,0,0.42);
+      color: rgba(255,255,255,0.84);
+      font-size: 11px;
+      border: 1px solid rgba(255,255,255,0.16);
+    }
+
+    .glass {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 14px 40px rgba(0,0,0,0.28);
+      backdrop-filter: blur(20px);
+      border-radius: 24px;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .feature {
+      min-height: 84px;
+      padding: 12px;
+    }
+
+    .feature-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 11px;
+      background: rgba(124,77,255,0.18);
+      border: 1px solid rgba(124,77,255,0.35);
+      display: grid;
+      place-items: center;
+      margin-bottom: 9px;
+      color: #d9ceff;
+      font-size: 14px;
+    }
+
+    .feature-title {
+      font-size: 12px;
+      font-weight: 720;
+      line-height: 1.2;
+    }
+
+    .login-card {
+      padding: 18px;
+      margin-top: auto;
+    }
+
+    .link {
+      color: rgba(255,255,255,0.78);
+      font-size: 13px;
+      text-align: center;
+      margin-top: 16px;
+    }
+
+    .link span { color: #bda9ff; font-weight: 720; }
+
+    .field {
+      height: 52px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      color: rgba(255,255,255,0.9);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      margin-bottom: 11px;
+      font-size: 14px;
+    }
+
+    .plans-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      margin: 16px 0 14px;
+    }
+
+    .toggle-item {
+      height: 32px;
+      border-radius: 99px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.7);
+      font-weight: 700;
+    }
+
+    .toggle-item.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .plan {
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+
+    .plan.pro {
+      border-color: rgba(124,77,255,0.56);
+      box-shadow: 0 0 30px rgba(124,77,255,0.22), inset 0 1px 0 rgba(255,255,255,0.14);
+    }
+
+    .plan-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .price {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .badge {
+      color: #fff;
+      background: rgba(124,77,255,0.9);
+      border-radius: 99px;
+      padding: 5px 9px;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .features {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: rgba(255,255,255,0.78);
+      font-size: 12px;
+    }
+
+    .features li::before {
+      content: "✓";
+      color: #bda9ff;
+      margin-right: 7px;
+      font-weight: 900;
+    }
+
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: repeat(2, minmax(280px, 1fr)); }
+      .header { align-items: start; flex-direction: column; }
+      .header p { text-align: left; }
+    }
+
+    @media (max-width: 690px) {
+      .board { padding: 30px 16px 40px; }
+      .grid { grid-template-columns: 1fr; gap: 24px; }
+      .phone { width: min(100%, 350px); }
+    }
+  </style>
+</head>
+<body>
+  <main class="board">
+    <header class="header">
+      <div>
+        <div class="eyebrow">Premium Mobile UI Showcase</div>
+        <h1>AI Camera Assistant Onboarding & Login</h1>
+      </div>
+      <p>Six high-end dark camera-app screens for remote live preview, capture control, HDR, night mode, portrait tools, AI scene detection, and Pro subscription.</p>
+    </header>
+
+    <section class="grid" aria-label="Six mobile app onboarding screens">
+      <article class="phone">
+        <div class="screen">
+          <div class="camera-bg"></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content center">
+            <div class="spacer"></div>
+            <div class="logo"><div class="logo-mark"></div></div>
+            <h2>AI Camera Assistant</h2>
+            <p class="tagline">Turn any phone into your remote camera controller</p>
+            <div class="spacer"></div>
+            <div class="button-stack">
+              <div class="btn"><span class="social">G</span>Continue with Google</div>
+              <div class="btn"><span class="social apple"></span>Continue with Apple</div>
+              <div class="btn dark">Continue as Guest</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="phone">
+        <div class="screen">
+          <div class="blur-bg"></div>
+          <div class="focus-ui"><div class="focus-box"></div><div class="zoom-pill">1x · LIVE · HDR</div></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content center">
+            <div class="spacer"></div>
+            <div class="logo"><div class="logo-mark"></div></div>
+            <h2>Live Remote Camera</h2>
+            <p class="tagline">Preview, focus, zoom, and capture from another phone.</p>
+            <div class="spacer"></div>
+            <div class="button-stack">
+              <div class="btn primary">Sign In</div>
+              <div class="btn">Create Account</div>
+              <div class="btn dark">Continue as Guest</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="phone">
+        <div class="screen">
+          <div class="blur-bg"></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content">
+            <h3>Powerful Remote Camera Tools</h3>
+            <p class="sub">Flagship camera controls from anywhere.</p>
+            <div class="feature-grid">
+              <div class="feature glass"><div class="feature-icon">⌁</div><div class="feature-title">Remote Camera Control</div></div>
+              <div class="feature glass"><div class="feature-icon">◐</div><div class="feature-title">Portrait Mode</div></div>
+              <div class="feature glass"><div class="feature-icon">☾</div><div class="feature-title">Night Mode</div></div>
+              <div class="feature glass"><div class="feature-icon">HDR</div><div class="feature-title">HDR Support</div></div>
+              <div class="feature glass"><div class="feature-icon">AI</div><div class="feature-title">AI Scene Detection</div></div>
+              <div class="feature glass"><div class="feature-icon">●</div><div class="feature-title">Remote Video Recording</div></div>
+            </div>
+            <div class="spacer"></div>
+            <div class="btn primary">Get Started</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="phone">
+        <div class="screen">
+          <div class="camera-bg"></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content">
+            <div class="spacer"></div>
+            <div class="login-card glass">
+              <h3>Sign In</h3>
+              <p class="sub">Access your camera rooms and saved settings.</p>
+              <div style="height:18px"></div>
+              <div class="button-stack">
+                <div class="btn"><span class="social">G</span>Continue with Google</div>
+                <div class="btn"><span class="social apple"></span>Continue with Apple</div>
+                <div class="btn dark">Continue as Guest</div>
+              </div>
+              <div class="link">New here? <span>Create account</span></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="phone">
+        <div class="screen">
+          <div class="blur-bg"></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content">
+            <div class="spacer"></div>
+            <div class="login-card glass">
+              <h3>Create Account</h3>
+              <p class="sub">Start controlling a remote camera in minutes.</p>
+              <div style="height:16px"></div>
+              <div class="field">Email</div>
+              <div class="field">Password</div>
+              <div class="btn primary">Create Account</div>
+              <div style="height:11px"></div>
+              <div class="button-stack">
+                <div class="btn"><span class="social">G</span>Continue with Google</div>
+                <div class="btn"><span class="social apple"></span>Continue with Apple</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="phone">
+        <div class="screen">
+          <div class="blur-bg"></div>
+          <div class="status"><span>9:41</span><span class="icons"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="bar"></i></span></div>
+          <div class="content">
+            <h3>Choose Your Plan</h3>
+            <p class="sub">Upgrade the camera control experience.</p>
+            <div class="plans-toggle"><div class="toggle-item active">Monthly</div><div class="toggle-item">Yearly</div></div>
+            <div class="plan glass">
+              <div class="plan-head"><strong>Free</strong><span class="price">$0</span></div>
+              <ul class="features"><li>Remote preview</li><li>Photo capture</li><li>Basic controls</li></ul>
+            </div>
+            <div class="plan pro glass">
+              <div class="plan-head"><strong>Pro</strong><span class="badge">Best Value</span></div>
+              <ul class="features">
+                <li>No Ads</li><li>HDR</li><li>Night Mode</li><li>Portrait Mode</li><li>AI Scene Detection</li><li>Remote Video Features</li><li>Cloud Sync</li>
+              </ul>
+            </div>
+            <div class="spacer"></div>
+            <div class="btn primary">Start Pro</div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

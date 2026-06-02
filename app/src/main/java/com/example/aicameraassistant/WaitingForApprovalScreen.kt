@@ -9,7 +9,13 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -288,10 +294,12 @@ fun WaitingForApprovalScreen(
     val flashModes = listOf("off", "auto", "on")
     val shutterScale by animateFloatAsState(
         targetValue = if (shutterPressed || isBurstCapturing) 0.92f else 1f,
+        animationSpec = tween(durationMillis = 170),
         label = "controller_shutter_scale"
     )
     val shutterCoreScale by animateFloatAsState(
         targetValue = if (isBurstCapturing) 0.72f else 1f,
+        animationSpec = tween(durationMillis = 170),
         label = "controller_shutter_core_scale"
     )
     val shutterSound = remember {
@@ -319,6 +327,12 @@ fun WaitingForApprovalScreen(
             vibrator = vibrator,
             shutterSound = shutterSound
         )
+    }
+    fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
+        scope.launch {
+            runCatching { block() }
+                .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
+        }
     }
     val controllerToolRailUiState = buildCameraToolRailUiState(
         flashSupported = firebaseFlashSupported,
@@ -383,13 +397,13 @@ fun WaitingForApprovalScreen(
             val selectingBoomerang = captureMode != "boomerang"
             captureMode = if (selectingBoomerang) "boomerang" else "photo"
             if (selectingBoomerang && firebaseCameraMode != "photo") {
-                scope.launch {
+                launchRoomWrite("boomerang mode reset") {
                     repository.updateCameraMode(roomCode, "photo")
                 }
             }
         },
         onAspectRatioClick = {
-            scope.launch {
+            launchRoomWrite("aspect ratio update") {
                 repository.updateAspectRatioMode(
                     roomCode,
                     AspectRatioMode.next(firebaseAspectRatioMode).key
@@ -423,6 +437,10 @@ fun WaitingForApprovalScreen(
         minZoom = minZoom.toFloat(),
         maxZoom = controllerMaxZoom.toFloat(),
         commonZoomOptions = commonZoomOptions,
+        exposureVisible = exposureUiState.visible,
+        exposureSupported = exposureUiState.supported,
+        exposureProgress = exposureUiState.progress,
+        exposureLabel = exposureUiState.label,
         isBurstCapturing = isBurstCapturing,
         isVideoMode = firebaseCameraMode == "video",
         isVideoRecording = videoRecordingInProgress,
@@ -447,6 +465,7 @@ fun WaitingForApprovalScreen(
 
     fun releaseControllerPreview() {
         previewContainerRef?.detachRemoteTrack()
+        previewContainerRef?.onVideoRectChanged = null
         remoteTrack = null
         remoteFrameWidth = 0
         remoteFrameHeight = 0
@@ -571,28 +590,28 @@ fun WaitingForApprovalScreen(
         if (mode != "portrait") {
             showPortraitControls = false
         }
-        scope.launch {
+        launchRoomWrite("camera mode update") {
             repository.updateCameraMode(roomCode, mode)
         }
     }
 
     fun updatePortraitBlurLevel(blurLevel: String) {
         if (blurLevel == firebasePortraitBlurLevel) return
-        scope.launch {
+        launchRoomWrite("portrait blur update") {
             repository.updatePortraitBlurLevel(roomCode, blurLevel)
         }
     }
 
     fun updatePortraitStrength(strength: Int) {
         if (strength == firebasePortraitStrength) return
-        scope.launch {
+        launchRoomWrite("portrait strength update") {
             repository.updatePortraitStrength(roomCode, strength)
         }
     }
 
     fun updatePortraitEffect(effect: String) {
         if (effect == firebasePortraitEffect) return
-        scope.launch {
+        launchRoomWrite("portrait effect update") {
             repository.updatePortraitEffect(roomCode, effect)
         }
     }
@@ -616,17 +635,20 @@ fun WaitingForApprovalScreen(
                 roomCode = roomCode,
                 rtcSessionId = activeRtcSessionId
             ) { candidate ->
-            scope.launch(Dispatchers.Main) {
-                val pc = WebRtcSessionManager.controllerPeerConnection
-                if (isRemoteDescriptionSet && pc != null) {
-                    Log.d("WEBRTC_LOG", "Controller applying camera candidate immediately")
-                    pc.addIceCandidate(candidate)
-                } else {
-                    Log.d("WEBRTC_LOG", "Controller buffering camera candidate")
-                    pendingCandidates.add(candidate)
+                if (isEndingSession || roomStatus != "connected") return@listenToCameraIceCandidates
+                scope.launch(Dispatchers.Main) {
+                    if (isEndingSession || roomStatus != "connected") return@launch
+                    val pc = WebRtcSessionManager.controllerPeerConnection
+                    if (isRemoteDescriptionSet && pc != null) {
+                        Log.d("WEBRTC_LOG", "Controller applying camera candidate immediately")
+                        runCatching { pc.addIceCandidate(candidate) }
+                            .onFailure { Log.w("WEBRTC_LOG", "Controller ignored late ICE candidate", it) }
+                    } else {
+                        Log.d("WEBRTC_LOG", "Controller buffering camera candidate")
+                        pendingCandidates.add(candidate)
+                    }
                 }
             }
-        }
             onDispose {
                 registration.remove()
             }
@@ -636,7 +658,7 @@ fun WaitingForApprovalScreen(
     DisposableEffect(Unit) {
         onDispose {
             previewContainerRef?.detachRemoteTrack()
-            previewContainerRef?.renderer?.release()
+            previewContainerRef?.releaseRenderer()
             previewContainerRef = null
             remoteTrack = null
             WebRtcSessionManager.clearConnections()
@@ -660,7 +682,7 @@ fun WaitingForApprovalScreen(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
                 performCleanup = { releaseControllerPreview() },
-                exitScreen = true
+                exitScreen = false
             )
             return@LaunchedEffect
         }
@@ -670,13 +692,14 @@ fun WaitingForApprovalScreen(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
                 performCleanup = { releaseControllerPreview() },
-                exitScreen = true
+                exitScreen = false
             )
             return@LaunchedEffect
         }
 
         val shouldCreateOffer =
             roomStatus == "connected" &&
+                !isEndingSession &&
                 (!offerCreated || connectionState == AppConnectionState.DISCONNECTED)
 
         if (shouldCreateOffer) {
@@ -704,6 +727,7 @@ fun WaitingForApprovalScreen(
                 repository = repository,
                 onRemoteTrackReady = { track ->
                     scope.launch(Dispatchers.Main) {
+                        if (isEndingSession || roomStatus != "connected") return@launch
                         Log.d("WEBRTC_LOG", "Controller received remote track")
                         remoteTrack = track
                         previewContainerRef?.attachRemoteTrack(track) {
@@ -746,6 +770,7 @@ fun WaitingForApprovalScreen(
     }
 
     LaunchedEffect(firebaseAnswer, firebaseRtcSessionId, currentOfferSessionId) {
+        if (isEndingSession || roomStatus != "connected") return@LaunchedEffect
         val answer = firebaseAnswer ?: return@LaunchedEffect
         if (firebaseRtcSessionId == null || firebaseRtcSessionId != currentOfferSessionId) {
             Log.d("WEBRTC_LOG", "Controller ignoring stale answer for session=$firebaseRtcSessionId")
@@ -755,22 +780,30 @@ fun WaitingForApprovalScreen(
 
         if (pc.remoteDescription == null) {
             Log.d("WEBRTC_LOG", "Controller setting remote description (Answer)")
-            pc.setRemoteDescription(
-                WebRtcSessionManager.sessionDescriptionObserver(
-                    onSetSuccess = {
-                        scope.launch(Dispatchers.Main) {
-                            Log.d(
-                                "WEBRTC_LOG",
-                                "Controller remote description set, applying ${pendingCandidates.size} candidates"
-                            )
-                            isRemoteDescriptionSet = true
-                            pendingCandidates.forEach { pc.addIceCandidate(it) }
-                            pendingCandidates.clear()
+            runCatching {
+                pc.setRemoteDescription(
+                    WebRtcSessionManager.sessionDescriptionObserver(
+                        onSetSuccess = {
+                            scope.launch(Dispatchers.Main) {
+                                if (isEndingSession || roomStatus != "connected") return@launch
+                                Log.d(
+                                    "WEBRTC_LOG",
+                                    "Controller remote description set, applying ${pendingCandidates.size} candidates"
+                                )
+                                isRemoteDescriptionSet = true
+                                pendingCandidates.forEach { candidate ->
+                                    runCatching { pc.addIceCandidate(candidate) }
+                                        .onFailure { Log.w("WEBRTC_LOG", "Controller ignored buffered ICE candidate", it) }
+                                }
+                                pendingCandidates.clear()
+                            }
                         }
-                    }
-                ),
-                SessionDescription(SessionDescription.Type.ANSWER, answer)
-            )
+                    ),
+                    SessionDescription(SessionDescription.Type.ANSWER, answer)
+                )
+            }.onFailure {
+                Log.w("WEBRTC_LOG", "Controller ignored late remote description", it)
+            }
         }
     }
 
@@ -1340,6 +1373,7 @@ fun WaitingForApprovalScreen(
 
             val compactBottomControlsActive =
                 showZoomRing ||
+                    (exposureUiState.visible && exposureUiState.supported) ||
                     (showPortraitControls && firebaseCameraMode == "portrait") ||
                     (videoRecordingInProgress && firebaseCameraMode == "video")
             Column(
@@ -1370,6 +1404,9 @@ fun WaitingForApprovalScreen(
                             showZoomRing = false
                         },
                         onZoomPresetLongPress = { showZoomRing = true },
+                        onExposureProgressChange = controllerExposureUiActions.onProgressChange,
+                        onExposureDismiss = controllerExposureUiActions.onDismiss,
+                        onExposureReset = controllerExposureUiActions.onReset,
                         onPortraitControlsClick = {
                             if (firebaseCameraMode == "portrait") {
                                 showPortraitControls = !showPortraitControls
@@ -1427,20 +1464,6 @@ fun WaitingForApprovalScreen(
                         onModeSelected = { mode -> updateCameraMode(mode) }
                     )
                 }
-            }
-
-            if (exposureUiState.visible && exposureUiState.supported) {
-                ManualExposurePanel(
-                    progress = exposureUiState.progress,
-                    exposureLabel = exposureUiState.label,
-                    onProgressChange = controllerExposureUiActions.onProgressChange,
-                    onDismiss = controllerExposureUiActions.onDismiss,
-                    onReset = controllerExposureUiActions.onReset,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(bottom = 132.dp)
-                )
             }
         }
     }

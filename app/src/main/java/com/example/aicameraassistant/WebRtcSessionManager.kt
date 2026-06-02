@@ -219,22 +219,25 @@ object WebRtcSessionManager {
     fun stopLocalCamera() {
         Log.d("WEBRTC_LOG", "Stopping local camera...")
         try {
-            surfaceTextureHelper?.stopListening()
-            cachedSurface?.release()
+            val helper = surfaceTextureHelper
+            val surface = cachedSurface
+            val currentVideoSource = videoSource
+            val currentAudioSource = audioSource
+
+            surfaceTextureHelper = null
             cachedSurface = null
-            videoSource?.capturerObserver?.onCapturerStopped()
+            videoSource = null
+            audioSource = null
 
             localVideoTrack = null
             localAudioTrack = null
 
-            surfaceTextureHelper?.dispose()
-            surfaceTextureHelper = null
-
-            videoSource?.dispose()
-            videoSource = null
-
-            audioSource?.dispose()
-            audioSource = null
+            runCatching { helper?.stopListening() }
+            runCatching { surface?.release() }
+            runCatching { currentVideoSource?.capturerObserver?.onCapturerStopped() }
+            runCatching { helper?.dispose() }
+            runCatching { currentVideoSource?.dispose() }
+            runCatching { currentAudioSource?.dispose() }
 
             imageFrameSourceActive = false
             captureWidth = 0
@@ -324,8 +327,9 @@ object WebRtcSessionManager {
     @Synchronized
     fun createCameraPeerConnection(onIceCandidate: (IceCandidate) -> Unit): PeerConnection? {
         val f = factory ?: return null
-        cameraPeerConnection?.dispose()
+        val oldConnection = cameraPeerConnection
         cameraPeerConnection = null
+        disposePeerConnection(oldConnection)
         resetConnectionHealth(ConnectionSide.CAMERA)
         cancelConnectionJobs(ConnectionSide.CAMERA)
         updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.CONNECTING)
@@ -367,8 +371,9 @@ object WebRtcSessionManager {
         onRemoteTrack: (VideoTrack) -> Unit
     ): PeerConnection? {
         val f = factory ?: return null
-        controllerPeerConnection?.dispose()
+        val oldConnection = controllerPeerConnection
         controllerPeerConnection = null
+        disposePeerConnection(oldConnection)
         resetConnectionHealth(ConnectionSide.CONTROLLER)
         cancelConnectionJobs(ConnectionSide.CONTROLLER)
         updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.CONNECTING)
@@ -444,10 +449,12 @@ object WebRtcSessionManager {
                     _controllerConnectionState.value != AppConnectionState.IDLE
             cancelConnectionJobs(ConnectionSide.CAMERA)
             cancelConnectionJobs(ConnectionSide.CONTROLLER)
-            controllerPeerConnection?.dispose()
+            val controllerConnection = controllerPeerConnection
+            val cameraConnection = cameraPeerConnection
             controllerPeerConnection = null
-            cameraPeerConnection?.dispose()
             cameraPeerConnection = null
+            disposePeerConnection(controllerConnection)
+            disposePeerConnection(cameraConnection)
             remoteVideoTrack = null
             resetConnectionState(
                 ConnectionSide.CAMERA,
@@ -460,6 +467,14 @@ object WebRtcSessionManager {
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Error clearing connections", t)
         }
+    }
+
+    private fun disposePeerConnection(peerConnection: PeerConnection?) {
+        if (peerConnection == null) return
+        runCatching { peerConnection.close() }
+            .onFailure { Log.w("WEBRTC_LOG", "Peer connection close failed", it) }
+        runCatching { peerConnection.dispose() }
+            .onFailure { Log.w("WEBRTC_LOG", "Peer connection dispose failed", it) }
     }
 
     private fun handleIceConnectionChange(

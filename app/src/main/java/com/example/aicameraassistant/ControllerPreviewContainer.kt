@@ -27,6 +27,8 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     private val faceOverlay = ControllerFaceDetectionOverlayView(context)
     private var attachedTrack: VideoTrack? = null
     private var frameSink: FrameTimestampVideoSink? = null
+    @Volatile
+    private var rendererReleased = false
 
     private var videoAspectRatio = 9f / 16f
     private var rotateContent = false
@@ -78,6 +80,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     }
 
     fun attachRemoteTrack(track: VideoTrack?, onFrameReceived: () -> Unit) {
+        if (rendererReleased) return
         if (attachedTrack == track && frameSink != null) return
 
         detachRemoteTrack()
@@ -85,6 +88,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
         val sink = FrameTimestampVideoSink(
             renderer = renderer,
+            isReleased = { rendererReleased },
             onFrameReceived = onFrameReceived
         )
         attachedTrack = track
@@ -101,6 +105,14 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         }
         attachedTrack = null
         frameSink = null
+    }
+
+    fun releaseRenderer() {
+        if (rendererReleased) return
+        rendererReleased = true
+        detachRemoteTrack()
+        onVideoRectChanged = null
+        runCatching { renderer.release() }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -200,6 +212,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
 private class FrameTimestampVideoSink(
     private val renderer: VideoSink,
+    private val isReleased: () -> Boolean,
     private val onFrameReceived: () -> Unit
 ) : VideoSink {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -207,12 +220,19 @@ private class FrameTimestampVideoSink(
     private var lastTimestampPostedMs = 0L
 
     override fun onFrame(frame: VideoFrame) {
+        if (isReleased()) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastTimestampPostedMs >= FRAME_TIMESTAMP_INTERVAL_MS) {
             lastTimestampPostedMs = now
-            mainHandler.post(onFrameReceived)
+            mainHandler.post {
+                if (!isReleased()) {
+                    onFrameReceived()
+                }
+            }
         }
-        renderer.onFrame(frame)
+        if (!isReleased()) {
+            renderer.onFrame(frame)
+        }
     }
 
     private companion object {

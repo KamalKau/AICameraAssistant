@@ -1,5 +1,14 @@
 package com.example.aicameraassistant
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,9 +97,33 @@ fun ControllerBottomControls(
     state: ControllerBottomControlsUiState,
     actions: ControllerBottomControlsActions
 ) {
-    val straightZoomBarActive = state.showZoomRing
+    val exposureActive = state.exposureVisible && state.exposureSupported
+    val straightZoomBarActive = state.showZoomRing && !exposureActive
+    val shutterTopPadding by animateDpAsState(
+        targetValue = if (exposureActive) 12.dp else 0.dp,
+        animationSpec = tween(220),
+        label = "controller_shutter_exposure_offset"
+    )
 
-    if (state.showZoomRing) {
+    AnimatedVisibility(
+        visible = exposureActive,
+        enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 } + expandVertically(tween(220)),
+        exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 } + shrinkVertically(tween(180))
+    ) {
+        ManualExposurePanel(
+            progress = state.exposureProgress,
+            exposureLabel = state.exposureLabel,
+            onProgressChange = actions.onExposureProgressChange,
+            onDismiss = actions.onExposureDismiss,
+            onReset = actions.onExposureReset
+        )
+    }
+
+    AnimatedVisibility(
+        visible = state.showZoomRing && !exposureActive,
+        enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 } + expandVertically(tween(220)),
+        exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 } + shrinkVertically(tween(180))
+    ) {
         StraightZoomBar(
             value = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
             minZoom = state.minZoom,
@@ -99,14 +133,23 @@ fun ControllerBottomControls(
         )
     }
 
-    if (state.portraitControlsVisible) {
+    AnimatedVisibility(
+        visible = state.portraitControlsVisible,
+        enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 } + expandVertically(tween(220)),
+        exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 } + shrinkVertically(tween(180))
+    ) {
         CompactPortraitControls(
             strength = state.portraitStrength,
             selectedEffect = state.portraitEffect,
             onStrengthSelected = actions.onPortraitStrengthSelected,
             onEffectSelected = actions.onPortraitEffectSelected
         )
-    } else if (!straightZoomBarActive) {
+    }
+    AnimatedVisibility(
+        visible = !state.portraitControlsVisible && !straightZoomBarActive && !exposureActive,
+        enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 } + expandVertically(tween(220)),
+        exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 } + shrinkVertically(tween(180))
+    ) {
         ZoomPresetSelector(
             options = state.commonZoomOptions,
             currentValue = state.zoomUiValue.coerceIn(state.minZoom, state.maxZoom),
@@ -115,9 +158,18 @@ fun ControllerBottomControls(
         )
     }
 
-    if (state.isVideoRecording) {
+    AnimatedVisibility(
+        visible = state.isVideoRecording,
+        enter = fadeIn(tween(160)) + slideInVertically(tween(190)) { it / 2 },
+        exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { it / 2 }
+    ) {
         RecordingStatusPill(isPaused = state.isVideoPaused)
-    } else if (state.isBurstCapturing) {
+    }
+    AnimatedVisibility(
+        visible = !state.isVideoRecording && state.isBurstCapturing,
+        enter = fadeIn(tween(160)) + slideInVertically(tween(190)) { it / 2 },
+        exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { it / 2 }
+    ) {
         BurstStatusPill(count = state.burstCaptureCount)
     }
 
@@ -137,6 +189,7 @@ fun ControllerBottomControls(
         }
     } else {
         Row(
+            modifier = Modifier.padding(top = shutterTopPadding),
             horizontalArrangement = Arrangement.spacedBy(if (straightZoomBarActive) 24.dp else 34.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -429,14 +482,18 @@ private fun ControllerShutterButton(
         state.isBurstCapturing -> RoundedCornerShape(18.dp)
         else -> CircleShape
     }
-    val buttonSize = if (compact && !state.isVideoRecording) 64.dp else 80.dp
-    val borderWidth = if (compact && !state.isVideoRecording) 3.dp else 4.dp
-    val buttonPadding = if (compact && !state.isVideoRecording) 5.dp else 6.dp
-    val coreSize = when {
+    val targetButtonSize = if (compact && !state.isVideoRecording) 64.dp else 80.dp
+    val targetBorderWidth = if (compact && !state.isVideoRecording) 3.dp else 4.dp
+    val targetButtonPadding = if (compact && !state.isVideoRecording) 5.dp else 6.dp
+    val targetCoreSize = when {
         state.isVideoRecording -> 30.dp
         compact -> 50.dp
         else -> 64.dp
     }
+    val buttonSize by animateDpAsState(targetButtonSize, tween(220), label = "shutter_button_size")
+    val borderWidth by animateDpAsState(targetBorderWidth, tween(220), label = "shutter_border_width")
+    val buttonPadding by animateDpAsState(targetButtonPadding, tween(220), label = "shutter_padding")
+    val coreSize by animateDpAsState(targetCoreSize, tween(220), label = "shutter_core_size")
 
     Box(
         modifier = Modifier

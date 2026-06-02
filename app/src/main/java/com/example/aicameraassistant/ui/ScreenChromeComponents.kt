@@ -1,5 +1,7 @@
 package com.example.aicameraassistant
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -34,10 +36,12 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -49,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -287,10 +292,30 @@ fun CameraToolButton(
     selected: Boolean = false,
     onClick: () -> Unit
 ) {
+    val iconTint by animateColorAsState(
+        targetValue = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+        animationSpec = tween(durationMillis = 180),
+        label = "tool_icon_tint"
+    )
+    val containerAlpha by animateFloatAsState(
+        targetValue = if (selected) 0.18f else 0.3f,
+        animationSpec = tween(durationMillis = 180),
+        label = "tool_button_container_alpha"
+    )
+    val borderAlpha by animateFloatAsState(
+        targetValue = if (selected) 0.42f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "tool_button_border_alpha"
+    )
+    val iconScale by animateFloatAsState(
+        targetValue = if (selected) 1.05f else 1f,
+        animationSpec = tween(durationMillis = 180),
+        label = "tool_icon_scale"
+    )
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.width(if (showLabel) 104.dp else 34.dp)
+        modifier = Modifier.width(if (showLabel) 100.dp else 30.dp)
     ) {
         if (showLabel) {
             Text(
@@ -300,31 +325,48 @@ fun CameraToolButton(
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.End,
                 maxLines = 1,
-                modifier = Modifier.width(66.dp)
+                modifier = Modifier.width(64.dp)
             )
         }
 
-        IconButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier
-                .size(34.dp)
-                .background(
-                    if (selected) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
-                    CircleShape
-                )
-                .border(
-                    width = if (selected) 1.dp else 0.dp,
-                    color = if (selected) Color.White.copy(alpha = 0.42f) else Color.Transparent,
-                    shape = CircleShape
-                )
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
-                modifier = Modifier.size(15.dp)
-            )
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 30.dp) {
+            IconButton(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(
+                        if (selected) {
+                            Color.White.copy(alpha = containerAlpha)
+                        } else {
+                            Color.Black.copy(alpha = containerAlpha)
+                        },
+                        CircleShape
+                    )
+                    .border(
+                        width = if (selected) 1.dp else 0.dp,
+                        color = Color.White.copy(alpha = borderAlpha),
+                        shape = CircleShape
+                    )
+            ) {
+                Crossfade(
+                    targetState = icon,
+                    animationSpec = tween(durationMillis = 160),
+                    label = "tool_icon_crossfade"
+                ) { currentIcon ->
+                    Icon(
+                        imageVector = currentIcon,
+                        contentDescription = label,
+                        tint = iconTint,
+                        modifier = Modifier
+                            .size(13.dp)
+                            .graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                            }
+                    )
+                }
+            }
         }
     }
 }
@@ -392,7 +434,7 @@ fun CameraToolRail(
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.End,
                     maxLines = 1,
-                    modifier = Modifier.width(66.dp)
+                    modifier = Modifier.width(64.dp)
                 )
                 GridToggleButton(
                     isActive = state.gridEnabled,
@@ -478,12 +520,12 @@ fun ManualExposurePanel(
                             ?: downEvent.changes.firstOrNull()
                             ?: return@awaitEachGesture
                         val width = size.width.toFloat().coerceAtLeast(1f)
+                        val startX = down.position.x
+                        val dragStartSlopPx = 5.dp.toPx()
                         fun progressFor(x: Float): Float = (x / width).coerceIn(0f, 1f)
 
                         isDragging = true
-                        var nextProgress = progressFor(down.position.x)
-                        dragProgress = nextProgress
-                        onProgressChange(nextProgress)
+                        var nextProgress = dragProgress
 
                         while (true) {
                             val event = awaitPointerEvent()
@@ -496,12 +538,16 @@ fun ManualExposurePanel(
                                 break
                             }
 
+                            if (kotlin.math.abs(change.position.x - startX) < dragStartSlopPx) {
+                                continue
+                            }
+
+                            change.consume()
                             nextProgress = progressFor(change.position.x)
-                            if (kotlin.math.abs(nextProgress - dragProgress) > 0.001f) {
+                            if (kotlin.math.abs(nextProgress - dragProgress) > 0.004f) {
                                 dragProgress = nextProgress
                                 onProgressChange(nextProgress)
                             }
-                            change.consume()
                         }
                     }
                 }
@@ -692,30 +738,32 @@ private fun HdrToggleButton(
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.End,
             maxLines = 1,
-            modifier = Modifier.width(66.dp)
+            modifier = Modifier.width(64.dp)
         )
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .background(
-                    if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
-                    CircleShape
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 30.dp) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(
+                        if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
+                        CircleShape
+                    )
+                    .border(
+                        width = if (isActive) 1.dp else 0.8.dp,
+                        color = if (isActive) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f),
+                        shape = CircleShape
+                    )
+                    .clickable(enabled = supported, onClick = onClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "HDR",
+                    color = if (supported) Color.White else Color.White.copy(alpha = 0.35f),
+                    fontSize = 7.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
-                .border(
-                    width = if (isActive) 1.dp else 0.8.dp,
-                    color = if (isActive) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f),
-                    shape = CircleShape
-                )
-                .clickable(enabled = supported, onClick = onClick),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "HDR",
-                color = if (supported) Color.White else Color.White.copy(alpha = 0.35f),
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
+            }
         }
     }
 }
@@ -729,7 +777,7 @@ private fun AspectRatioToolButton(
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.width(if (showLabel) 104.dp else 34.dp)
+        modifier = Modifier.width(if (showLabel) 100.dp else 30.dp)
     ) {
         if (showLabel) {
             Text(
@@ -739,24 +787,26 @@ private fun AspectRatioToolButton(
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.End,
                 maxLines = 1,
-                modifier = Modifier.width(66.dp)
+                modifier = Modifier.width(64.dp)
             )
         }
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                .border(0.8.dp, Color.White.copy(alpha = 0.18f), CircleShape)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = label,
-                color = Color.White,
-                fontSize = if (label == "Full") 8.sp else 9.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 30.dp) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                    .border(0.8.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+                    .clickable(onClick = onClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    color = Color.White,
+                    fontSize = if (label == "Full") 8.sp else 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

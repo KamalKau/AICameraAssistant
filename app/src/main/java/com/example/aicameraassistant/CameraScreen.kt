@@ -29,11 +29,25 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.camera.view.ExperimentalPreviewViewScreenFlash
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -62,10 +76,12 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -86,6 +102,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -106,6 +123,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 import com.google.mlkit.vision.face.FaceDetection
@@ -167,6 +185,17 @@ fun CameraScreen(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var lastGestureZoomPublishMs by remember { mutableLongStateOf(0L) }
+    var lastGestureZoomPublishedRatio by remember { mutableFloatStateOf(Float.NaN) }
+    var lastGestureExposurePublishMs by remember { mutableLongStateOf(0L) }
+    var lastGestureExposurePublishedIndex by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    val lensFadeAlpha = remember { Animatable(0f) }
+    val modeSlideProgress = remember { Animatable(0f) }
+    var hasSeenLensTransitionKey by remember { mutableStateOf(false) }
+    var lastModeTransitionKey by remember { mutableStateOf(firebaseCameraMode) }
+    var modeSlideDirection by remember { mutableFloatStateOf(1f) }
+    var cameraPreviewReady by remember { mutableStateOf(false) }
+    var cameraStartupFailed by remember { mutableStateOf(false) }
 
     var resolvedWidth by remember { mutableIntStateOf(0) }
     var resolvedHeight by remember { mutableIntStateOf(0) }
@@ -303,6 +332,12 @@ fun CameraScreen(
             onExit = onBack
         )
     }
+    fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
+        scope.launch {
+            runCatching { block() }
+                .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
+        }
+    }
     val hostTopOverlayUiState = buildHostTopOverlayUiState(
         roomCode = roomCode,
         roomStatus = roomStatus,
@@ -375,13 +410,13 @@ fun CameraScreen(
             val selectingBoomerang = captureMode != "boomerang"
             captureMode = if (selectingBoomerang) "boomerang" else "photo"
             if (selectingBoomerang && firebaseCameraMode != "photo") {
-                scope.launch {
+                launchRoomWrite("boomerang mode reset") {
                     repository.updateCameraMode(roomCode, "photo")
                 }
             }
         },
         onAspectRatioClick = {
-            scope.launch {
+            launchRoomWrite("aspect ratio update") {
                 repository.updateAspectRatioMode(
                     roomCode,
                     AspectRatioMode.next(firebaseAspectRatioMode).key
@@ -487,19 +522,74 @@ fun CameraScreen(
     }
 
     fun updateExposureFromProgress(progress: Float) {
-        hostCoordinator.updateExposureFromProgress(
-            progress = progress,
-            exposureMinIndex = exposureMinIndex,
-            exposureMaxIndex = exposureMaxIndex,
-            currentExposureIndex = firebaseExposureIndex,
-            onUiPulse = { focusUiToken++ }
-        )
+        if (exposureMinIndex == exposureMaxIndex) return
+
+        val clampedProgress = progress.coerceIn(0f, 1f)
+        manualExposureProgressOverride = clampedProgress
+        val targetIndex = (
+            exposureMinIndex +
+                ((1f - clampedProgress) * (exposureMaxIndex - exposureMinIndex))
+            ).roundToInt().coerceIn(exposureMinIndex, exposureMaxIndex)
+        val previousExposureIndex = exposureIndex
+
+        if (targetIndex != previousExposureIndex) {
+            exposureIndex = targetIndex
+            camera?.cameraControl?.setExposureCompensationIndex(targetIndex)
+        }
+
+        val now = System.currentTimeMillis()
+        val shouldPublish =
+            targetIndex != lastGestureExposurePublishedIndex &&
+                (targetIndex != previousExposureIndex || now - lastGestureExposurePublishMs >= 120L)
+        if (shouldPublish) {
+            lastGestureExposurePublishMs = now
+            lastGestureExposurePublishedIndex = targetIndex
+            hostCoordinator.updateExposureFromProgress(
+                progress = clampedProgress,
+                exposureMinIndex = exposureMinIndex,
+                exposureMaxIndex = exposureMaxIndex,
+                currentExposureIndex = previousExposureIndex,
+                onUiPulse = {}
+            )
+        }
+    }
+
+    fun applyGestureZoom(zoomRatio: Float, forcePublish: Boolean = false) {
+        val currentCamera = camera ?: return
+        val zoomState = currentCamera.cameraInfo.zoomState.value
+        val minZoom = zoomState?.minZoomRatio ?: 1f
+        val maxZoom = zoomState?.maxZoomRatio ?: 1f
+        val clampedZoom = zoomRatio.coerceIn(minZoom, maxZoom)
+
+        currentCamera.cameraControl.setZoomRatio(clampedZoom)
+
+        val now = System.currentTimeMillis()
+        val publishDue = forcePublish || now - lastGestureZoomPublishMs >= 90L
+        val publishDistanceDue =
+            !lastGestureZoomPublishedRatio.isFinite() ||
+                abs(lastGestureZoomPublishedRatio - clampedZoom) >= 0.04f
+        if (publishDue || publishDistanceDue) {
+            lastGestureZoomPublishMs = now
+            lastGestureZoomPublishedRatio = clampedZoom
+            launchRoomWrite("gesture zoom update") {
+                repository.updateZoomLevel(roomCode, clampedZoom.toDouble())
+            }
+        }
     }
 
     fun updateCameraMode(mode: String) {
         if (mode == firebaseCameraMode) return
-        scope.launch {
+        launchRoomWrite("camera mode update") {
             repository.updateCameraMode(roomCode, mode)
+        }
+    }
+
+    fun updateCameraModeFromSwipe(deltaX: Float) {
+        val modes = listOf("video", "portrait", "photo")
+        val currentIndex = modes.indexOf(firebaseCameraMode).takeIf { it >= 0 } ?: modes.lastIndex
+        val nextIndex = (currentIndex + if (deltaX < 0f) 1 else -1).coerceIn(0, modes.lastIndex)
+        if (nextIndex != currentIndex) {
+            updateCameraMode(modes[nextIndex])
         }
     }
 
@@ -508,7 +598,7 @@ fun CameraScreen(
         exposureMinIndex = exposureState.exposureCompensationRange.lower
         exposureMaxIndex = exposureState.exposureCompensationRange.upper
         exposureIndex = exposureState.exposureCompensationIndex
-        scope.launch {
+        launchRoomWrite("exposure state publish") {
             repository.updateExposureState(
                 roomCode = roomCode,
                 minIndex = exposureMinIndex,
@@ -527,13 +617,15 @@ fun CameraScreen(
                 roomCode = roomCode,
                 rtcSessionId = activeRtcSessionId
             ) { candidate ->
-            val pc = WebRtcSessionManager.cameraPeerConnection
-            if (isRemoteDescriptionSet && pc != null) {
-                pc.addIceCandidate(candidate)
-            } else {
-                pendingCandidates.add(candidate)
+                if (isEndingSession || roomStatus != "connected") return@listenToControllerIceCandidates
+                val pc = WebRtcSessionManager.cameraPeerConnection
+                if (isRemoteDescriptionSet && pc != null) {
+                    runCatching { pc.addIceCandidate(candidate) }
+                        .onFailure { Log.w("WEBRTC_LOG", "Camera ignored late ICE candidate", it) }
+                } else {
+                    pendingCandidates.add(candidate)
+                }
             }
-        }
             onDispose { registration.remove() }
         }
     }
@@ -550,7 +642,7 @@ fun CameraScreen(
         lastPortraitFacePublishMs = now
         lastPortraitStatus = status
         lastPortraitFaceBounds = bounds
-        scope.launch {
+        launchRoomWrite("portrait subject publish") {
             repository.updatePortraitSubjectState(
                 roomCode = roomCode,
                 status = status,
@@ -584,7 +676,7 @@ fun CameraScreen(
 
         lastScenePublishMs = now
         lastSceneKey = result.key
-        scope.launch {
+        launchRoomWrite("scene detection publish") {
             repository.updateSceneDetectionState(
                 roomCode = roomCode,
                 state = result.copy(timestamp = now).toState(autoAdjustment = autoAdjustment)
@@ -774,6 +866,7 @@ fun CameraScreen(
         val currentRtcSessionId = firebaseRtcSessionId
         if (
             isStreaming &&
+                !isEndingSession &&
                 webRtcSourceReady &&
                 currentOfferSdp != null &&
                 currentRtcSessionId != null &&
@@ -788,10 +881,14 @@ fun CameraScreen(
                 rtcSessionId = currentRtcSessionId,
                 repository = repository,
                 onRemoteDescriptionSet = {
+                    if (isEndingSession || roomStatus != "connected") return@createSharedAnswer
                     isRemoteDescriptionSet = true
                     val pc = WebRtcSessionManager.cameraPeerConnection
                     if (pc != null) {
-                        pendingCandidates.forEach { pc.addIceCandidate(it) }
+                        pendingCandidates.forEach { candidate ->
+                            runCatching { pc.addIceCandidate(candidate) }
+                                .onFailure { Log.w("WEBRTC_LOG", "Camera ignored buffered ICE candidate", it) }
+                        }
                         pendingCandidates.clear()
                     }
                 }
@@ -823,13 +920,13 @@ fun CameraScreen(
             hostCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
-                exitScreen = true
+                exitScreen = false
             )
         } else if (hasSeenConnectedState && roomStatus == "waiting") {
             hostCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
-                exitScreen = true
+                exitScreen = false
             )
         }
     }
@@ -839,6 +936,26 @@ fun CameraScreen(
             CameraSelector.LENS_FACING_FRONT
         } else {
             CameraSelector.LENS_FACING_BACK
+        }
+    }
+
+    LaunchedEffect(firebaseLensFacing) {
+        if (hasSeenLensTransitionKey) {
+            lensFadeAlpha.snapTo(0.58f)
+            lensFadeAlpha.animateTo(0f, animationSpec = tween(durationMillis = 260))
+        } else {
+            hasSeenLensTransitionKey = true
+        }
+    }
+
+    LaunchedEffect(firebaseCameraMode) {
+        if (lastModeTransitionKey != firebaseCameraMode) {
+            val previousIndex = cameraModeTransitionIndex(lastModeTransitionKey)
+            val nextIndex = cameraModeTransitionIndex(firebaseCameraMode)
+            modeSlideDirection = if (nextIndex >= previousIndex) 1f else -1f
+            lastModeTransitionKey = firebaseCameraMode
+            modeSlideProgress.snapTo(1f)
+            modeSlideProgress.animateTo(0f, animationSpec = tween(durationMillis = 280))
         }
     }
 
@@ -1175,7 +1292,7 @@ fun CameraScreen(
         if (requestType.startsWith("video")) {
             val handled = handleVideoRequest(requestType) {
                 lastHandledCaptureRequestId = requestId
-                scope.launch {
+                launchRoomWrite("capture reset") {
                     repository.resetCaptureRequest(roomCode)
                 }
             }
@@ -1188,7 +1305,7 @@ fun CameraScreen(
         if (requestType == "boomerang") {
             if (boomerangInProgress) {
                 lastHandledCaptureRequestId = requestId
-                scope.launch {
+                launchRoomWrite("capture reset") {
                     repository.resetCaptureRequest(roomCode)
                 }
                 return
@@ -1198,7 +1315,7 @@ fun CameraScreen(
             val saved = BoomerangRecorder(context, previewView).record()
             boomerangInProgress = false
             lastHandledCaptureRequestId = requestId
-            scope.launch {
+            launchRoomWrite("capture reset") {
                 repository.resetCaptureRequest(roomCode)
             }
             if (saved) {
@@ -1238,7 +1355,7 @@ fun CameraScreen(
                 Log.d("AICameraAssistant", "FRONT_SCREEN_LIGHT_OFF")
             }
             lastHandledCaptureRequestId = requestId
-            scope.launch { repository.resetCaptureRequest(roomCode) }
+            launchRoomWrite("capture reset") { repository.resetCaptureRequest(roomCode) }
             if (!saved) {
                 Toast.makeText(context, "Night Assist capture failed", Toast.LENGTH_SHORT).show()
             }
@@ -1278,7 +1395,7 @@ fun CameraScreen(
             }
             if (captureStarted) {
                 lastHandledCaptureRequestId = requestId
-                scope.launch {
+                launchRoomWrite("capture reset") {
                     repository.resetCaptureRequest(roomCode)
                 }
             }
@@ -1302,7 +1419,7 @@ fun CameraScreen(
         }
         if (captureStarted) {
             lastHandledCaptureRequestId = requestId
-            scope.launch {
+            launchRoomWrite("capture reset") {
                 repository.resetCaptureRequest(roomCode)
             }
         }
@@ -1332,6 +1449,8 @@ fun CameraScreen(
 
 
     LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode, firebaseVideoHdrEnabled) {
+        cameraPreviewReady = false
+        cameraStartupFailed = false
         val shouldRestartRecordingAfterBind =
             videoRecorder.isRecording && firebaseCameraMode == "video"
         restartRecordingAfterCameraBind = shouldRestartRecordingAfterBind
@@ -1344,6 +1463,7 @@ fun CameraScreen(
         val cameraProvider = try {
             cameraProviderFuture.get()
         } catch (_: Exception) {
+            cameraStartupFailed = true
             restartRecordingAfterCameraBind = false
             if (shouldRestartRecordingAfterBind) {
                 updateVideoRecordingState(VideoRecordingState.Idle)
@@ -1406,7 +1526,7 @@ fun CameraScreen(
             }
             val enableVideoHdrForBind =
                 firebaseCameraMode == "video" && firebaseVideoHdrEnabled && videoHdrSupportedForLens
-            scope.launch {
+            launchRoomWrite("video HDR support publish") {
                 repository.updateVideoHdrSupported(roomCode, videoHdrSupportedForLens)
                 if (!videoHdrSupportedForLens && firebaseVideoHdrEnabled) {
                     repository.updateVideoHdrEnabled(roomCode, false)
@@ -1435,7 +1555,7 @@ fun CameraScreen(
                 }
             )
 
-            scope.launch {
+            launchRoomWrite("flash support publish") {
                 repository.updateFlashSupported(
                     roomCode = roomCode,
                     flashSupported = firstCamera.cameraInfo.hasFlashUnit() ||
@@ -1444,7 +1564,7 @@ fun CameraScreen(
             }
 
             firstCamera.cameraInfo.zoomState.value?.let { zoomState ->
-                scope.launch {
+                launchRoomWrite("zoom range publish") {
                     repository.updateZoomRange(
                         roomCode = roomCode,
                         minZoom = zoomState.minZoomRatio.toDouble(),
@@ -1480,7 +1600,7 @@ fun CameraScreen(
                 "camera_publish room=$roomCode raw=${rawSize.width}x${rawSize.height} rotation=$rotationDegrees published=${resolvedWidth}x${resolvedHeight}"
             )
 
-            scope.launch {
+            launchRoomWrite("preview size publish") {
                 repository.updatePreviewSize(roomCode, resolvedWidth, resolvedHeight)
             }
 
@@ -1703,7 +1823,7 @@ fun CameraScreen(
                             finalUseCases.remove(activeVideoCapture)
                             activeVideoCapture = buildVideoCapture(DynamicRange.SDR)
                             finalUseCases.add(activeVideoCapture)
-                            scope.launch {
+                            launchRoomWrite("video HDR disable") {
                                 repository.updateVideoHdrEnabled(roomCode, false)
                             }
                             try {
@@ -1742,6 +1862,8 @@ fun CameraScreen(
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null
             publishExposureState(finalCamera)
+            delay(120)
+            cameraPreviewReady = true
             if (restartRecordingAfterCameraBind) {
                 val restarted = videoRecorder.start(
                     videoCapture = videoCapture,
@@ -1759,6 +1881,7 @@ fun CameraScreen(
             cameraAnalysisActive = false
             lastCameraAnalysisResultMs = 0L
             videoCapture = null
+            cameraStartupFailed = true
             restartRecordingAfterCameraBind = false
             if (shouldRestartRecordingAfterBind) {
                 updateVideoRecordingState(VideoRecordingState.Idle)
@@ -1775,7 +1898,7 @@ fun CameraScreen(
         val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
         currentCamera.cameraControl.setZoomRatio(clampedZoom)
         if (clampedZoom.toDouble() != firebaseZoomLevel) {
-            scope.launch {
+            launchRoomWrite("zoom clamp publish") {
                 repository.updateZoomLevel(roomCode, clampedZoom.toDouble())
             }
         }
@@ -1838,7 +1961,7 @@ fun CameraScreen(
                 Log.w("CAMERA_EXPOSURE", "Exposure compensation failed", it)
             }
             if (!firebaseNightModeEnabled) {
-                scope.launch {
+                launchRoomWrite("exposure state publish") {
                     repository.updateExposureState(
                         roomCode = roomCode,
                         minIndex = exposureMinIndex,
@@ -1859,14 +1982,18 @@ fun CameraScreen(
             val now = System.currentTimeMillis()
             if (now - lastNightAutoAppliedMs > 10_000L) {
                 lastNightAutoAppliedMs = now
-                repository.updateNightModeEnabled(roomCode, true)
-                repository.updateSceneDetectionState(
-                    roomCode = roomCode,
-                    state = firebaseSceneDetection.copy(
-                        timestamp = now,
-                        autoAdjustment = "Night mode enabled"
+                runCatching {
+                    repository.updateNightModeEnabled(roomCode, true)
+                    repository.updateSceneDetectionState(
+                        roomCode = roomCode,
+                        state = firebaseSceneDetection.copy(
+                            timestamp = now,
+                            autoAdjustment = "Night mode enabled"
+                        )
                     )
-                )
+                }.onFailure {
+                    Log.w("AICameraAssistant", "Room write failed during night auto adjustment", it)
+                }
             }
         }
     }
@@ -1899,12 +2026,13 @@ fun CameraScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState)
-            shutterSound.release()
-            faceDetector.close()
-            faceAnalysisExecutor.shutdown()
-            WebRtcSessionManager.stopLocalCamera()
-            WebRtcSessionManager.clearConnections()
+            runCatching { videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState) }
+            runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
+            runCatching { faceAnalysisExecutor.shutdownNow() }
+            runCatching { faceDetector.close() }
+            runCatching { shutterSound.release() }
+            runCatching { WebRtcSessionManager.stopLocalCamera() }
+            runCatching { WebRtcSessionManager.clearConnections() }
         }
     }
 
@@ -1940,6 +2068,17 @@ fun CameraScreen(
                 }
         }
 
+        val previewAlpha by animateFloatAsState(
+            targetValue = if (cameraPreviewReady) 1f else 0f,
+            animationSpec = tween(durationMillis = 260),
+            label = "camera_preview_alpha"
+        )
+        val startupOverlayAlpha by animateFloatAsState(
+            targetValue = if (cameraPreviewReady && !cameraStartupFailed) 0f else 1f,
+            animationSpec = tween(durationMillis = 180),
+            label = "camera_startup_overlay_alpha"
+        )
+
         AndroidView(
             factory = { previewView },
             modifier = Modifier
@@ -1954,7 +2093,191 @@ fun CameraScreen(
                     width = with(density) { (previewFrameRect?.width ?: boxMaxWidthPx).toDp() },
                     height = with(density) { (previewFrameRect?.height ?: boxMaxHeightPx).toDp() }
                 )
+                .graphicsLayer { alpha = previewAlpha }
         )
+
+        val transitionPreviewRect =
+            previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+        if (startupOverlayAlpha > 0.01f) {
+            CameraStartupOverlay(
+                failed = cameraStartupFailed,
+                alpha = startupOverlayAlpha,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            transitionPreviewRect.left.roundToInt(),
+                            transitionPreviewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { transitionPreviewRect.width.toDp() },
+                        height = with(density) { transitionPreviewRect.height.toDp() }
+                    )
+            )
+        }
+
+        if (modeSlideProgress.value > 0.01f) {
+            val slideDistancePx = with(density) { 56.dp.toPx() }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            transitionPreviewRect.left.roundToInt(),
+                            transitionPreviewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { transitionPreviewRect.width.toDp() },
+                        height = with(density) { transitionPreviewRect.height.toDp() }
+                    )
+                    .graphicsLayer {
+                        alpha = 0.22f * modeSlideProgress.value
+                        translationX = -modeSlideDirection * slideDistancePx * modeSlideProgress.value
+                    }
+                    .background(Color.Black)
+            )
+        }
+
+        if (lensFadeAlpha.value > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            transitionPreviewRect.left.roundToInt(),
+                            transitionPreviewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { transitionPreviewRect.width.toDp() },
+                        height = with(density) { transitionPreviewRect.height.toDp() }
+                    )
+                    .background(Color.Black.copy(alpha = lensFadeAlpha.value))
+            )
+        }
+
+        if (sessionIsActive) {
+            val previewRect =
+                previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
+            val swipeThresholdPx = with(density) { 72.dp.toPx() }
+            val focusTapSlopPx = with(density) { 8.dp.toPx() }
+            val exposureDragSlopPx = with(density) { 26.dp.toPx() }
+            val topControlGuardPx = with(density) { 128.dp.toPx() }
+            val bottomControlGuardPx = with(density) { 188.dp.toPx() }
+            val sideControlGuardPx = with(density) { 86.dp.toPx() }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            previewRect.left.roundToInt(),
+                            previewRect.top.roundToInt()
+                        )
+                    }
+                    .size(
+                        width = with(density) { previewRect.width.toDp() },
+                        height = with(density) { previewRect.height.toDp() }
+                    )
+                    .pointerInput(
+                        camera,
+                        firebaseZoomLevel,
+                        firebaseCameraMode,
+                        exposureUiState.supported,
+                        exposureUiState.progress
+                    ) {
+                        fun Offset.isNearCameraControls(): Boolean =
+                            y < topControlGuardPx ||
+                                y > size.height - bottomControlGuardPx ||
+                                x > size.width - sideControlGuardPx
+
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val start = down.position
+                            val startsNearControls = start.isNearCameraControls()
+                            var lastPosition = start
+                            var maxPointerCount = 1
+                            var gestureZoom = camera?.cameraInfo?.zoomState?.value?.zoomRatio
+                                ?: firebaseZoomLevel.toFloat()
+                            val startExposureProgress = exposureUiState.progress
+                            var verticalExposureActive = false
+                            var pinchActive = false
+                            var consumedDrag = false
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val pressedChanges = event.changes.filter { it.pressed }
+                                if (pressedChanges.isEmpty()) {
+                                    break
+                                }
+
+                                maxPointerCount = maxOf(maxPointerCount, pressedChanges.size)
+                                if (pressedChanges.size > 1) {
+                                    pinchActive = true
+                                    val zoomChange = event.calculateZoom()
+                                    if (zoomChange.isFinite() && zoomChange > 0f) {
+                                        gestureZoom *= zoomChange
+                                        applyGestureZoom(gestureZoom)
+                                    }
+                                    event.changes.forEach { it.consume() }
+                                    continue
+                                }
+
+                                if (pinchActive) {
+                                    continue
+                                }
+
+                                val change = pressedChanges.first()
+                                val currentPosition = change.position
+                                val totalDrag = currentPosition - start
+                                lastPosition = currentPosition
+
+                                if (
+                                    !startsNearControls &&
+                                    exposureUiState.supported &&
+                                    !verticalExposureActive &&
+                                    abs(totalDrag.y) > exposureDragSlopPx &&
+                                    abs(totalDrag.y) > abs(totalDrag.x) * 1.55f
+                                ) {
+                                    verticalExposureActive = true
+                                }
+
+                                if (verticalExposureActive) {
+                                    val exposureDelta = totalDrag.y / size.height.toFloat().coerceAtLeast(1f)
+                                    updateExposureFromProgress(startExposureProgress + exposureDelta)
+                                    change.consume()
+                                    consumedDrag = true
+                                }
+                            }
+
+                            if (pinchActive) {
+                                applyGestureZoom(gestureZoom, forcePublish = true)
+                                return@awaitEachGesture
+                            }
+
+                            val totalDrag = lastPosition - start
+                            val movedHorizontally = abs(totalDrag.x) >= swipeThresholdPx &&
+                                abs(totalDrag.x) > abs(totalDrag.y) * 1.25f
+                            val tapped = !startsNearControls &&
+                                !consumedDrag &&
+                                maxPointerCount == 1 &&
+                                abs(totalDrag.x) < focusTapSlopPx &&
+                                abs(totalDrag.y) < focusTapSlopPx
+
+                            when {
+                                movedHorizontally -> updateCameraModeFromSwipe(totalDrag.x)
+                                tapped -> triggerTapToFocus(
+                                    Offset(
+                                        x = previewRect.left + start.x,
+                                        y = previewRect.top + start.y
+                                    ).clampOffsetTo(previewRect)
+                                )
+                            }
+                        }
+                    }
+            )
+        }
 
         if (flashAlpha > 0f) {
             Box(
@@ -2128,7 +2451,12 @@ fun CameraScreen(
                 .padding(end = 16.dp)
         )
 
-        if (exposureUiState.visible && exposureUiState.supported) {
+        AnimatedVisibility(
+            visible = exposureUiState.visible && exposureUiState.supported,
+            enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
             ManualExposurePanel(
                 progress = exposureUiState.progress,
                 exposureLabel = exposureUiState.label,
@@ -2136,20 +2464,39 @@ fun CameraScreen(
                 onDismiss = hostExposureUiActions.onDismiss,
                 onReset = hostExposureUiActions.onReset,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
                     .padding(bottom = 112.dp)
             )
         }
 
-        HostCameraModeStrip(
-            selectedMode = firebaseCameraMode,
-            onModeSelected = { mode -> updateCameraMode(mode) },
+        AnimatedContent(
+            targetState = firebaseCameraMode,
+            transitionSpec = {
+                val direction =
+                    if (cameraModeTransitionIndex(targetState) >= cameraModeTransitionIndex(initialState)) {
+                        1
+                    } else {
+                        -1
+                    }
+                (
+                    slideInHorizontally(animationSpec = tween(durationMillis = 230)) { direction * it / 3 } +
+                        fadeIn(animationSpec = tween(durationMillis = 180))
+                    ) togetherWith (
+                    slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { -direction * it / 3 } +
+                        fadeOut(animationSpec = tween(durationMillis = 140))
+                    )
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 26.dp)
-        )
+                .padding(bottom = 26.dp),
+            label = "host_camera_mode_strip_transition"
+        ) { animatedMode ->
+            HostCameraModeStrip(
+                selectedMode = animatedMode,
+                onModeSelected = { mode -> updateCameraMode(mode) }
+            )
+        }
 
         if (selfieLightAlpha > 0.01f) {
             NightModeAssistLight(
@@ -2175,6 +2522,59 @@ fun CameraScreen(
         }
     }
 }
+
+@Composable
+private fun CameraStartupOverlay(
+    failed: Boolean,
+    alpha: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .graphicsLayer { this.alpha = alpha.coerceIn(0f, 1f) }
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        if (failed) {
+            Text(
+                text = "Camera unavailable",
+                color = Color.White.copy(alpha = 0.86f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+        } else {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRect(
+                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF111111),
+                            Color(0xFF050505),
+                            Color(0xFF171717)
+                        )
+                    )
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.055f),
+                    radius = size.minDimension * 0.42f,
+                    center = Offset(size.width * 0.32f, size.height * 0.28f)
+                )
+                drawCircle(
+                    color = Color(0xFFFFD54F).copy(alpha = 0.05f),
+                    radius = size.minDimension * 0.34f,
+                    center = Offset(size.width * 0.72f, size.height * 0.68f)
+                )
+                drawRect(color = Color.Black.copy(alpha = 0.34f))
+            }
+        }
+    }
+}
+
+private fun cameraModeTransitionIndex(mode: String): Int =
+    when (mode) {
+        "video" -> 0
+        "portrait" -> 1
+        else -> 2
+    }
 
 @Composable
 private fun HostCameraModeStatus(
@@ -2291,41 +2691,43 @@ fun GridToggleButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        modifier = modifier.size(34.dp),
-        shape = CircleShape,
-        color = if (isActive) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.32f),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-        border = if (isActive) {
-            androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.22f))
-        } else {
-            null
-        }
-    ) {
-        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
-            Canvas(modifier = Modifier.size(14.dp)) {
-                val iconColor = Color.White.copy(alpha = if (isActive) 0.96f else 0.88f)
-                val strokeWidth = 1.2.dp.toPx()
-                val thirdWidth = size.width / 3f
-                val thirdHeight = size.height / 3f
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 30.dp) {
+        Surface(
+            modifier = modifier.size(30.dp),
+            shape = CircleShape,
+            color = if (isActive) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.32f),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = if (isActive) {
+                androidx.compose.foundation.BorderStroke(0.8.dp, Color.White.copy(alpha = 0.22f))
+            } else {
+                null
+            }
+        ) {
+            IconButton(onClick = onClick, modifier = Modifier.size(30.dp)) {
+                Canvas(modifier = Modifier.size(12.dp)) {
+                    val iconColor = Color.White.copy(alpha = if (isActive) 0.96f else 0.88f)
+                    val strokeWidth = 1.2.dp.toPx()
+                    val thirdWidth = size.width / 3f
+                    val thirdHeight = size.height / 3f
 
-                repeat(2) { index ->
-                    val verticalX = thirdWidth * (index + 1)
-                    drawLine(
-                        color = iconColor,
-                        start = Offset(verticalX, 0f),
-                        end = Offset(verticalX, size.height),
-                        strokeWidth = strokeWidth
-                    )
+                    repeat(2) { index ->
+                        val verticalX = thirdWidth * (index + 1)
+                        drawLine(
+                            color = iconColor,
+                            start = Offset(verticalX, 0f),
+                            end = Offset(verticalX, size.height),
+                            strokeWidth = strokeWidth
+                        )
 
-                    val horizontalY = thirdHeight * (index + 1)
-                    drawLine(
-                        color = iconColor,
-                        start = Offset(0f, horizontalY),
-                        end = Offset(size.width, horizontalY),
-                        strokeWidth = strokeWidth
-                    )
+                        val horizontalY = thirdHeight * (index + 1)
+                        drawLine(
+                            color = iconColor,
+                            start = Offset(0f, horizontalY),
+                            end = Offset(size.width, horizontalY),
+                            strokeWidth = strokeWidth
+                        )
+                    }
                 }
             }
         }

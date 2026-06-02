@@ -1,17 +1,14 @@
 package com.example.aicameraassistant
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -21,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,8 +29,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
@@ -226,11 +226,13 @@ fun SharedFocusExposureHandleSamsung(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    val controlWidth = 42.dp
-    val controlHeight = 14.dp
-    val trackWidth = 32.dp
+    val controlWidth = 30.dp
+    val controlHeight = 108.dp
+    val trackHeight = 76.dp
     var dragProgress by remember(progress) { mutableFloatStateOf(progress.coerceIn(0f, 1f)) }
     var isDragging by remember { mutableStateOf(false) }
+    var parentSize by remember { mutableStateOf(IntSize.Zero) }
+    val currentOnProgressChange by rememberUpdatedState(onProgressChange)
 
     LaunchedEffect(progress) {
         if (!isDragging) {
@@ -239,86 +241,122 @@ fun SharedFocusExposureHandleSamsung(
     }
 
     val controlWidthPx = with(density) { controlWidth.toPx() }
-    val trackWidthPx = with(density) { trackWidth.toPx() }
-    val trackStartX = (controlWidthPx - trackWidthPx) / 2f
+    val controlHeightPx = with(density) { controlHeight.toPx() }
+    val trackHeightPx = with(density) { trackHeight.toPx() }
+    val trackTopY = (controlHeightPx - trackHeightPx) / 2f
+    val animatedProgress by animateFloatAsState(
+        targetValue = dragProgress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 120),
+        label = "focus_exposure_slider_progress"
+    )
+    val displayedProgress = if (isDragging) {
+        dragProgress.coerceIn(0f, 1f)
+    } else {
+        animatedProgress
+    }
 
-    fun progressFromTouchX(x: Float): Float =
-        ((x - trackStartX) / trackWidthPx).coerceIn(0f, 1f)
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { parentSize = it }
+    ) {
+        val horizontalGapPx = with(density) { 14.dp.toPx() }
+        val edgePaddingPx = with(density) { 12.dp.toPx() }
+        val rightX = center.x + ringRadiusPx + horizontalGapPx
+        val leftX = center.x - ringRadiusPx - horizontalGapPx - controlWidthPx
+        val parentWidth = parentSize.width.toFloat()
+        val parentHeight = parentSize.height.toFloat()
+        val desiredX = if (parentWidth <= 0f || rightX + controlWidthPx <= parentWidth - edgePaddingPx) {
+            rightX
+        } else {
+            leftX
+        }
+        val desiredY = center.y - (controlHeightPx / 2f)
+        val maxX = (parentWidth - controlWidthPx - edgePaddingPx).coerceAtLeast(edgePaddingPx)
+        val maxY = (parentHeight - controlHeightPx - edgePaddingPx).coerceAtLeast(edgePaddingPx)
 
-    Box(modifier = modifier.fillMaxSize()) {
-        Row(
+        Box(
             modifier = Modifier
                 .offset {
                     IntOffset(
-                        x = (center.x - (controlWidthPx / 2f)).roundToInt(),
-                        y = (center.y + ringRadiusPx + 2.dp.toPx()).roundToInt()
+                        x = desiredX.coerceIn(edgePaddingPx, maxX).roundToInt(),
+                        y = desiredY.coerceIn(edgePaddingPx, maxY).roundToInt()
                     )
                 }
-                .width(controlWidth)
-                .height(controlHeight)
-                .pointerInput(onProgressChange) {
-                    if (onProgressChange == null) return@pointerInput
+                .size(width = controlWidth, height = controlHeight)
+                .pointerInput(Unit) {
                     detectDragGestures(
-                        onDragStart = { offset ->
+                        onDragStart = {
                             isDragging = true
-                            val nextProgress = progressFromTouchX(offset.x)
-                            dragProgress = nextProgress
-                            onProgressChange(nextProgress)
                         },
-                        onDrag = { change, _ ->
+                        onDrag = { change, dragAmount ->
+                            val progressChange = currentOnProgressChange ?: return@detectDragGestures
                             change.consume()
-                            val nextProgress = progressFromTouchX(change.position.x)
+                            val nextProgress =
+                                (dragProgress + (dragAmount.y / (trackHeightPx * 6.5f)))
+                                    .coerceIn(0f, 1f)
+                            if (kotlin.math.abs(nextProgress - dragProgress) < 0.0025f) {
+                                return@detectDragGestures
+                            }
                             dragProgress = nextProgress
-                            onProgressChange(nextProgress)
+                            progressChange(nextProgress)
                         },
                         onDragEnd = { isDragging = false },
                         onDragCancel = { isDragging = false }
                     )
-                },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+                }
         ) {
-            Canvas(modifier = Modifier.size(width = trackWidth, height = controlHeight)) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
                 val centerX = size.width / 2f
-                val centerY = size.height / 2f
-                val halfLine = trackWidthPx / 2f
-                val lineGap = 5.dp.toPx()
-                val iconCenterX =
-                    (centerX - halfLine + ((halfLine * 2f) * dragProgress.coerceIn(0f, 1f)))
-                        .coerceIn(4.5.dp.toPx(), size.width - 4.5.dp.toPx())
+                val trackTop = trackTopY
+                val trackBottom = trackTop + trackHeightPx
+                val iconCenterY =
+                    (trackTop + (trackHeightPx * displayedProgress))
+                        .coerceIn(trackTop, trackBottom)
                 val accentColor = if (isLocked) Color(0xFFFFC400) else Color(0xFFFFD54F)
+                val pillRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx())
 
-                drawLine(
-                    color = Color.White.copy(alpha = 0.68f),
-                    start = Offset(centerX - halfLine, centerY),
-                    end = Offset(iconCenterX - lineGap, centerY),
-                    strokeWidth = 1.1.dp.toPx()
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.28f),
+                    size = size,
+                    cornerRadius = pillRadius
                 )
                 drawLine(
-                    color = Color.White.copy(alpha = 0.68f),
-                    start = Offset(iconCenterX + lineGap, centerY),
-                    end = Offset(centerX + halfLine, centerY),
-                    strokeWidth = 1.1.dp.toPx()
+                    color = Color.White.copy(alpha = 0.38f),
+                    start = Offset(centerX, trackTop),
+                    end = Offset(centerX, trackBottom),
+                    strokeWidth = 1.6.dp.toPx()
+                )
+                drawLine(
+                    color = accentColor.copy(alpha = 0.86f),
+                    start = Offset(centerX, iconCenterY),
+                    end = Offset(centerX, trackBottom),
+                    strokeWidth = 2.2.dp.toPx()
+                )
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.42f),
+                    radius = 10.dp.toPx(),
+                    center = Offset(centerX, iconCenterY)
                 )
                 drawCircle(
                     color = accentColor,
-                    radius = 2.3.dp.toPx(),
-                    center = Offset(iconCenterX, centerY)
+                    radius = 6.5.dp.toPx(),
+                    center = Offset(centerX, iconCenterY)
                 )
 
-                val rayStart = 4.6.dp.toPx()
-                val rayLength = 2.8.dp.toPx()
-                val rayStroke = 0.8.dp.toPx()
+                val rayStart = 9.dp.toPx()
+                val rayLength = 3.dp.toPx()
+                val rayStroke = 0.9.dp.toPx()
                 repeat(8) { index ->
                     val angle = (index * 45f) * (Math.PI.toFloat() / 180f)
                     val dx = kotlin.math.cos(angle)
                     val dy = kotlin.math.sin(angle)
                     drawLine(
                         color = accentColor,
-                        start = Offset(iconCenterX + (dx * rayStart), centerY + (dy * rayStart)),
+                        start = Offset(centerX + (dx * rayStart), iconCenterY + (dy * rayStart)),
                         end = Offset(
-                            iconCenterX + (dx * (rayStart + rayLength)),
-                            centerY + (dy * (rayStart + rayLength))
+                            centerX + (dx * (rayStart + rayLength)),
+                            iconCenterY + (dy * (rayStart + rayLength))
                         ),
                         strokeWidth = rayStroke
                     )

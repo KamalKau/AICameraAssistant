@@ -100,14 +100,14 @@ fun ControlCameraScreen(
                 .background(
                     Brush.linearGradient(
                         colors = listOf(
-                            Color(0xFF132653).copy(alpha = 0.88f),
-                            Color(0xFF1C68E8).copy(alpha = 0.82f)
+                            Color(0xFF21143D).copy(alpha = 0.92f),
+                            Color(0xFF14151F).copy(alpha = 0.96f)
                         )
                     )
                 )
                 .border(
                     1.dp,
-                    Color.White.copy(alpha = 0.22f),
+                    Color(0xFF7C4DFF).copy(alpha = 0.5f),
                     RoundedCornerShape(20.dp)
                 )
                 .clickable(onClick = onBack)
@@ -121,7 +121,7 @@ fun ControlCameraScreen(
                     modifier = Modifier
                         .size(30.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.12f + (pulse * 0.08f))),
+                        .background(Color(0xFF7C4DFF).copy(alpha = 0.14f + (pulse * 0.1f))),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -154,7 +154,7 @@ fun ControlCameraScreen(
                 color = Color.Transparent,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
-                    Color(0xFF82B4FF).copy(alpha = 0.85f)
+                    Color(0xFF7C4DFF).copy(alpha = 0.66f)
                 )
             ) {
                 Column(
@@ -162,35 +162,16 @@ fun ControlCameraScreen(
                         .background(
                             Brush.linearGradient(
                                 colors = listOf(
-                                    Color(0xFF1B2B59),
-                                    Color(0xFF2D7CFF)
+                                    Color(0xFF21143D).copy(alpha = 0.92f),
+                                    Color(0xFF14151F).copy(alpha = 0.98f)
                                 )
                             )
                         )
-                        .padding(horizontal = 18.dp, vertical = 18.dp),
+                        .padding(horizontal = 18.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(62.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size((24 + (pulse * 16)).dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Videocam,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
+                    WelcomePurpleCameraLogo(modifier = Modifier.size(78.dp))
 
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -204,7 +185,7 @@ fun ControlCameraScreen(
                         )
                         Text(
                             text = "Enter the camera phone room code",
-                            color = Color.White.copy(alpha = 0.66f),
+                            color = Color(0xFFB8B8B8),
                             fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
@@ -247,7 +228,7 @@ fun ControlCameraScreen(
                     if (errorMessage != null) {
                         Text(
                             text = errorMessage,
-                            color = Color(0xFFFFC7A7),
+                            color = Color(0xFFFFB4C2),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -265,10 +246,10 @@ fun ControlCameraScreen(
                         enabled = canConnect,
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color(0xFF1B2B59),
-                            disabledContainerColor = Color.White.copy(alpha = 0.18f),
-                            disabledContentColor = Color.White.copy(alpha = 0.32f)
+                            containerColor = Color(0xFF7C4DFF),
+                            contentColor = Color.White,
+                            disabledContainerColor = Color(0xFF7C4DFF).copy(alpha = 0.22f),
+                            disabledContentColor = Color.White.copy(alpha = 0.34f)
                         )
                     ) {
                         Row(
@@ -293,7 +274,7 @@ fun ControlCameraScreen(
 
             Text(
                 text = "The camera phone must be open and waiting for controller approval.",
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.58f),
+                color = Color(0xFFB8B8B8).copy(alpha = 0.74f),
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 18.dp)
@@ -317,11 +298,11 @@ private fun RoomCodePreview(
             Box(
                 modifier = Modifier
                     .size(width = 38.dp, height = 46.dp)
-                    .background(Color.Black.copy(alpha = 0.34f), RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(10.dp))
                     .border(
                         1.dp,
-                        if (char.isNotEmpty()) Color.White.copy(alpha = 0.82f)
-                        else Color.White.copy(alpha = 0.24f),
+                        if (char.isNotEmpty()) Color(0xFF9B6DFF).copy(alpha = 0.9f)
+                        else Color.White.copy(alpha = 0.18f),
                         RoundedCornerShape(10.dp)
                     ),
                 contentAlignment = Alignment.Center
