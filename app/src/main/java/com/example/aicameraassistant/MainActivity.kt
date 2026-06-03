@@ -370,10 +370,21 @@ fun SplashScreen(onFinished: () -> Unit) {
                 visible = contentVisible,
                 enter = fadeIn(tween(800)) + slideInVertically(tween(800)) { it / 3 }
             ) {
-                SplashSwipeIndicator(
-                    featureIndex = featureIndex,
-                    featureCount = featureCount
-                )
+                Column(
+                    modifier = Modifier.widthIn(max = 430.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    SplashSwipeIndicator(
+                        featureIndex = featureIndex,
+                        featureCount = featureCount
+                    )
+                    SplashNextButton(
+                        text = "Next",
+                        onClick = onFinished,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -670,6 +681,39 @@ private fun SplashSwipeIndicator(
             color = Color.White.copy(alpha = 0.58f),
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun SplashNextButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF9B6DFF),
+                        Color(0xFF7C4DFF),
+                        Color(0xFF4A22B8)
+                    )
+                )
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 15.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "$text >",
+            color = Color.White,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
         )
     }
 }

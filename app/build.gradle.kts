@@ -1,7 +1,14 @@
+import org.gradle.testing.jacoco.tasks.JacocoReport
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     id("com.google.gms.google-services")
+    jacoco
+}
+
+jacoco {
+    toolVersion = "0.8.12"
 }
 
 android {
@@ -19,6 +26,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            enableUnitTestCoverage = true
+            enableAndroidTestCoverage = true
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -69,4 +81,40 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+tasks.register<JacocoReport>("debugUnitTestCoverage") {
+    dependsOn("testDebugUnitTest")
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
+
+    val excludes = listOf(
+        "**/R.class",
+        "**/R$*.class",
+        "**/BuildConfig.*",
+        "**/Manifest*.*",
+        "**/*Test*.*",
+        "**/*ComposableSingletons*.*"
+    )
+
+    classDirectories.setFrom(
+        files(
+            fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+                exclude(excludes)
+            },
+            fileTree(layout.buildDirectory.dir("intermediates/javac/debug/classes")) {
+                exclude(excludes)
+            }
+        )
+    )
+    sourceDirectories.setFrom(files("src/main/java"))
+    executionData.setFrom(
+        fileTree(layout.buildDirectory) {
+            include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+        }
+    )
 }

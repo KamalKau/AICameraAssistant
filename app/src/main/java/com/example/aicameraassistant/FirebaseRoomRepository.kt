@@ -1,5 +1,6 @@
 package com.example.aicameraassistant
 
+import android.util.Log
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -25,7 +26,8 @@ class FirebaseRoomRepository {
         if (!snapshot.exists()) return false
 
         clearIceCandidates(roomCode)
-        docRef.update(
+        updateRoomSafely(
+            roomCode,
             mapOf(
                 "requestReceived" to true,
                 "controllerApproved" to false,
@@ -34,55 +36,42 @@ class FirebaseRoomRepository {
                 "answer" to null,
                 "rtcSessionId" to null
             )
-        ).await()
+        )
 
         return true
     }
 
     suspend fun updateApproval(roomCode: String, approved: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "requestReceived" to false,
-                    "controllerApproved" to approved,
-                    "status" to if (approved) "connected" else "denied"
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "requestReceived" to false,
+                "controllerApproved" to approved,
+                "status" to if (approved) "connected" else "denied"
             )
-            .await()
+        )
     }
 
     suspend fun updateLensFacing(roomCode: String, lensFacing: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("lensFacing", lensFacing)
-            .await()
+        updateRoomSafely(roomCode, "lensFacing", lensFacing)
     }
 
     suspend fun updateZoomLevel(roomCode: String, zoomLevel: Double) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("zoomLevel", zoomLevel)
-            .await()
+        updateRoomSafely(roomCode, "zoomLevel", zoomLevel)
     }
 
     suspend fun updateZoomRange(roomCode: String, minZoom: Double, maxZoom: Double) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "minZoom" to minZoom,
-                    "maxZoom" to maxZoom
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "minZoom" to minZoom,
+                "maxZoom" to maxZoom
             )
-            .await()
+        )
     }
 
     suspend fun updateFlashMode(roomCode: String, flashMode: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("flashMode", flashMode)
-            .await()
+        updateRoomSafely(roomCode, "flashMode", flashMode)
     }
 
     suspend fun updateCameraMode(roomCode: String, mode: String) {
@@ -111,7 +100,7 @@ class FirebaseRoomRepository {
         val docRef = db.collection("rooms").document(roomCode)
         val snapshot = docRef.get().await()
         if ((snapshot.getLong("portraitStrength") ?: 5L).toInt() == portraitStrength) return
-        docRef.update("portraitStrength", portraitStrength.toLong()).await()
+        updateRoomSafely(roomCode, "portraitStrength", portraitStrength.toLong())
     }
 
     suspend fun updatePortraitEffect(roomCode: String, effect: String) {
@@ -148,7 +137,8 @@ class FirebaseRoomRepository {
                 (snapshot.getDouble("portraitFaceBottom") ?: 0.0) == safeBottom
         if (unchanged) return
 
-        docRef.update(
+        updateRoomSafely(
+            roomCode,
             mapOf(
                 "portraitStatus" to safeStatus,
                 "portraitFaceLeft" to safeLeft,
@@ -156,7 +146,7 @@ class FirebaseRoomRepository {
                 "portraitFaceRight" to safeRight,
                 "portraitFaceBottom" to safeBottom
             )
-        ).await()
+        )
     }
 
     suspend fun updateFaceDetectionOverlay(
@@ -182,17 +172,15 @@ class FirebaseRoomRepository {
                     "bottom" to box.bottom.coerceIn(0.0, 1.0)
                 )
             }
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "faceBox" to safeBox,
-                    "faceBoxes" to safeBoxes,
-                    "faceDetected" to faceDetected,
-                    "faceDetectionTimestamp" to timestamp
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "faceBox" to safeBox,
+                "faceBoxes" to safeBoxes,
+                "faceDetected" to faceDetected,
+                "faceDetectionTimestamp" to timestamp
             )
-            .await()
+        )
     }
 
     suspend fun updateSceneDetectionState(
@@ -203,73 +191,55 @@ class FirebaseRoomRepository {
             "food", "night", "face", "text", "landscape" -> state.key
             else -> "auto"
         }
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "sceneDetectionKey" to safeKey,
-                    "sceneDetectionLabel" to state.label.take(24),
-                    "sceneDetectionSuggestion" to state.suggestion.take(80),
-                    "sceneDetectionConfidence" to state.confidence.coerceIn(0.0, 1.0),
-                    "sceneDetectionTimestamp" to state.timestamp,
-                    "sceneDetectionAutoAdjustment" to state.autoAdjustment.take(48)
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "sceneDetectionKey" to safeKey,
+                "sceneDetectionLabel" to state.label.take(24),
+                "sceneDetectionSuggestion" to state.suggestion.take(80),
+                "sceneDetectionConfidence" to state.confidence.coerceIn(0.0, 1.0),
+                "sceneDetectionTimestamp" to state.timestamp,
+                "sceneDetectionAutoAdjustment" to state.autoAdjustment.take(48)
             )
-            .await()
+        )
+    }
+
+    suspend fun updateSceneDetectionEnabled(roomCode: String, sceneDetectionEnabled: Boolean) {
+        updateRoomSafely(roomCode, "sceneDetectionEnabled", sceneDetectionEnabled)
     }
 
     suspend fun updateFlashSupported(roomCode: String, flashSupported: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("flashSupported", flashSupported)
-            .await()
+        updateRoomSafely(roomCode, "flashSupported", flashSupported)
     }
 
     suspend fun updateGridEnabled(roomCode: String, gridEnabled: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("gridEnabled", gridEnabled)
-            .await()
+        updateRoomSafely(roomCode, "gridEnabled", gridEnabled)
     }
 
     suspend fun updateNightModeEnabled(roomCode: String, nightModeEnabled: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("nightModeEnabled", nightModeEnabled)
-            .await()
+        updateRoomSafely(roomCode, "nightModeEnabled", nightModeEnabled)
     }
 
     suspend fun updateVideoHdrSupported(roomCode: String, videoHdrSupported: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("videoHdrSupported", videoHdrSupported)
-            .await()
+        updateRoomSafely(roomCode, "videoHdrSupported", videoHdrSupported)
     }
 
     suspend fun updateVideoHdrEnabled(roomCode: String, videoHdrEnabled: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("videoHdrEnabled", videoHdrEnabled)
-            .await()
+        updateRoomSafely(roomCode, "videoHdrEnabled", videoHdrEnabled)
     }
 
     suspend fun updateToolbarExpanded(roomCode: String, toolbarExpanded: Boolean) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("toolbarExpanded", toolbarExpanded)
-            .await()
+        updateRoomSafely(roomCode, "toolbarExpanded", toolbarExpanded)
     }
 
     suspend fun updatePreviewSize(roomCode: String, width: Int, height: Int) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "previewWidth" to width,
-                    "previewHeight" to height
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "previewWidth" to width,
+                "previewHeight" to height
             )
-            .await()
+        )
     }
 
     suspend fun updateFocusRequest(
@@ -279,17 +249,15 @@ class FirebaseRoomRepository {
         requestId: Long,
         lockEnabled: Boolean
     ) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "focusPointX" to normalizedX.coerceIn(0.0, 1.0),
-                    "focusPointY" to normalizedY.coerceIn(0.0, 1.0),
-                    "focusRequestId" to requestId,
-                    "focusLockEnabled" to lockEnabled
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "focusPointX" to normalizedX.coerceIn(0.0, 1.0),
+                "focusPointY" to normalizedY.coerceIn(0.0, 1.0),
+                "focusRequestId" to requestId,
+                "focusLockEnabled" to lockEnabled
             )
-            .await()
+        )
     }
 
     suspend fun updateExposureState(
@@ -298,35 +266,28 @@ class FirebaseRoomRepository {
         maxIndex: Int,
         currentIndex: Int
     ) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "exposureMinIndex" to minIndex.toLong(),
-                    "exposureMaxIndex" to maxIndex.toLong(),
-                    "exposureIndex" to currentIndex.toLong()
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "exposureMinIndex" to minIndex.toLong(),
+                "exposureMaxIndex" to maxIndex.toLong(),
+                "exposureIndex" to currentIndex.toLong()
             )
-            .await()
+        )
     }
 
     suspend fun updateExposureIndex(roomCode: String, exposureIndex: Int) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update("exposureIndex", exposureIndex.toLong())
-            .await()
+        updateRoomSafely(roomCode, "exposureIndex", exposureIndex.toLong())
     }
 
     suspend fun resetCaptureRequest(roomCode: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "captureRequest" to false,
-                    "captureRequestType" to "photo"
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "captureRequest" to false,
+                "captureRequestType" to "photo"
             )
-            .await()
+        )
     }
 
     suspend fun sendCaptureRequest(
@@ -334,52 +295,43 @@ class FirebaseRoomRepository {
         requestId: Long,
         requestType: String = "photo"
     ) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "captureRequest" to true,
-                    "captureRequestId" to requestId,
-                    "captureRequestType" to requestType
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "captureRequest" to true,
+                "captureRequestId" to requestId,
+                "captureRequestType" to requestType
             )
-            .await()
+        )
     }
 
     suspend fun saveOffer(roomCode: String, offerSdp: String, rtcSessionId: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "offer" to offerSdp,
-                    "answer" to null,
-                    "rtcSessionId" to rtcSessionId
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "offer" to offerSdp,
+                "answer" to null,
+                "rtcSessionId" to rtcSessionId
             )
-            .await()
+        )
     }
 
     suspend fun saveAnswer(roomCode: String, answerSdp: String, rtcSessionId: String) {
-        db.collection("rooms")
-            .document(roomCode)
-            .update(
-                mapOf(
-                    "answer" to answerSdp,
-                    "rtcSessionId" to rtcSessionId
-                )
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "answer" to answerSdp,
+                "rtcSessionId" to rtcSessionId
             )
-            .await()
+        )
     }
 
     suspend fun endSession(roomCode: String, expectedSessionVersion: Long? = null) {
         val roomRef = db.collection("rooms").document(roomCode)
 
-        val ended = db.runTransaction { transaction ->
+        db.runTransaction { transaction ->
             val snapshot = transaction.get(roomRef)
-            val currentVersion = snapshot.getLong("sessionVersion") ?: 0L
-            if (expectedSessionVersion != null && currentVersion != expectedSessionVersion) {
-                return@runTransaction false
-            }
+            val currentVersion = snapshot.getLong("sessionVersion") ?: expectedSessionVersion ?: 0L
 
             transaction.set(
                 roomRef,
@@ -387,12 +339,9 @@ class FirebaseRoomRepository {
                     ("status" to "ended") +
                     ("sessionVersion" to currentVersion)
             )
-            true
         }.await()
 
-        if (ended) {
-            clearIceCandidates(roomCode)
-        }
+        clearIceCandidates(roomCode)
     }
 
     private fun defaultRoomData(roomCode: String): Map<String, Any?> =
@@ -429,6 +378,7 @@ class FirebaseRoomRepository {
             "sceneDetectionConfidence" to 0.0,
             "sceneDetectionTimestamp" to 0L,
             "sceneDetectionAutoAdjustment" to "",
+            "sceneDetectionEnabled" to false,
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -677,6 +627,14 @@ class FirebaseRoomRepository {
                         autoAdjustment = snapshot?.getString("sceneDetectionAutoAdjustment") ?: ""
                     )
                 )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getSceneDetectionEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("sceneDetectionEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }
@@ -948,7 +906,35 @@ class FirebaseRoomRepository {
     private suspend fun updateStringIfChanged(roomCode: String, field: String, value: String) {
         val docRef = db.collection("rooms").document(roomCode)
         val snapshot = docRef.get().await()
+        if (!snapshot.exists()) return
         if (snapshot.getString(field) == value) return
-        docRef.update(field, value).await()
+        updateRoomSafely(roomCode, field, value)
+    }
+
+    private suspend fun updateRoomSafely(roomCode: String, field: String, value: Any?) {
+        updateRoomSafely(roomCode, mapOf(field to value))
+    }
+
+    private suspend fun updateRoomSafely(roomCode: String, values: Map<String, Any?>) {
+        runCatching {
+            db.collection("rooms")
+                .document(roomCode)
+                .update(values)
+                .await()
+        }.onFailure { throwable ->
+            if (FirestoreRoomUpdateFailureClassifier.isMissingRoomUpdate(throwable)) {
+                Log.w("FirebaseRoomRepository", "Ignoring update for missing room $roomCode")
+            } else {
+                throw throwable
+            }
+        }
+    }
+}
+
+internal object FirestoreRoomUpdateFailureClassifier {
+    fun isMissingRoomUpdate(throwable: Throwable): Boolean {
+        val message = throwable.message ?: return false
+        return message.contains("No document to update", ignoreCase = true) ||
+            message.contains("NOT_FOUND", ignoreCase = true)
     }
 }

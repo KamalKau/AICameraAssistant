@@ -22,31 +22,33 @@ import kotlin.math.roundToInt
 import org.webrtc.VideoTrack
 import android.media.MediaActionSound
 
-class HostSessionCoordinator(
-    private val repository: FirebaseRoomRepository,
-    private val roomCode: String,
+private class RoomWriteDispatcher(
     private val scope: CoroutineScope,
-    private val context: Context,
-    private val onExit: () -> Unit
+    private val tag: String = "SESSION_END"
 ) {
-    private var lastRequestedExposureIndex: Int? = null
-    private val remoteEndScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var shutdownStarted = false
-
-    private fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
+    fun launch(operation: String, block: suspend () -> Unit) {
         scope.launch {
             runCatching { block() }
-                .onFailure { Log.w("SESSION_END", "Room write failed during $operation", it) }
+                .onFailure { Log.w(tag, "Room write failed during $operation", it) }
         }
     }
+}
 
-    private fun completeLocalShutdown(
+private class LocalSessionShutdown(
+    private val scope: CoroutineScope,
+    private val onExit: () -> Unit
+) {
+    private var shutdownStarted = false
+
+    fun run(
         setIsEndingSession: (Boolean) -> Unit,
-        exitScreen: Boolean
+        exitScreen: Boolean,
+        cleanup: () -> Unit = {}
     ) {
         if (shutdownStarted) return
         shutdownStarted = true
         setIsEndingSession(true)
+        runCatching { cleanup() }
         runCatching { WebRtcSessionManager.stopLocalCamera() }
         runCatching { WebRtcSessionManager.clearConnections() }
 
@@ -57,6 +59,19 @@ class HostSessionCoordinator(
             }
         }
     }
+}
+
+class HostSessionCoordinator(
+    private val repository: FirebaseRoomRepository,
+    private val roomCode: String,
+    private val scope: CoroutineScope,
+    private val context: Context,
+    private val onExit: () -> Unit
+) {
+    private var lastRequestedExposureIndex: Int? = null
+    private val remoteEndScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val roomWrites = RoomWriteDispatcher(scope)
+    private val localShutdown = LocalSessionShutdown(scope, onExit)
 
     fun shutdownSession(
         isEndingSession: Boolean,
@@ -65,7 +80,7 @@ class HostSessionCoordinator(
     ) {
         if (isEndingSession) return
 
-        completeLocalShutdown(
+        localShutdown.run(
             setIsEndingSession = setIsEndingSession,
             exitScreen = exitScreen
         )
@@ -83,14 +98,14 @@ class HostSessionCoordinator(
                 }
             }
 
-        completeLocalShutdown(
+        localShutdown.run(
             setIsEndingSession = setIsEndingSession,
             exitScreen = true
         )
     }
 
     fun updateApproval(approved: Boolean) {
-        launchRoomWrite("approval update") {
+        roomWrites.launch("approval update") {
             repository.updateApproval(roomCode, approved)
         }
     }
@@ -103,38 +118,44 @@ class HostSessionCoordinator(
             "auto" -> "on"
             else -> "off"
         }
-        launchRoomWrite("flash update") {
+        roomWrites.launch("flash update") {
             repository.updateFlashMode(roomCode, nextFlashMode)
         }
     }
 
     fun switchLens(currentFacing: String) {
-        launchRoomWrite("lens switch") {
+        roomWrites.launch("lens switch") {
             repository.updateLensFacing(roomCode, if (currentFacing == "back") "front" else "back")
         }
     }
 
     fun updateGridEnabled(currentEnabled: Boolean) {
-        launchRoomWrite("grid update") {
+        roomWrites.launch("grid update") {
             repository.updateGridEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateNightModeEnabled(currentEnabled: Boolean) {
-        launchRoomWrite("night mode update") {
+        roomWrites.launch("night mode update") {
             repository.updateNightModeEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("scene detection update") {
+            repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateVideoHdrEnabled(currentEnabled: Boolean, supported: Boolean) {
         if (!supported) return
-        launchRoomWrite("video HDR update") {
+        roomWrites.launch("video HDR update") {
             repository.updateVideoHdrEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateToolbarExpanded(expanded: Boolean) {
-        launchRoomWrite("toolbar update") {
+        roomWrites.launch("toolbar update") {
             repository.updateToolbarExpanded(roomCode, expanded)
         }
     }
@@ -162,7 +183,7 @@ class HostSessionCoordinator(
 
         lastRequestedExposureIndex = targetIndex
 
-        launchRoomWrite("exposure update") {
+        roomWrites.launch("exposure update") {
             repository.updateExposureIndex(roomCode, targetIndex)
         }
     }
@@ -180,34 +201,8 @@ class ControllerSessionCoordinator(
 ) {
     private var lastRequestedExposureIndex: Int? = null
     private val remoteEndScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var shutdownStarted = false
-
-    private fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
-        scope.launch {
-            runCatching { block() }
-                .onFailure { Log.w("SESSION_END", "Room write failed during $operation", it) }
-        }
-    }
-
-    private fun completeLocalShutdown(
-        setIsEndingSession: (Boolean) -> Unit,
-        performCleanup: () -> Unit,
-        exitScreen: Boolean
-    ) {
-        if (shutdownStarted) return
-        shutdownStarted = true
-        setIsEndingSession(true)
-        runCatching { performCleanup() }
-        runCatching { WebRtcSessionManager.stopLocalCamera() }
-        runCatching { WebRtcSessionManager.clearConnections() }
-
-        if (exitScreen) {
-            scope.launch {
-                delay(80)
-                onExit()
-            }
-        }
-    }
+    private val roomWrites = RoomWriteDispatcher(scope)
+    private val localShutdown = LocalSessionShutdown(scope, onExit)
 
     fun shutdownSession(
         isEndingSession: Boolean,
@@ -217,10 +212,10 @@ class ControllerSessionCoordinator(
     ) {
         if (isEndingSession) return
 
-        completeLocalShutdown(
+        localShutdown.run(
             setIsEndingSession = setIsEndingSession,
-            performCleanup = performCleanup,
-            exitScreen = exitScreen
+            exitScreen = exitScreen,
+            cleanup = performCleanup
         )
     }
 
@@ -237,10 +232,10 @@ class ControllerSessionCoordinator(
                 }
             }
 
-        completeLocalShutdown(
+        localShutdown.run(
             setIsEndingSession = setIsEndingSession,
-            performCleanup = performCleanup,
-            exitScreen = true
+            exitScreen = true,
+            cleanup = performCleanup
         )
     }
 
@@ -252,38 +247,44 @@ class ControllerSessionCoordinator(
             "auto" -> "on"
             else -> "off"
         }
-        launchRoomWrite("flash update") {
+        roomWrites.launch("flash update") {
             repository.updateFlashMode(roomCode, nextFlashMode)
         }
     }
 
     fun switchLens(currentFacing: String) {
-        launchRoomWrite("lens switch") {
+        roomWrites.launch("lens switch") {
             repository.updateLensFacing(roomCode, if (currentFacing == "back") "front" else "back")
         }
     }
 
     fun updateGridEnabled(currentEnabled: Boolean) {
-        launchRoomWrite("grid update") {
+        roomWrites.launch("grid update") {
             repository.updateGridEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateNightModeEnabled(currentEnabled: Boolean) {
-        launchRoomWrite("night mode update") {
+        roomWrites.launch("night mode update") {
             repository.updateNightModeEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("scene detection update") {
+            repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateVideoHdrEnabled(currentEnabled: Boolean, supported: Boolean) {
         if (!supported) return
-        launchRoomWrite("video HDR update") {
+        roomWrites.launch("video HDR update") {
             repository.updateVideoHdrEnabled(roomCode, !currentEnabled)
         }
     }
 
     fun updateToolbarExpanded(expanded: Boolean) {
-        launchRoomWrite("toolbar update") {
+        roomWrites.launch("toolbar update") {
             repository.updateToolbarExpanded(roomCode, expanded)
         }
     }
@@ -302,7 +303,7 @@ class ControllerSessionCoordinator(
         }
 
         onLastSentZoomChanged(clampedZoom)
-        launchRoomWrite("zoom update") {
+        roomWrites.launch("zoom update") {
             repository.updateZoomLevel(roomCode, clampedZoom)
         }
     }
@@ -344,10 +345,9 @@ class ControllerSessionCoordinator(
             setShutterPressed = setShutterPressed,
             setShutterFlashAlpha = setShutterFlashAlpha
         )
-        scope.launch {
+        roomWrites.launch("capture request") {
             Log.d("AICameraAssistant", "Sending capture request type=$requestType id=$nextRequestId")
-            runCatching { repository.sendCaptureRequest(roomCode, nextRequestId, requestType) }
-                .onFailure { Log.w("SESSION_END", "Room write failed during capture request", it) }
+            repository.sendCaptureRequest(roomCode, nextRequestId, requestType)
         }
     }
 
@@ -403,7 +403,7 @@ class ControllerSessionCoordinator(
         val normalizedY = (clampedPoint.y - previewRect.top) / previewHeight
 
         onFocusUiUpdated(clampedPoint, lockFocus)
-        launchRoomWrite("focus request") {
+        roomWrites.launch("focus request") {
             repository.updateFocusRequest(
                 roomCode = roomCode,
                 normalizedX = normalizedX.toDouble(),
@@ -437,7 +437,7 @@ class ControllerSessionCoordinator(
 
         lastRequestedExposureIndex = targetIndex
 
-        launchRoomWrite("exposure update") {
+        roomWrites.launch("exposure update") {
             repository.updateExposureIndex(roomCode, targetIndex)
         }
     }

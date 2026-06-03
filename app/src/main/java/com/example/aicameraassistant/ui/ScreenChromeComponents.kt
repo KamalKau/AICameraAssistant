@@ -403,6 +403,13 @@ fun CameraToolRail(
             showLabel = labelsExpanded,
             onClick = actions.onAspectRatioClick
         )
+        CameraToolButton(
+            icon = Icons.Default.AutoAwesome,
+            label = if (state.sceneDetectionEnabled) "AI On" else "AI",
+            showLabel = labelsExpanded,
+            selected = state.sceneDetectionEnabled,
+            onClick = actions.onSceneDetectionClick
+        )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)

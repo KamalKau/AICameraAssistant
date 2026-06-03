@@ -153,6 +153,7 @@ fun WaitingForApprovalScreen(
     val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseFaceDetectionTimestamp = remoteUiState.faceDetectionTimestamp
     val firebaseSceneDetection = remoteUiState.sceneDetection
+    val firebaseSceneDetectionEnabled = remoteUiState.sceneDetectionEnabled
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
@@ -339,6 +340,7 @@ fun WaitingForApprovalScreen(
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
         aspectRatioMode = firebaseAspectRatioMode,
+        sceneDetectionEnabled = firebaseSceneDetectionEnabled,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
@@ -415,6 +417,9 @@ fun WaitingForApprovalScreen(
         },
         onGridClick = {
             controllerCoordinator.updateGridEnabled(firebaseGridEnabled)
+        },
+        onSceneDetectionClick = {
+            controllerCoordinator.updateSceneDetectionEnabled(firebaseSceneDetectionEnabled)
         },
         onNightModeClick = {
             controllerCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
@@ -670,7 +675,7 @@ fun WaitingForApprovalScreen(
             hasSeenConnectedState = true
         }
 
-        if (roomStatus == "ended" && hasSeenConnectedState) {
+        if (roomStatus == "ended") {
             showStatusPopup(
                 context = context,
                 title = "Session ended",
@@ -682,7 +687,7 @@ fun WaitingForApprovalScreen(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
                 performCleanup = { releaseControllerPreview() },
-                exitScreen = false
+                exitScreen = true
             )
             return@LaunchedEffect
         }
@@ -1368,7 +1373,9 @@ fun WaitingForApprovalScreen(
                 ControllerStatusOverlay(
                     state = controllerStatusUiState
                 )
-                SceneDetectionChip(state = firebaseSceneDetection)
+                if (firebaseSceneDetectionEnabled) {
+                    SceneDetectionChip(state = firebaseSceneDetection)
+                }
             }
 
             val compactBottomControlsActive =

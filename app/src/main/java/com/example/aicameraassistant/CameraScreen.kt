@@ -163,6 +163,7 @@ fun CameraScreen(
     val firebasePortraitFaceBottom = remoteUiState.portraitFaceBottom
     val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseSceneDetection = remoteUiState.sceneDetection
+    val firebaseSceneDetectionEnabled = remoteUiState.sceneDetectionEnabled
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
@@ -352,6 +353,7 @@ fun CameraScreen(
         flashMode = firebaseFlashMode,
         lensFacing = firebaseLensFacing,
         aspectRatioMode = firebaseAspectRatioMode,
+        sceneDetectionEnabled = firebaseSceneDetectionEnabled,
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
@@ -428,6 +430,9 @@ fun CameraScreen(
         },
         onGridClick = {
             hostCoordinator.updateGridEnabled(firebaseGridEnabled)
+        },
+        onSceneDetectionClick = {
+            hostCoordinator.updateSceneDetectionEnabled(firebaseSceneDetectionEnabled)
         },
         onNightModeClick = {
             hostCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
@@ -831,6 +836,7 @@ fun CameraScreen(
     )
     val currentSceneResultHandler by rememberUpdatedState<(SceneDetectionResult) -> Unit>(
         newValue = { result ->
+            if (!firebaseSceneDetectionEnabled) return@rememberUpdatedState
             val now = System.currentTimeMillis()
             if (lastPhotoFaceSeenMs > 0L && now - lastPhotoFaceSeenMs < 900L) {
                 publishSceneDetection(
@@ -920,7 +926,7 @@ fun CameraScreen(
             hostCoordinator.shutdownSession(
                 isEndingSession = isEndingSession,
                 setIsEndingSession = { isEndingSession = it },
-                exitScreen = false
+                exitScreen = true
             )
         } else if (hasSeenConnectedState && roomStatus == "waiting") {
             hostCoordinator.shutdownSession(
@@ -1448,7 +1454,7 @@ fun CameraScreen(
     }
 
 
-    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode, firebaseVideoHdrEnabled) {
+    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode, firebaseVideoHdrEnabled, firebaseSceneDetectionEnabled) {
         cameraPreviewReady = false
         cameraStartupFailed = false
         val shouldRestartRecordingAfterBind =
@@ -1630,7 +1636,7 @@ fun CameraScreen(
                         MlKitFaceDetectionAnalyzer(
                             detector = faceDetector,
                             minProcessIntervalMs = 300L,
-                            sceneAnalyzer = sceneAnalyzer,
+                            sceneAnalyzer = if (firebaseSceneDetectionEnabled) sceneAnalyzer else null,
                             onSceneResult = { result ->
                                 mainExecutor.execute {
                                     currentSceneResultHandler(result)
@@ -1698,13 +1704,15 @@ fun CameraScreen(
                                 setAnalyzer(
                                     faceAnalysisExecutor,
                                     ImageAnalysis.Analyzer { imageProxy ->
-                                        runCatching {
-                                            val result = sceneAnalyzer.detect(imageProxy)
-                                            mainExecutor.execute {
-                                                currentSceneResultHandler(result)
+                                        if (firebaseSceneDetectionEnabled) {
+                                            runCatching {
+                                                val result = sceneAnalyzer.detect(imageProxy)
+                                                mainExecutor.execute {
+                                                    currentSceneResultHandler(result)
+                                                }
+                                            }.onFailure {
+                                                Log.w("SCENE_DETECTION", "Video scene detection failed", it)
                                             }
-                                        }.onFailure {
-                                            Log.w("SCENE_DETECTION", "Video scene detection failed", it)
                                         }
                                         streamAnalyzer.analyze(imageProxy)
                                     }
@@ -1973,8 +1981,14 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(firebaseSceneDetection.key, firebaseSceneDetection.confidence, firebaseNightModeEnabled) {
+    LaunchedEffect(
+        firebaseSceneDetectionEnabled,
+        firebaseSceneDetection.key,
+        firebaseSceneDetection.confidence,
+        firebaseNightModeEnabled
+    ) {
         if (
+            firebaseSceneDetectionEnabled &&
             firebaseSceneDetection.key == "night" &&
                 firebaseSceneDetection.confidence >= 0.62 &&
                 !firebaseNightModeEnabled
@@ -2439,7 +2453,9 @@ fun CameraScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
             ) {
-                SceneDetectionChip(state = firebaseSceneDetection)
+                if (firebaseSceneDetectionEnabled) {
+                    SceneDetectionChip(state = firebaseSceneDetection)
+                }
             }
         }
 
