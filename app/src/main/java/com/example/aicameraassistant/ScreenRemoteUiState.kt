@@ -32,8 +32,8 @@ data class CameraRemoteUiState(
     val requestReceived: Boolean = false,
     val controllerApproved: Boolean = false,
     val focusRequestId: Long = 0L,
-    val focusPointX: Double = 0.5,
-    val focusPointY: Double = 0.5,
+    val focusPointX: Double? = null,
+    val focusPointY: Double? = null,
     val focusLockEnabled: Boolean = false,
     val exposureIndex: Int = 0,
     val offerSdp: String? = null,
@@ -44,6 +44,12 @@ data class CameraRemoteUiState(
 data class CaptureRequestState(
     val requestId: Long = 0L,
     val requestType: String = "photo"
+)
+
+data class FocusRequestState(
+    val requestId: Long = 0L,
+    val x: Double? = null,
+    val y: Double? = null
 )
 
 data class PortraitSubjectState(

@@ -3,6 +3,7 @@ package com.example.aicameraassistant
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -11,7 +12,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +35,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
 @Composable
@@ -159,24 +161,40 @@ fun SharedFocusReticleSamsung(
     modifier: Modifier = Modifier,
     animationLabel: String = "focus_reticle_samsung_scale"
 ) {
+    var fadeReticle by remember(point, isLocked) { mutableStateOf(false) }
+    LaunchedEffect(success, isLocked) {
+        fadeReticle = false
+        if (success == true && !isLocked) {
+            kotlinx.coroutines.delay(520L)
+            fadeReticle = true
+        }
+    }
     val scale by animateFloatAsState(
-        targetValue = if (success == null) 1.12f else 1f,
+        targetValue = if (success == null) 1.2f else 1f,
+        animationSpec = tween(durationMillis = 150),
         label = animationLabel
     )
+    val reticleAlpha by animateFloatAsState(
+        targetValue = if (fadeReticle && !isLocked) 0f else 1f,
+        animationSpec = tween(durationMillis = 220),
+        label = "focus_reticle_samsung_alpha"
+    )
     val density = LocalDensity.current
-    val ringColor = when {
-        isLocked -> Color(0xFFFFC400)
-        success == true -> Color(0xFFFFD54F)
-        success == false -> Color.White.copy(alpha = 0.72f)
-        else -> Color.White
-    }
+    val ringColor = Color(0xFFFFD54F)
 
     Box(modifier = modifier) {
-        val reticleRadiusPx = with(density) { 25.dp.toPx() * scale }
+        val reticleSizePx = with(density) { 64.dp.toPx() * scale }
+        val reticleHalfPx = reticleSizePx / 2f
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawCircle(
-                color = ringColor,
-                radius = reticleRadiusPx,
+                color = Color.Black.copy(alpha = 0.16f * reticleAlpha),
+                radius = reticleHalfPx,
+                center = point,
+                style = Stroke(width = 4.dp.toPx())
+            )
+            drawCircle(
+                color = ringColor.copy(alpha = reticleAlpha),
+                radius = reticleHalfPx,
                 center = point,
                 style = Stroke(width = 2.dp.toPx())
             )
@@ -186,28 +204,36 @@ fun SharedFocusReticleSamsung(
             modifier = Modifier
                 .offset {
                     IntOffset(
-                        x = (point.x - 16.dp.toPx()).roundToInt(),
-                        y = (point.y - reticleRadiusPx - 16.dp.toPx()).roundToInt()
+                        x = (point.x - with(density) { 32.dp.toPx() }).roundToInt(),
+                        y = (point.y - with(density) { 32.dp.toPx() }).roundToInt()
                     )
                 }
-                .size(32.dp)
+                .size(64.dp)
                 .pointerInput(isLocked) {
                     detectTapGestures(onTap = { onToggleLock() })
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            androidx.compose.material3.Icon(
-                imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                }
+        ) {}
+
+        if (isLocked) {
+            Icon(
+                imageVector = Icons.Default.Lock,
                 contentDescription = null,
-                tint = if (isLocked) ringColor else Color.White.copy(alpha = 0.92f),
-                modifier = Modifier.size(16.dp)
+                tint = ringColor,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = (point.x - with(density) { 8.dp.toPx() }).roundToInt(),
+                            y = (point.y - with(density) { 8.dp.toPx() }).roundToInt()
+                        )
+                    }
+                    .size(16.dp)
             )
         }
 
         if (showExposureHandle) {
             SharedFocusExposureHandleSamsung(
                 center = point,
-                ringRadiusPx = reticleRadiusPx,
+                ringRadiusPx = reticleHalfPx,
                 isLocked = isLocked,
                 progress = exposureProgress,
                 onProgressChange = onExposureProgressChange

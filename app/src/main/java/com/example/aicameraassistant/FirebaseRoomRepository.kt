@@ -249,14 +249,28 @@ class FirebaseRoomRepository {
         requestId: Long,
         lockEnabled: Boolean
     ) {
+        val safeX = normalizedX.coerceIn(0.0, 1.0)
+        val safeY = normalizedY.coerceIn(0.0, 1.0)
         updateRoomSafely(
             roomCode,
             mapOf(
-                "focusPointX" to normalizedX.coerceIn(0.0, 1.0),
-                "focusPointY" to normalizedY.coerceIn(0.0, 1.0),
+                "focusX" to safeX,
+                "focusY" to safeY,
+                "focusPointX" to safeX,
+                "focusPointY" to safeY,
                 "focusRequestId" to requestId,
                 "focusLockEnabled" to lockEnabled
             )
+        )
+    }
+
+    suspend fun updateFocusPoint(roomCode: String, x: Double, y: Double, requestId: Long) {
+        updateFocusRequest(
+            roomCode = roomCode,
+            normalizedX = x,
+            normalizedY = y,
+            requestId = requestId,
+            lockEnabled = false
         )
     }
 
@@ -391,6 +405,8 @@ class FirebaseRoomRepository {
             "videoHdrEnabled" to false,
             "toolbarExpanded" to false,
             "focusRequestId" to 0L,
+            "focusX" to null,
+            "focusY" to null,
             "focusLockEnabled" to false,
             "focusPointX" to 0.5,
             "focusPointY" to 0.5,
@@ -713,10 +729,24 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getFocusRequest(roomCode: String): Flow<FocusRequestState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(
+                    FocusRequestState(
+                        requestId = snapshot?.getLong("focusRequestId") ?: 0L,
+                        x = snapshot?.getDouble("focusX") ?: snapshot?.getDouble("focusPointX"),
+                        y = snapshot?.getDouble("focusY") ?: snapshot?.getDouble("focusPointY")
+                    )
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getFocusPointX(roomCode: String): Flow<Double> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                trySend(snapshot?.getDouble("focusPointX") ?: 0.5)
+                trySend(snapshot?.getDouble("focusX") ?: snapshot?.getDouble("focusPointX") ?: 0.5)
             }
         awaitClose { listener.remove() }
     }
@@ -732,7 +762,7 @@ class FirebaseRoomRepository {
     fun getFocusPointY(roomCode: String): Flow<Double> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                trySend(snapshot?.getDouble("focusPointY") ?: 0.5)
+                trySend(snapshot?.getDouble("focusY") ?: snapshot?.getDouble("focusPointY") ?: 0.5)
             }
         awaitClose { listener.remove() }
     }

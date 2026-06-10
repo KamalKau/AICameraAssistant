@@ -462,20 +462,26 @@ fun CameraScreen(
         onDenyController = { hostCoordinator.updateApproval(false) }
     )
 
-    fun triggerTapToFocus(tapOffset: Offset, lockFocus: Boolean = false) {
+    fun startFocusAndMeteringAt(
+        tapOffset: Offset,
+        lockFocus: Boolean = false,
+        showFocusUi: Boolean = true
+    ) {
         if (!sessionIsActive) return
 
-        focusPoint = tapOffset
-        focusSucceeded = null
-        focusLocked = lockFocus
-        focusUiToken++
+        if (showFocusUi) {
+            focusPoint = tapOffset
+            focusSucceeded = null
+            focusLocked = lockFocus
+            focusUiToken++
+        }
 
         val currentCamera = camera ?: return
+        runCatching { currentCamera.cameraControl.cancelFocusAndMetering() }
         val action = FocusMeteringAction.Builder(
             previewView.meteringPointFactory.createPoint(tapOffset.x, tapOffset.y),
             FocusMeteringAction.FLAG_AF or
-                FocusMeteringAction.FLAG_AE or
-                FocusMeteringAction.FLAG_AWB
+                FocusMeteringAction.FLAG_AE
         )
             .apply {
                 if (!lockFocus) {
@@ -489,21 +495,34 @@ fun CameraScreen(
             future.addListener(
                 {
                     runCatching { future.get() }
-                        .onSuccess { result -> focusSucceeded = result.isFocusSuccessful }
+                        .onSuccess { result ->
+                            if (showFocusUi) {
+                                focusSucceeded = result.isFocusSuccessful
+                            }
+                        }
                         .onFailure {
                             Log.w("CAMERA_FOCUS", "Tap to focus result failed", it)
-                            focusSucceeded = false
+                            if (showFocusUi) {
+                                focusSucceeded = false
+                            }
                         }
                 },
                 ContextCompat.getMainExecutor(context)
             )
         }.onFailure {
             Log.w("CAMERA_FOCUS", "Tap to focus request failed", it)
-            focusSucceeded = false
+            if (showFocusUi) {
+                focusSucceeded = false
+            }
         }
     }
 
+    fun triggerTapToFocus(tapOffset: Offset, lockFocus: Boolean = false) {
+        startFocusAndMeteringAt(tapOffset = tapOffset, lockFocus = lockFocus, showFocusUi = true)
+    }
+
     fun triggerRemoteTapToFocus(normalizedX: Double, normalizedY: Double, lockFocus: Boolean) {
+        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return
         val width = previewView.width.toFloat()
         val height = previewView.height.toFloat()
         if (width <= 0f || height <= 0f) return
@@ -522,12 +541,13 @@ fun CameraScreen(
             }
         val mappedNormalizedY = normalizedY.coerceIn(0.0, 1.0)
 
-        triggerTapToFocus(
-            Offset(
+        startFocusAndMeteringAt(
+            tapOffset = Offset(
                 x = previewRect.left + (mappedNormalizedX.toFloat() * previewRect.width),
                 y = previewRect.top + (mappedNormalizedY.toFloat() * previewRect.height)
             ).clampOffsetTo(previewRect),
-            lockFocus = lockFocus
+            lockFocus = lockFocus,
+            showFocusUi = true
         )
     }
 
@@ -695,6 +715,7 @@ fun CameraScreen(
     }
 
     fun applyPhotoFaceMetering(bounds: PortraitFaceBounds) {
+        if (focusLocked) return
         if (isPortraitMode || !bounds.isValid()) return
         val currentCamera = camera ?: return
         val width = previewView.width.toFloat()
@@ -718,8 +739,7 @@ fun CameraScreen(
         val action = FocusMeteringAction.Builder(
             previewView.meteringPointFactory.createPoint(centerX, centerY),
             FocusMeteringAction.FLAG_AF or
-                FocusMeteringAction.FLAG_AE or
-                FocusMeteringAction.FLAG_AWB
+                FocusMeteringAction.FLAG_AE
         )
             .setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
             .build()
@@ -1892,6 +1912,15 @@ fun CameraScreen(
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null
             publishExposureState(finalCamera)
+            if (focusLocked) {
+                focusPoint?.let { lockedPoint ->
+                    startFocusAndMeteringAt(
+                        tapOffset = lockedPoint,
+                        lockFocus = true,
+                        showFocusUi = false
+                    )
+                }
+            }
             delay(120)
             cameraPreviewReady = true
             if (restartRecordingAfterCameraBind) {
@@ -2053,10 +2082,12 @@ fun CameraScreen(
         if (firebaseFocusRequestId <= 0L || firebaseFocusRequestId == lastAppliedRemoteFocusRequestId) {
             return@LaunchedEffect
         }
+        val focusX = firebaseFocusPointX ?: return@LaunchedEffect
+        val focusY = firebaseFocusPointY ?: return@LaunchedEffect
         lastAppliedRemoteFocusRequestId = firebaseFocusRequestId
         triggerRemoteTapToFocus(
-            normalizedX = firebaseFocusPointX,
-            normalizedY = firebaseFocusPointY,
+            normalizedX = focusX,
+            normalizedY = focusY,
             lockFocus = firebaseFocusLockEnabled
         )
     }
@@ -2200,6 +2231,7 @@ fun CameraScreen(
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
             val swipeThresholdPx = with(density) { 72.dp.toPx() }
             val focusTapSlopPx = with(density) { 8.dp.toPx() }
+            val focusLongPressTimeoutMs = 520L
             val exposureDragSlopPx = with(density) { 26.dp.toPx() }
             val topControlGuardPx = with(density) { 128.dp.toPx() }
             val bottomControlGuardPx = with(density) { 188.dp.toPx() }
@@ -2232,6 +2264,7 @@ fun CameraScreen(
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val start = down.position
+                            val downStartedAtMs = System.currentTimeMillis()
                             val startsNearControls = start.isNearCameraControls()
                             var lastPosition = start
                             var maxPointerCount = 1
@@ -2241,6 +2274,7 @@ fun CameraScreen(
                             var verticalExposureActive = false
                             var pinchActive = false
                             var consumedDrag = false
+                            var longPressTriggered = false
 
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -2269,6 +2303,28 @@ fun CameraScreen(
                                 val currentPosition = change.position
                                 val totalDrag = currentPosition - start
                                 lastPosition = currentPosition
+                                val withinFocusSlop =
+                                    abs(totalDrag.x) < focusTapSlopPx &&
+                                        abs(totalDrag.y) < focusTapSlopPx
+
+                                if (
+                                    !longPressTriggered &&
+                                    !startsNearControls &&
+                                    !verticalExposureActive &&
+                                    withinFocusSlop &&
+                                    System.currentTimeMillis() - downStartedAtMs >= focusLongPressTimeoutMs
+                                ) {
+                                    longPressTriggered = true
+                                    consumedDrag = true
+                                    triggerTapToFocus(
+                                        Offset(
+                                            x = previewRect.left + start.x,
+                                            y = previewRect.top + start.y
+                                        ).clampOffsetTo(previewRect),
+                                        lockFocus = true
+                                    )
+                                    change.consume()
+                                }
 
                                 if (
                                     !startsNearControls &&
@@ -2298,6 +2354,7 @@ fun CameraScreen(
                                 abs(totalDrag.x) > abs(totalDrag.y) * 1.25f
                             val tapped = !startsNearControls &&
                                 !consumedDrag &&
+                                !longPressTriggered &&
                                 maxPointerCount == 1 &&
                                 abs(totalDrag.x) < focusTapSlopPx &&
                                 abs(totalDrag.y) < focusTapSlopPx

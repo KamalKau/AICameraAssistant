@@ -408,7 +408,7 @@ class ControllerSessionCoordinator(
                 roomCode = roomCode,
                 normalizedX = normalizedX.toDouble(),
                 normalizedY = normalizedY.toDouble(),
-                requestId = currentFocusRequestId + 1L,
+                requestId = maxOf(System.currentTimeMillis(), currentFocusRequestId + 1L),
                 lockEnabled = lockFocus
             )
         }
