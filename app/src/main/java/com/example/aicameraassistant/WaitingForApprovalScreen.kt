@@ -195,6 +195,10 @@ fun WaitingForApprovalScreen(
     var captureMode by screenViewModel::captureMode
     var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
     var videoRecordingPaused by screenViewModel::videoRecordingPaused
+    val videoRecordingElapsedMillis = rememberVideoRecordingElapsedMillis(
+        isRecording = videoRecordingInProgress,
+        isPaused = videoRecordingPaused
+    )
     var showPortraitControls by screenViewModel::showPortraitControls
     var burstJob by screenViewModel::burstJob
     var isBurstCapturing by screenViewModel::isBurstCapturing
@@ -1085,7 +1089,7 @@ fun WaitingForApprovalScreen(
                                     }
                                 }
                             )
-                            renderer.setMirror(false)
+                            renderer.setMirror(shouldMirrorPreview(firebaseLensFacing))
                             renderer.setEnableHardwareScaler(true)
                             renderer.setScalingType(
                                 RendererCommon.ScalingType.SCALE_ASPECT_FIT,
@@ -1128,6 +1132,7 @@ fun WaitingForApprovalScreen(
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT,
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT
                         )
+                        renderer.setMirror(shouldMirrorPreview(firebaseLensFacing))
                         if (controllerDisplayWidth > 0 && controllerDisplayHeight > 0) {
                             container.setVideoLayout(
                                 controllerDisplayWidth,
@@ -1373,6 +1378,12 @@ fun WaitingForApprovalScreen(
                 ControllerStatusOverlay(
                     state = controllerStatusUiState
                 )
+                if (firebaseCameraMode == "video" && videoRecordingInProgress) {
+                    VideoRecordingTimerPill(
+                        elapsedMillis = videoRecordingElapsedMillis,
+                        isPaused = videoRecordingPaused
+                    )
+                }
                 if (firebaseSceneDetectionEnabled) {
                     SceneDetectionChip(state = firebaseSceneDetection)
                 }

@@ -7,7 +7,6 @@ import android.media.MediaActionSound
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
-import android.view.Surface
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -105,6 +104,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -139,6 +139,7 @@ fun CameraScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val screenViewModel: CameraScreenViewModel = viewModel()
@@ -236,6 +237,10 @@ fun CameraScreen(
     var boomerangInProgress by screenViewModel::boomerangInProgress
     var captureMode by screenViewModel::captureMode
     var videoRecordingState by screenViewModel::videoRecordingState
+    val videoRecordingElapsedMillis = rememberVideoRecordingElapsedMillis(
+        isRecording = videoRecordingState != VideoRecordingState.Idle,
+        isPaused = videoRecordingState == VideoRecordingState.Paused
+    )
     val videoRecorder = remember(context) { CameraVideoRecorder(context) }
     val videoFrameSource = remember { WebRtcImageFrameSource() }
     var selfieLightVisible by remember { mutableStateOf(false) }
@@ -1008,6 +1013,7 @@ fun CameraScreen(
         } else {
             null
         }
+        currentCapture.targetRotation = getTargetRotation(context, previewView)
         currentCapture.flashMode = forcedCaptureFlashMode ?: resolvedCaptureFlashMode
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
@@ -1058,6 +1064,7 @@ fun CameraScreen(
         } else {
             null
         }
+        capture.targetRotation = getTargetRotation(context, previewView)
         capture.flashMode = forcedCaptureFlashMode ?: when {
             useFrontScreenFlash -> ImageCapture.FLASH_MODE_SCREEN
             isFrontCamera -> ImageCapture.FLASH_MODE_OFF
@@ -1253,13 +1260,20 @@ fun CameraScreen(
         videoRecordingState = state
     }
 
+    fun updateVideoCaptureTargetRotation() {
+        videoCapture?.targetRotation = getTargetRotation(context, previewView)
+    }
+
     fun handleVideoRequest(requestType: String, onRequestHandled: () -> Unit): Boolean {
         return when (requestType) {
-            "video_start" -> videoRecorder.start(
-                videoCapture = videoCapture,
-                onRecordingStateChanged = ::updateVideoRecordingState,
-                onRequestHandled = onRequestHandled
-            )
+            "video_start" -> {
+                updateVideoCaptureTargetRotation()
+                videoRecorder.start(
+                    videoCapture = videoCapture,
+                    onRecordingStateChanged = ::updateVideoRecordingState,
+                    onRequestHandled = onRequestHandled
+                )
+            }
 
             "video_stop" -> videoRecorder.stop(
                 onRecordingStateChanged = ::updateVideoRecordingState,
@@ -1282,6 +1296,7 @@ fun CameraScreen(
                     onRequestHandled = onRequestHandled
                 )
             } else {
+                updateVideoCaptureTargetRotation()
                 videoRecorder.start(
                     videoCapture = videoCapture,
                     onRecordingStateChanged = ::updateVideoRecordingState,
@@ -1454,7 +1469,14 @@ fun CameraScreen(
     }
 
 
-    LaunchedEffect(lensFacing, isStreaming, firebaseCameraMode, firebaseVideoHdrEnabled, firebaseSceneDetectionEnabled) {
+    LaunchedEffect(
+        lensFacing,
+        isStreaming,
+        firebaseCameraMode,
+        firebaseVideoHdrEnabled,
+        firebaseSceneDetectionEnabled,
+        configuration.orientation
+    ) {
         cameraPreviewReady = false
         cameraStartupFailed = false
         val shouldRestartRecordingAfterBind =
@@ -1478,11 +1500,11 @@ fun CameraScreen(
         }
 
         val targetSize = if (firebaseCameraMode == "video") {
-            Size(720, 1280)
+            getVideoResolutionForCurrentOrientation(context)
         } else {
-            Size(1080, 1920)
+            getResolutionForCurrentOrientation(context)
         }
-        val targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+        val targetRotation = getTargetRotation(context, previewView)
 
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
@@ -1615,7 +1637,7 @@ fun CameraScreen(
             lastCameraAnalysisResultMs = 0L
 
             val finalUseCases = mutableListOf<UseCase>(localPreview)
-            val analysisSize = Size(320, 240)
+            val analysisSize = getAnalysisResolutionForCurrentOrientation(context)
             val analysisResolutionSelector = ResolutionSelector.Builder()
                 .setResolutionStrategy(
                     ResolutionStrategy(
@@ -1873,6 +1895,7 @@ fun CameraScreen(
             delay(120)
             cameraPreviewReady = true
             if (restartRecordingAfterCameraBind) {
+                updateVideoCaptureTargetRotation()
                 val restarted = videoRecorder.start(
                     videoCapture = videoCapture,
                     onRecordingStateChanged = ::updateVideoRecordingState,
@@ -2449,6 +2472,17 @@ fun CameraScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
+            if (firebaseCameraMode == "video" && videoRecordingState != VideoRecordingState.Idle) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    VideoRecordingTimerPill(
+                        elapsedMillis = videoRecordingElapsedMillis,
+                        isPaused = videoRecordingState == VideoRecordingState.Paused
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center

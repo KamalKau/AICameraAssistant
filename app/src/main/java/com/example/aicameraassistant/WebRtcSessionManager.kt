@@ -69,6 +69,7 @@ object WebRtcSessionManager {
 
     private var captureWidth: Int = 0
     private var captureHeight: Int = 0
+    private var captureRotationDegrees: Int = 0
 
     private val _cameraConnectionState = MutableStateFlow(AppConnectionState.IDLE)
     val cameraConnectionState: StateFlow<AppConnectionState> = _cameraConnectionState.asStateFlow()
@@ -155,20 +156,26 @@ object WebRtcSessionManager {
 
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
+        val safeRotation = rotationDegrees.normalizedRotationDegrees()
         imageFrameSourceActive = false
 
         if (
             surfaceTextureHelper != null &&
             cachedSurface != null &&
             captureWidth == safeWidth &&
-            captureHeight == safeHeight
+            captureHeight == safeHeight &&
+            captureRotationDegrees == safeRotation
         ) {
             return cachedSurface
         }
 
         if (
             surfaceTextureHelper != null &&
-            (captureWidth != safeWidth || captureHeight != safeHeight)
+            (
+                captureWidth != safeWidth ||
+                    captureHeight != safeHeight ||
+                    captureRotationDegrees != safeRotation
+                )
         ) {
             stopLocalCamera()
         }
@@ -198,13 +205,14 @@ object WebRtcSessionManager {
 
             captureWidth = safeWidth
             captureHeight = safeHeight
+            captureRotationDegrees = safeRotation
 
             val surface = Surface(helper.surfaceTexture)
             cachedSurface = surface
 
             Log.d(
                 "WEBRTC_LOG",
-                "WebRTC source started with size: ${captureWidth}x${captureHeight}, rotation=$rotationDegrees"
+                "WebRTC source started with size: ${captureWidth}x${captureHeight}, rotation=$safeRotation"
             )
 
             attachLocalTracksToCameraPeer()
@@ -242,6 +250,7 @@ object WebRtcSessionManager {
             imageFrameSourceActive = false
             captureWidth = 0
             captureHeight = 0
+            captureRotationDegrees = 0
         } catch (t: Throwable) {
             Log.e("WEBRTC_LOG", "Error during cleanup", t)
         }
@@ -273,6 +282,7 @@ object WebRtcSessionManager {
             localVideoTrack = f.createVideoTrack("LOCAL_VIDEO", vSource)
             captureWidth = safeWidth
             captureHeight = safeHeight
+            captureRotationDegrees = 0
             imageFrameSourceActive = true
             attachLocalTracksToCameraPeer()
             Log.d("WEBRTC_LOG", "Image WebRTC source started with size: ${captureWidth}x${captureHeight}")
@@ -637,4 +647,12 @@ object WebRtcSessionManager {
         health.lastConnectedAtMs = 0L
         health.lastDisconnectedAtMs = 0L
     }
+
+    private fun Int.normalizedRotationDegrees(): Int =
+        when (((this % 360) + 360) % 360) {
+            90 -> 90
+            180 -> 180
+            270 -> 270
+            else -> 0
+        }
 }
