@@ -115,7 +115,9 @@ fun ControllerBottomControls(
             exposureLabel = state.exposureLabel,
             onProgressChange = actions.onExposureProgressChange,
             onDismiss = actions.onExposureDismiss,
-            onReset = actions.onExposureReset
+            onReset = actions.onExposureReset,
+            onDragStart = actions.onExposureDragStart,
+            onDragEnd = actions.onExposureDragEnd
         )
     }
 

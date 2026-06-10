@@ -68,7 +68,9 @@ data class ExposureUiActions(
     val onToggle: () -> Unit,
     val onProgressChange: (Float) -> Unit,
     val onDismiss: () -> Unit,
-    val onReset: () -> Unit
+    val onReset: () -> Unit,
+    val onDragStart: () -> Unit = {},
+    val onDragEnd: () -> Unit = {}
 )
 
 data class ControllerBottomControlsUiState(
@@ -107,6 +109,8 @@ data class ControllerBottomControlsActions(
     val onExposureProgressChange: (Float) -> Unit,
     val onExposureDismiss: () -> Unit,
     val onExposureReset: () -> Unit,
+    val onExposureDragStart: () -> Unit = {},
+    val onExposureDragEnd: () -> Unit = {},
     val onPortraitControlsClick: () -> Unit,
     val onPortraitStrengthSelected: (Int) -> Unit,
     val onPortraitEffectSelected: (String) -> Unit,

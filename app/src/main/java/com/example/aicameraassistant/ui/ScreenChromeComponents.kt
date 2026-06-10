@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -472,6 +473,8 @@ fun ManualExposurePanel(
     onProgressChange: (Float) -> Unit,
     onDismiss: () -> Unit,
     onReset: () -> Unit,
+    onDragStart: () -> Unit = {},
+    onDragEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val clampedProgress = progress.coerceIn(0f, 1f)
@@ -493,6 +496,9 @@ fun ManualExposurePanel(
         modifier = modifier
             .background(Color(0xFF2E2E2E).copy(alpha = 0.95f), RoundedCornerShape(24.dp))
             .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(24.dp))
+            .pointerInput(onReset) {
+                detectTapGestures(onDoubleTap = { onReset() })
+            }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -532,29 +538,34 @@ fun ManualExposurePanel(
                         fun progressFor(x: Float): Float = (x / width).coerceIn(0f, 1f)
 
                         isDragging = true
+                        onDragStart()
                         var nextProgress = dragProgress
 
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                                ?: event.changes.firstOrNull()
-                                ?: break
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                    ?: event.changes.firstOrNull()
+                                    ?: break
 
-                            if (!change.pressed) {
-                                isDragging = false
-                                break
-                            }
+                                if (!change.pressed) {
+                                    break
+                                }
 
-                            if (kotlin.math.abs(change.position.x - startX) < dragStartSlopPx) {
-                                continue
-                            }
+                                if (kotlin.math.abs(change.position.x - startX) < dragStartSlopPx) {
+                                    continue
+                                }
 
-                            change.consume()
-                            nextProgress = progressFor(change.position.x)
-                            if (kotlin.math.abs(nextProgress - dragProgress) > 0.004f) {
-                                dragProgress = nextProgress
-                                onProgressChange(nextProgress)
+                                change.consume()
+                                nextProgress = progressFor(change.position.x)
+                                if (kotlin.math.abs(nextProgress - dragProgress) > 0.0015f) {
+                                    dragProgress = nextProgress
+                                    onProgressChange(nextProgress)
+                                }
                             }
+                        } finally {
+                            isDragging = false
+                            onDragEnd()
                         }
                     }
                 }
@@ -620,6 +631,8 @@ fun ManualExposurePanel(
 fun ManualExposureSlider(
     progress: Float,
     onProgressChange: (Float) -> Unit,
+    onDragStart: () -> Unit = {},
+    onDragEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val clampedProgress = progress.coerceIn(0f, 1f)
@@ -630,6 +643,7 @@ fun ManualExposureSlider(
             .pointerInput(onProgressChange) {
                 detectDragGestures(
                     onDragStart = { offset ->
+                        onDragStart()
                         val nextProgress =
                             (1f - (offset.y / size.height.toFloat())).coerceIn(0f, 1f)
                         onProgressChange(nextProgress)
@@ -639,7 +653,9 @@ fun ManualExposureSlider(
                         val nextProgress =
                             (1f - (change.position.y / size.height.toFloat())).coerceIn(0f, 1f)
                         onProgressChange(nextProgress)
-                    }
+                    },
+                    onDragEnd = onDragEnd,
+                    onDragCancel = onDragEnd
                 )
             }
     ) {

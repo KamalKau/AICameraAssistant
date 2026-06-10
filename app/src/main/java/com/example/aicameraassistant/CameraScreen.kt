@@ -7,6 +7,7 @@ import android.media.MediaActionSound
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.view.OrientationEventListener
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -191,6 +192,8 @@ fun CameraScreen(
     var lastGestureZoomPublishedRatio by remember { mutableFloatStateOf(Float.NaN) }
     var lastGestureExposurePublishMs by remember { mutableLongStateOf(0L) }
     var lastGestureExposurePublishedIndex by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    var manualExposureDragging by remember { mutableStateOf(false) }
+    var manualExposureInteractionToken by remember { mutableLongStateOf(0L) }
     val lensFadeAlpha = remember { Animatable(0f) }
     val modeSlideProgress = remember { Animatable(0f) }
     var hasSeenLensTransitionKey by remember { mutableStateOf(false) }
@@ -208,6 +211,23 @@ fun CameraScreen(
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
+    }
+    var displayRotation by remember { mutableIntStateOf(getTargetRotation(context, previewView)) }
+    DisposableEffect(context, previewView) {
+        val listener = object : OrientationEventListener(context.applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                displayRotation = getTargetRotation(context, previewView)
+            }
+        }
+        if (listener.canDetectOrientation()) {
+            listener.enable()
+        }
+        onDispose {
+            listener.disable()
+        }
+    }
+    LaunchedEffect(configuration.orientation) {
+        displayRotation = getTargetRotation(context, previewView)
     }
     LaunchedEffect(firebaseAspectRatioMode) {
         previewView.scaleType = if (AspectRatioMode.fromKey(firebaseAspectRatioMode) == AspectRatioMode.Full) {
@@ -368,6 +388,28 @@ fun CameraScreen(
         boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
     )
+    fun resetExposureToNeutral() {
+        if (!exposureUiState.supported) return
+        val defaultProgress = defaultExposureProgress(
+            minIndex = exposureMinIndex,
+            maxIndex = exposureMaxIndex
+        )
+        val previousExposureIndex = exposureIndex
+        val neutralIndex = 0.coerceIn(exposureMinIndex, exposureMaxIndex)
+        manualExposureProgressOverride = defaultProgress
+        manualExposureInteractionToken = System.currentTimeMillis()
+        if (neutralIndex != exposureIndex) {
+            exposureIndex = neutralIndex
+            camera?.cameraControl?.setExposureCompensationIndex(neutralIndex)
+        }
+        hostCoordinator.updateExposureFromProgress(
+            progress = defaultProgress,
+            exposureMinIndex = exposureMinIndex,
+            exposureMaxIndex = exposureMaxIndex,
+            currentExposureIndex = previousExposureIndex,
+            onUiPulse = { focusUiToken++ }
+        )
+    }
     val hostExposureUiActions = ExposureUiActions(
         onToggle = {
             if (exposureUiState.supported) {
@@ -375,6 +417,7 @@ fun CameraScreen(
                     manualExposureProgressOverride = exposureUiState.remoteProgress
                 }
                 showManualBrightnessControl = !showManualBrightnessControl
+                manualExposureInteractionToken = System.currentTimeMillis()
                 if (!showManualBrightnessControl) {
                     manualExposureProgressOverride = null
                 }
@@ -382,6 +425,7 @@ fun CameraScreen(
         },
         onProgressChange = { progress ->
             manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            manualExposureInteractionToken = System.currentTimeMillis()
             hostCoordinator.updateExposureFromProgress(
                 progress = progress,
                 exposureMinIndex = exposureMinIndex,
@@ -395,18 +439,15 @@ fun CameraScreen(
             manualExposureProgressOverride = null
         },
         onReset = {
-            val defaultProgress = defaultExposureProgress(
-                minIndex = exposureMinIndex,
-                maxIndex = exposureMaxIndex
-            )
-            manualExposureProgressOverride = defaultProgress
-            hostCoordinator.updateExposureFromProgress(
-                progress = defaultProgress,
-                exposureMinIndex = exposureMinIndex,
-                exposureMaxIndex = exposureMaxIndex,
-                currentExposureIndex = firebaseExposureIndex,
-                onUiPulse = { focusUiToken++ }
-            )
+            resetExposureToNeutral()
+        },
+        onDragStart = {
+            manualExposureDragging = true
+            manualExposureInteractionToken = System.currentTimeMillis()
+        },
+        onDragEnd = {
+            manualExposureDragging = false
+            manualExposureInteractionToken = System.currentTimeMillis()
         }
     )
     val hostToolRailActions = CameraToolRailActions(
@@ -431,6 +472,7 @@ fun CameraScreen(
             }
         },
         onLensClick = {
+            resetExposureToNeutral()
             hostCoordinator.switchLens(firebaseLensFacing)
         },
         onGridClick = {
@@ -450,6 +492,18 @@ fun CameraScreen(
             hostCoordinator.updateToolbarExpanded(expanded)
         }
     )
+    LaunchedEffect(
+        showManualBrightnessControl,
+        manualExposureDragging,
+        manualExposureInteractionToken
+    ) {
+        if (!showManualBrightnessControl || manualExposureDragging) return@LaunchedEffect
+        delay(2_500L)
+        if (showManualBrightnessControl && !manualExposureDragging) {
+            showManualBrightnessControl = false
+            manualExposureProgressOverride = null
+        }
+    }
     val hostTopOverlayActions = HostTopOverlayActions(
         onEndSession = {
             hostCoordinator.endSession(
@@ -518,6 +572,7 @@ fun CameraScreen(
     }
 
     fun triggerTapToFocus(tapOffset: Offset, lockFocus: Boolean = false) {
+        resetExposureToNeutral()
         startFocusAndMeteringAt(tapOffset = tapOffset, lockFocus = lockFocus, showFocusUi = true)
     }
 
@@ -541,6 +596,7 @@ fun CameraScreen(
             }
         val mappedNormalizedY = normalizedY.coerceIn(0.0, 1.0)
 
+        resetExposureToNeutral()
         startFocusAndMeteringAt(
             tapOffset = Offset(
                 x = previewRect.left + (mappedNormalizedX.toFloat() * previewRect.width),
@@ -1033,7 +1089,8 @@ fun CameraScreen(
         } else {
             null
         }
-        currentCapture.targetRotation = getTargetRotation(context, previewView)
+        val captureRotation = getTargetRotation(context, previewView)
+        currentCapture.targetRotation = captureRotation
         currentCapture.flashMode = forcedCaptureFlashMode ?: resolvedCaptureFlashMode
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
@@ -1084,7 +1141,8 @@ fun CameraScreen(
         } else {
             null
         }
-        capture.targetRotation = getTargetRotation(context, previewView)
+        val captureRotation = getTargetRotation(context, previewView)
+        capture.targetRotation = captureRotation
         capture.flashMode = forcedCaptureFlashMode ?: when {
             useFrontScreenFlash -> ImageCapture.FLASH_MODE_SCREEN
             isFrontCamera -> ImageCapture.FLASH_MODE_OFF
@@ -1281,7 +1339,8 @@ fun CameraScreen(
     }
 
     fun updateVideoCaptureTargetRotation() {
-        videoCapture?.targetRotation = getTargetRotation(context, previewView)
+        val targetRotation = getTargetRotation(context, previewView)
+        videoCapture?.targetRotation = targetRotation
     }
 
     fun handleVideoRequest(requestType: String, onRequestHandled: () -> Unit): Boolean {
@@ -1488,6 +1547,10 @@ fun CameraScreen(
         previewView.setScreenFlashWindow(activity?.window)
     }
 
+    LaunchedEffect(displayRotation, imageCapture, videoCapture) {
+        imageCapture?.targetRotation = displayRotation
+        videoCapture?.targetRotation = displayRotation
+    }
 
     LaunchedEffect(
         lensFacing,
@@ -1495,7 +1558,8 @@ fun CameraScreen(
         firebaseCameraMode,
         firebaseVideoHdrEnabled,
         firebaseSceneDetectionEnabled,
-        configuration.orientation
+        configuration.orientation,
+        displayRotation
     ) {
         cameraPreviewReady = false
         cameraStartupFailed = false
@@ -1524,7 +1588,7 @@ fun CameraScreen(
         } else {
             getResolutionForCurrentOrientation(context)
         }
-        val targetRotation = getTargetRotation(context, previewView)
+        val targetRotation = displayRotation
 
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
@@ -2149,6 +2213,12 @@ fun CameraScreen(
 
         AndroidView(
             factory = { previewView },
+            update = {
+                val nextRotation = getTargetRotation(context, previewView)
+                if (displayRotation != nextRotation) {
+                    displayRotation = nextRotation
+                }
+            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset {
@@ -2232,7 +2302,7 @@ fun CameraScreen(
             val swipeThresholdPx = with(density) { 72.dp.toPx() }
             val focusTapSlopPx = with(density) { 8.dp.toPx() }
             val focusLongPressTimeoutMs = 520L
-            val exposureDragSlopPx = with(density) { 26.dp.toPx() }
+            val exposureDragSlopPx = with(density) { 12.dp.toPx() }
             val topControlGuardPx = with(density) { 128.dp.toPx() }
             val bottomControlGuardPx = with(density) { 188.dp.toPx() }
             val sideControlGuardPx = with(density) { 86.dp.toPx() }
@@ -2271,10 +2341,12 @@ fun CameraScreen(
                             var gestureZoom = camera?.cameraInfo?.zoomState?.value?.zoomRatio
                                 ?: firebaseZoomLevel.toFloat()
                             val startExposureProgress = exposureUiState.progress
+                            var gestureExposureProgress = startExposureProgress
                             var verticalExposureActive = false
                             var pinchActive = false
                             var consumedDrag = false
                             var longPressTriggered = false
+                            var lastExposureDragY = start.y
 
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -2331,17 +2403,35 @@ fun CameraScreen(
                                     exposureUiState.supported &&
                                     !verticalExposureActive &&
                                     abs(totalDrag.y) > exposureDragSlopPx &&
-                                    abs(totalDrag.y) > abs(totalDrag.x) * 1.55f
+                                    abs(totalDrag.y) > abs(totalDrag.x) * 1.25f
                                 ) {
                                     verticalExposureActive = true
+                                    manualExposureDragging = true
+                                    showManualBrightnessControl = true
+                                    manualExposureInteractionToken = System.currentTimeMillis()
+                                    lastExposureDragY = currentPosition.y
+                                    change.consume()
+                                    consumedDrag = true
+                                    continue
                                 }
 
                                 if (verticalExposureActive) {
-                                    val exposureDelta = totalDrag.y / size.height.toFloat().coerceAtLeast(1f)
-                                    updateExposureFromProgress(startExposureProgress + exposureDelta)
+                                    val dragDeltaY = currentPosition.y - lastExposureDragY
+                                    lastExposureDragY = currentPosition.y
+                                    val sensitivityPx = (size.height.toFloat() * 0.46f).coerceAtLeast(1f)
+                                    gestureExposureProgress =
+                                        (gestureExposureProgress + (dragDeltaY / sensitivityPx))
+                                            .coerceIn(0f, 1f)
+                                    updateExposureFromProgress(gestureExposureProgress)
+                                    manualExposureInteractionToken = System.currentTimeMillis()
                                     change.consume()
                                     consumedDrag = true
                                 }
+                            }
+
+                            if (verticalExposureActive) {
+                                manualExposureDragging = false
+                                manualExposureInteractionToken = System.currentTimeMillis()
                             }
 
                             if (pinchActive) {
@@ -2570,6 +2660,8 @@ fun CameraScreen(
                 onProgressChange = hostExposureUiActions.onProgressChange,
                 onDismiss = hostExposureUiActions.onDismiss,
                 onReset = hostExposureUiActions.onReset,
+                onDragStart = hostExposureUiActions.onDragStart,
+                onDragEnd = hostExposureUiActions.onDragEnd,
                 modifier = Modifier
                     .navigationBarsPadding()
                     .padding(bottom = 112.dp)

@@ -31,6 +31,8 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     private var rendererReleased = false
 
     private var videoAspectRatio = 9f / 16f
+
+
     private var rotateContent = false
     private var fillFrame = false
     private var displayWidthPx = 0

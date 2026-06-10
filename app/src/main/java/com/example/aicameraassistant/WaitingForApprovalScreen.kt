@@ -186,6 +186,8 @@ fun WaitingForApprovalScreen(
     var focusUiToken by screenViewModel::focusUiToken
     var showManualBrightnessControl by screenViewModel::showManualBrightnessControl
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
+    var manualExposureDragging by remember { mutableStateOf(false) }
+    var manualExposureInteractionToken by remember { mutableLongStateOf(0L) }
     var previewOverlayRect by screenViewModel::previewOverlayRect
     var shutterFlashAlpha by screenViewModel::shutterFlashAlpha
     var shutterPressed by screenViewModel::shutterPressed
@@ -223,28 +225,23 @@ fun WaitingForApprovalScreen(
         previewOverlayRect = null
     }
 
-    val shouldSwapRemoteFrame =
-        (remoteFrameRotation == 90 || remoteFrameRotation == 270) ||
-            (
-                remoteFrameRotation == 0 &&
-                    cameraPreviewHeight > cameraPreviewWidth &&
-                    remoteFrameWidth > remoteFrameHeight
-                )
+    val fallbackRemoteFrameWidth =
+        if (remoteFrameRotation == 90 || remoteFrameRotation == 270) remoteFrameHeight else remoteFrameWidth
+    val fallbackRemoteFrameHeight =
+        if (remoteFrameRotation == 90 || remoteFrameRotation == 270) remoteFrameWidth else remoteFrameHeight
 
-    val normalizedRemoteFrameWidth = when {
-        remoteFrameWidth > 0 && shouldSwapRemoteFrame -> remoteFrameHeight
-        else -> remoteFrameWidth
-    }
+    val controllerDisplayWidth =
+        if (cameraPreviewWidth > 0) cameraPreviewWidth else fallbackRemoteFrameWidth
+    val controllerDisplayHeight =
+        if (cameraPreviewHeight > 0) cameraPreviewHeight else fallbackRemoteFrameHeight
 
-    val normalizedRemoteFrameHeight = when {
-        remoteFrameHeight > 0 && shouldSwapRemoteFrame -> remoteFrameWidth
-        else -> remoteFrameHeight
-    }
-
+    val cameraPreviewIsLandscape = controllerDisplayWidth > controllerDisplayHeight
+    val remoteFrameIsLandscape = remoteFrameWidth > remoteFrameHeight
     val shouldRotatePreviewContent =
         remoteFrameRotation == 0 &&
-            cameraPreviewHeight > cameraPreviewWidth &&
-            remoteFrameWidth > remoteFrameHeight
+            remoteFrameWidth > 0 &&
+            remoteFrameHeight > 0 &&
+            cameraPreviewIsLandscape != remoteFrameIsLandscape
 
     LaunchedEffect(firebaseFaceDetected, firebaseFaceDetectionTimestamp) {
         if (firebaseFaceDetected && (firebaseFaceBoxes.any { it.isValid() } || firebaseFaceBox.isValid())) {
@@ -268,8 +265,6 @@ fun WaitingForApprovalScreen(
         )
     }
 
-    val controllerDisplayWidth = normalizedRemoteFrameWidth
-    val controllerDisplayHeight = normalizedRemoteFrameHeight
     val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
     val controllerMaxZoom = maxZoom.coerceAtLeast(CONTROLLER_ZOOM_BAR_MAX)
@@ -354,6 +349,22 @@ fun WaitingForApprovalScreen(
         boomerangSelected = captureMode == "boomerang",
         exposureSupported = exposureUiState.supported
     )
+    fun resetControllerExposureToNeutral() {
+        if (!exposureUiState.supported) return
+        val defaultProgress = defaultExposureProgress(
+            minIndex = firebaseExposureMinIndex,
+            maxIndex = firebaseExposureMaxIndex
+        )
+        manualExposureProgressOverride = defaultProgress
+        manualExposureInteractionToken = System.currentTimeMillis()
+        controllerCoordinator.updateExposureFromProgress(
+            progress = defaultProgress,
+            exposureMinIndex = firebaseExposureMinIndex,
+            exposureMaxIndex = firebaseExposureMaxIndex,
+            currentExposureIndex = firebaseExposureIndex,
+            onUiPulse = { focusUiToken++ }
+        )
+    }
     val controllerExposureUiActions = ExposureUiActions(
         onToggle = {
             if (exposureUiState.supported) {
@@ -361,6 +372,7 @@ fun WaitingForApprovalScreen(
                     manualExposureProgressOverride = exposureUiState.remoteProgress
                 }
                 showManualBrightnessControl = !showManualBrightnessControl
+                manualExposureInteractionToken = System.currentTimeMillis()
                 if (!showManualBrightnessControl) {
                     manualExposureProgressOverride = null
                 }
@@ -368,6 +380,7 @@ fun WaitingForApprovalScreen(
         },
         onProgressChange = { progress ->
             manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            manualExposureInteractionToken = System.currentTimeMillis()
             controllerCoordinator.updateExposureFromProgress(
                 progress = progress,
                 exposureMinIndex = firebaseExposureMinIndex,
@@ -381,18 +394,15 @@ fun WaitingForApprovalScreen(
             manualExposureProgressOverride = null
         },
         onReset = {
-            val defaultProgress = defaultExposureProgress(
-                minIndex = firebaseExposureMinIndex,
-                maxIndex = firebaseExposureMaxIndex
-            )
-            manualExposureProgressOverride = defaultProgress
-            controllerCoordinator.updateExposureFromProgress(
-                progress = defaultProgress,
-                exposureMinIndex = firebaseExposureMinIndex,
-                exposureMaxIndex = firebaseExposureMaxIndex,
-                currentExposureIndex = firebaseExposureIndex,
-                onUiPulse = { focusUiToken++ }
-            )
+            resetControllerExposureToNeutral()
+        },
+        onDragStart = {
+            manualExposureDragging = true
+            manualExposureInteractionToken = System.currentTimeMillis()
+        },
+        onDragEnd = {
+            manualExposureDragging = false
+            manualExposureInteractionToken = System.currentTimeMillis()
         }
     )
     val controllerToolRailActions = CameraToolRailActions(
@@ -417,6 +427,7 @@ fun WaitingForApprovalScreen(
             }
         },
         onLensClick = {
+            resetControllerExposureToNeutral()
             controllerCoordinator.switchLens(firebaseLensFacing)
         },
         onGridClick = {
@@ -439,6 +450,18 @@ fun WaitingForApprovalScreen(
             controllerCoordinator.updateToolbarExpanded(expanded)
         }
     )
+    LaunchedEffect(
+        showManualBrightnessControl,
+        manualExposureDragging,
+        manualExposureInteractionToken
+    ) {
+        if (!showManualBrightnessControl || manualExposureDragging) return@LaunchedEffect
+        delay(2_500L)
+        if (showManualBrightnessControl && !manualExposureDragging) {
+            showManualBrightnessControl = false
+            manualExposureProgressOverride = null
+        }
+    }
     val controllerBottomControlsUiState = buildControllerBottomControlsUiState(
         roomCode = roomCode,
         showZoomRing = showZoomRing,
@@ -1067,22 +1090,33 @@ fun WaitingForApprovalScreen(
                                             lastFrameTimestampMs = SystemClock.elapsedRealtime()
 
                                             val fittedWidth =
-                                                if (rotation == 90 || rotation == 270) {
+                                                if (cameraPreviewWidth > 0) {
+                                                    cameraPreviewWidth
+                                                } else if (rotation == 90 || rotation == 270) {
                                                     videoHeight
                                                 } else {
                                                     videoWidth
                                                 }
                                             val fittedHeight =
-                                                if (rotation == 90 || rotation == 270) {
+                                                if (cameraPreviewHeight > 0) {
+                                                    cameraPreviewHeight
+                                                } else if (rotation == 90 || rotation == 270) {
                                                     videoWidth
                                                 } else {
                                                     videoHeight
                                                 }
+                                            val frameIsLandscape = videoWidth > videoHeight
+                                            val previewIsLandscape = fittedWidth > fittedHeight
+                                            val rotateUnrotatedFrame =
+                                                rotation == 0 &&
+                                                    videoWidth > 0 &&
+                                                    videoHeight > 0 &&
+                                                    frameIsLandscape != previewIsLandscape
 
                                             previewContainerRef?.setVideoLayout(
                                                 fittedWidth,
                                                 fittedHeight,
-                                                shouldRotatePreviewContent,
+                                                rotateUnrotatedFrame,
                                                 fillSelectedAspectFrame
                                             )
                                         }
@@ -1425,6 +1459,8 @@ fun WaitingForApprovalScreen(
                         onExposureProgressChange = controllerExposureUiActions.onProgressChange,
                         onExposureDismiss = controllerExposureUiActions.onDismiss,
                         onExposureReset = controllerExposureUiActions.onReset,
+                        onExposureDragStart = controllerExposureUiActions.onDragStart,
+                        onExposureDragEnd = controllerExposureUiActions.onDragEnd,
                         onPortraitControlsClick = {
                             if (firebaseCameraMode == "portrait") {
                                 showPortraitControls = !showPortraitControls
