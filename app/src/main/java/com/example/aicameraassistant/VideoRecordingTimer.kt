@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +64,18 @@ fun VideoRecordingTimerPill(
     isPaused: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val dotAlpha by rememberInfiniteTransition(label = "recording_dot_blink")
+        .animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 650),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "recording_dot_alpha"
+        )
+    val dotColor = if (isPaused) Color(0xFFFFD54F) else Color(0xFFFF3B30).copy(alpha = dotAlpha)
+
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(99.dp))
@@ -71,7 +88,7 @@ fun VideoRecordingTimerPill(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (isPaused) Color(0xFFFFD54F) else Color(0xFFFF3B30))
+                .background(dotColor)
         )
         Text(
             text = if (isPaused) "PAUSED ${formatRecordingDuration(elapsedMillis)}" else formatRecordingDuration(elapsedMillis),

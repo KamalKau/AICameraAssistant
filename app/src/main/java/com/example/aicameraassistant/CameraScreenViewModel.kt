@@ -89,6 +89,7 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getNightModeEnabled(roomCode),
                 repository.getVideoHdrSupported(roomCode),
                 repository.getVideoHdrEnabled(roomCode),
+                repository.getVideoRecordingState(roomCode),
                 repository.getToolbarExpanded(roomCode),
                 repository.getCaptureRequestState(roomCode),
                 repository.getRequestReceived(roomCode),
@@ -102,7 +103,7 @@ class CameraScreenViewModel : ViewModel() {
             ) { values: Array<Any?> ->
                 val portraitSubject = values[10] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[11] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
-                val focusRequest = values[22] as? FocusRequestState ?: FocusRequestState()
+                val focusRequest = values[23] as? FocusRequestState ?: FocusRequestState()
                 CameraRemoteUiState(
                     roomStatus = values[0] as? String ?: "waiting",
                     connectionState = values[1] as? AppConnectionState ?: AppConnectionState.IDLE,
@@ -129,19 +130,20 @@ class CameraScreenViewModel : ViewModel() {
                     nightModeEnabled = values[15] as? Boolean ?: false,
                     videoHdrSupported = values[16] as? Boolean ?: false,
                     videoHdrEnabled = values[17] as? Boolean ?: false,
-                    toolbarExpanded = values[18] as? Boolean ?: false,
-                    captureRequestId = (values[19] as? CaptureRequestState)?.requestId ?: 0L,
-                    captureRequestType = (values[19] as? CaptureRequestState)?.requestType ?: "photo",
-                    requestReceived = values[20] as? Boolean ?: false,
-                    controllerApproved = values[21] as? Boolean ?: false,
+                    videoRecordingState = values[18] as? VideoRecordingState ?: VideoRecordingState.Idle,
+                    toolbarExpanded = values[19] as? Boolean ?: false,
+                    captureRequestId = (values[20] as? CaptureRequestState)?.requestId ?: 0L,
+                    captureRequestType = (values[20] as? CaptureRequestState)?.requestType ?: "photo",
+                    requestReceived = values[21] as? Boolean ?: false,
+                    controllerApproved = values[22] as? Boolean ?: false,
                     focusRequestId = focusRequest.requestId,
                     focusPointX = focusRequest.x,
                     focusPointY = focusRequest.y,
-                    focusLockEnabled = values[23] as? Boolean ?: false,
-                    exposureIndex = values[24] as? Int ?: 0,
-                    offerSdp = values[25] as String?,
-                    rtcSessionId = values[26] as String?,
-                    sessionVersion = values[27] as? Long ?: 0L
+                    focusLockEnabled = values[24] as? Boolean ?: false,
+                    exposureIndex = values[25] as? Int ?: 0,
+                    offerSdp = values[26] as String?,
+                    rtcSessionId = values[27] as String?,
+                    sessionVersion = values[28] as? Long ?: 0L
                 )
             }.collect { state ->
                 _remoteUiState.value = state

@@ -36,6 +36,7 @@ data class CameraRemoteUiState(
     val focusPointY: Double? = null,
     val focusLockEnabled: Boolean = false,
     val exposureIndex: Int = 0,
+    val videoRecordingState: VideoRecordingState = VideoRecordingState.Idle,
     val offerSdp: String? = null,
     val rtcSessionId: String? = null,
     val sessionVersion: Long = 0L
@@ -102,6 +103,7 @@ data class ControllerRemoteUiState(
     val exposureMinIndex: Int = 0,
     val exposureMaxIndex: Int = 0,
     val exposureIndex: Int = 0,
+    val videoRecordingState: VideoRecordingState = VideoRecordingState.Idle,
     val answerSdp: String? = null,
     val rtcSessionId: String? = null,
     val sessionVersion: Long = 0L,

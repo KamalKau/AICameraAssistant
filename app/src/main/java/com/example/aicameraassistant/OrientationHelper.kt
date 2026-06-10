@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
 import android.util.Size
+import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
 import androidx.camera.core.CameraSelector
@@ -45,6 +46,18 @@ fun shouldMirrorPreview(lensFacing: Int): Boolean =
 
 fun shouldMirrorPreview(lensFacing: String): Boolean =
     lensFacing.equals("front", ignoreCase = true)
+
+fun orientationDegreesToSurfaceRotation(orientationDegrees: Int): Int? {
+    if (orientationDegrees == OrientationEventListener.ORIENTATION_UNKNOWN) return null
+
+    val normalized = ((orientationDegrees % 360) + 360) % 360
+    return when (normalized) {
+        in 45..134 -> Surface.ROTATION_270
+        in 135..224 -> Surface.ROTATION_180
+        in 225..314 -> Surface.ROTATION_90
+        else -> Surface.ROTATION_0
+    }
+}
 
 private fun Int.isSurfaceRotation(): Boolean =
     this == Surface.ROTATION_0 ||

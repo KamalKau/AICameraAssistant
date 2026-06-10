@@ -159,6 +159,7 @@ fun WaitingForApprovalScreen(
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
+    val firebaseVideoRecordingState = remoteUiState.videoRecordingState
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseExposureMinIndex = remoteUiState.exposureMinIndex
     val firebaseExposureMaxIndex = remoteUiState.exposureMaxIndex
@@ -557,20 +558,6 @@ fun WaitingForApprovalScreen(
                 }
             }
         }
-        if (requestType == "video") {
-            videoRecordingInProgress = !videoRecordingInProgress
-            videoRecordingPaused = false
-        } else if (requestType == "video_start") {
-            videoRecordingInProgress = true
-            videoRecordingPaused = false
-        } else if (requestType == "video_stop") {
-            videoRecordingInProgress = false
-            videoRecordingPaused = false
-        } else if (requestType == "video_pause") {
-            videoRecordingPaused = true
-        } else if (requestType == "video_resume") {
-            videoRecordingPaused = false
-        }
     }
 
     fun startBurstCapture() {
@@ -648,11 +635,16 @@ fun WaitingForApprovalScreen(
         }
     }
 
+    LaunchedEffect(firebaseVideoRecordingState, firebaseCameraMode) {
+        videoRecordingInProgress =
+            firebaseCameraMode == "video" &&
+                firebaseVideoRecordingState != VideoRecordingState.Idle
+        videoRecordingPaused =
+            firebaseCameraMode == "video" &&
+                firebaseVideoRecordingState == VideoRecordingState.Paused
+    }
+
     LaunchedEffect(firebaseCameraMode) {
-        if (firebaseCameraMode != "video") {
-            videoRecordingInProgress = false
-            videoRecordingPaused = false
-        }
         if (firebaseCameraMode != "portrait") {
             showPortraitControls = false
         }

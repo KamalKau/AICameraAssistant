@@ -7,7 +7,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -338,6 +342,18 @@ private fun StraightZoomBar(
 
 @Composable
 private fun RecordingStatusPill(isPaused: Boolean) {
+    val dotAlpha by rememberInfiniteTransition(label = "controller_recording_dot_blink")
+        .animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 650),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "controller_recording_dot_alpha"
+        )
+    val dotColor = if (isPaused) Color(0xFFFFD54F) else Color(0xFFFF2D2D).copy(alpha = dotAlpha)
+
     Row(
         modifier = Modifier
             .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp))
@@ -350,7 +366,7 @@ private fun RecordingStatusPill(isPaused: Boolean) {
             modifier = Modifier
                 .size(9.dp)
                 .clip(CircleShape)
-                .background(Color(0xFFFF2D2D))
+                .background(dotColor)
         )
         Text(
             text = if (isPaused) "PAUSED" else "REC",

@@ -3,7 +3,9 @@ package com.example.aicameraassistant
 import android.content.ContentValues
 import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
+import android.media.ExifInterface
 import android.media.MediaActionSound
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -170,6 +172,7 @@ fun CameraScreen(
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
+    val firebaseVideoRecordingState = remoteUiState.videoRecordingState
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseCaptureRequestId = remoteUiState.captureRequestId
     val firebaseCaptureRequestType = remoteUiState.captureRequestType
@@ -212,11 +215,14 @@ fun CameraScreen(
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
     }
+    var physicalTargetRotation by remember { mutableStateOf<Int?>(null) }
     var displayRotation by remember { mutableIntStateOf(getTargetRotation(context, previewView)) }
     DisposableEffect(context, previewView) {
         val listener = object : OrientationEventListener(context.applicationContext) {
             override fun onOrientationChanged(orientation: Int) {
-                displayRotation = getTargetRotation(context, previewView)
+                val sensorRotation = orientationDegreesToSurfaceRotation(orientation)
+                physicalTargetRotation = sensorRotation
+                displayRotation = sensorRotation ?: getTargetRotation(context, previewView)
             }
         }
         if (listener.canDetectOrientation()) {
@@ -227,7 +233,7 @@ fun CameraScreen(
         }
     }
     LaunchedEffect(configuration.orientation) {
-        displayRotation = getTargetRotation(context, previewView)
+        displayRotation = physicalTargetRotation ?: getTargetRotation(context, previewView)
     }
     LaunchedEffect(firebaseAspectRatioMode) {
         previewView.scaleType = if (AspectRatioMode.fromKey(firebaseAspectRatioMode) == AspectRatioMode.Full) {
@@ -1064,6 +1070,46 @@ fun CameraScreen(
         }
     }
 
+    fun surfaceRotationLabel(rotation: Int): String =
+        when (rotation) {
+            android.view.Surface.ROTATION_0 -> "ROTATION_0"
+            android.view.Surface.ROTATION_90 -> "ROTATION_90"
+            android.view.Surface.ROTATION_180 -> "ROTATION_180"
+            android.view.Surface.ROTATION_270 -> "ROTATION_270"
+            else -> "ROTATION_$rotation"
+        }
+
+    fun verifySavedPhotoOrientation(uri: Uri?, expectedRotation: Int) {
+        if (uri == null) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val exif = ExifInterface(input)
+                    val orientation = exif.getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_UNDEFINED
+                    )
+                    Log.d(
+                        "AICameraAssistant",
+                        "Saved photo EXIF orientation=$orientation targetRotation=${surfaceRotationLabel(expectedRotation)} uri=$uri"
+                    )
+                }
+            }.onFailure {
+                Log.w("AICameraAssistant", "Unable to verify saved photo EXIF orientation", it)
+            }
+        }
+    }
+
+    fun applyCaptureTargetRotation(
+        imageCaptureOverride: ImageCapture? = imageCapture,
+        videoCaptureOverride: VideoCapture<Recorder>? = videoCapture
+    ): Int {
+        val targetRotation = displayRotation
+        imageCaptureOverride?.targetRotation = targetRotation
+        videoCaptureOverride?.targetRotation = targetRotation
+        return targetRotation
+    }
+
     fun takePhotoWithCameraX(
         useFrontScreenFlash: Boolean,
         onCaptureFinished: () -> Unit = {},
@@ -1089,8 +1135,7 @@ fun CameraScreen(
         } else {
             null
         }
-        val captureRotation = getTargetRotation(context, previewView)
-        currentCapture.targetRotation = captureRotation
+        val captureRotation = applyCaptureTargetRotation()
         currentCapture.flashMode = forcedCaptureFlashMode ?: resolvedCaptureFlashMode
 
         val name = "IMG_${System.currentTimeMillis()}.jpg"
@@ -1118,6 +1163,7 @@ fun CameraScreen(
 
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
+                    verifySavedPhotoOrientation(output.savedUri, captureRotation)
                     onCaptureFinished()
                 }
 
@@ -1141,8 +1187,7 @@ fun CameraScreen(
         } else {
             null
         }
-        val captureRotation = getTargetRotation(context, previewView)
-        capture.targetRotation = captureRotation
+        applyCaptureTargetRotation(capture)
         capture.flashMode = forcedCaptureFlashMode ?: when {
             useFrontScreenFlash -> ImageCapture.FLASH_MODE_SCREEN
             isFrontCamera -> ImageCapture.FLASH_MODE_OFF
@@ -1263,7 +1308,11 @@ fun CameraScreen(
             } ?: return@withContext false
         }.onFailure {
             Log.e("AICameraAssistant", "Night Assist save failed", it)
-        }.isSuccess
+        }.isSuccess.also { saved ->
+            if (saved) {
+                verifySavedPhotoOrientation(uri, displayRotation)
+            }
+        }
     }
 
     suspend fun captureNightAssistPhoto(): Boolean {
@@ -1336,10 +1385,13 @@ fun CameraScreen(
 
     fun updateVideoRecordingState(state: VideoRecordingState) {
         videoRecordingState = state
+        launchRoomWrite("video recording state publish") {
+            repository.updateVideoRecordingState(roomCode, state)
+        }
     }
 
     fun updateVideoCaptureTargetRotation() {
-        val targetRotation = getTargetRotation(context, previewView)
+        val targetRotation = applyCaptureTargetRotation()
         videoCapture?.targetRotation = targetRotation
     }
 
@@ -2215,7 +2267,7 @@ fun CameraScreen(
             factory = { previewView },
             update = {
                 val nextRotation = getTargetRotation(context, previewView)
-                if (displayRotation != nextRotation) {
+                if (physicalTargetRotation == null && displayRotation != nextRotation) {
                     displayRotation = nextRotation
                 }
             },

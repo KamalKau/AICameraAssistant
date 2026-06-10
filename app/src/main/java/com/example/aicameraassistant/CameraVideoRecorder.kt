@@ -69,12 +69,13 @@ class CameraVideoRecorder(private val context: Context) {
 
         if (mergeInProgress) {
             Log.w("AICameraAssistant", "Video save is still in progress")
-            Toast.makeText(context, "Saving video...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Saving previous video...", Toast.LENGTH_SHORT).show()
             return false
         }
 
         val capture = videoCapture ?: run {
             Log.e("AICameraAssistant", "VideoCapture is not initialized yet")
+            Toast.makeText(context, "Video is not ready yet", Toast.LENGTH_SHORT).show()
             return false
         }
 
@@ -133,7 +134,7 @@ class CameraVideoRecorder(private val context: Context) {
                             activeRecording = null
                             recordingState = VideoRecordingState.Idle
                             onRecordingStateChanged(recordingState)
-                            Toast.makeText(context, "Video recording failed", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Couldn't record video. Please try again.", Toast.LENGTH_SHORT).show()
                         }
                     } else {
                         Log.d("AICameraAssistant", "Video segment saved: ${event.outputResults.outputUri}")
@@ -257,7 +258,7 @@ class CameraVideoRecorder(private val context: Context) {
             onRecordingStateChanged(recordingState)
             Toast.makeText(
                 context,
-                if (saved) "Video saved" else "Video recording failed",
+                if (saved) "Video saved" else "Couldn't save video. Please try again.",
                 Toast.LENGTH_SHORT
             ).takeUnless { saved }?.show()
             if (saved) {
@@ -449,6 +450,7 @@ class CameraVideoRecorder(private val context: Context) {
 
     private fun saveFileToGallery(file: File): Boolean {
         val name = "VID_${System.currentTimeMillis()}.mp4"
+        val rotationDegrees = readOutputRotationDegrees(listOf(file))
         val contentValues = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -464,6 +466,10 @@ class CameraVideoRecorder(private val context: Context) {
         outputStream.use { output ->
             file.inputStream().use { input -> input.copyTo(output) }
         }
+        Log.d(
+            "AICameraAssistant",
+            "Saved video rotation=${rotationDegrees ?: "unknown"} uri=$uri"
+        )
         return true
     }
 

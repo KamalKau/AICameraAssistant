@@ -120,6 +120,7 @@ class ControllerScreenViewModel : ViewModel() {
                 repository.getNightModeEnabled(roomCode),
                 repository.getVideoHdrSupported(roomCode),
                 repository.getVideoHdrEnabled(roomCode),
+                repository.getVideoRecordingState(roomCode),
                 repository.getToolbarExpanded(roomCode),
                 repository.getExposureMinIndex(roomCode),
                 repository.getExposureMaxIndex(roomCode),
@@ -163,17 +164,18 @@ class ControllerScreenViewModel : ViewModel() {
                     nightModeEnabled = values[18] as? Boolean ?: false,
                     videoHdrSupported = values[19] as? Boolean ?: false,
                     videoHdrEnabled = values[20] as? Boolean ?: false,
-                    toolbarExpanded = values[21] as? Boolean ?: false,
-                    exposureMinIndex = values[22] as? Int ?: 0,
-                    exposureMaxIndex = values[23] as? Int ?: 0,
-                    exposureIndex = values[24] as? Int ?: 0,
-                    answerSdp = values[25] as String?,
-                    rtcSessionId = values[26] as String?,
-                    sessionVersion = values[27] as? Long ?: 0L,
-                    previewWidth = values[28] as? Int ?: 0,
-                    previewHeight = values[29] as? Int ?: 0,
-                    focusRequestId = values[30] as? Long ?: 0L,
-                    focusLockEnabled = values[31] as? Boolean ?: false
+                    videoRecordingState = values[21] as? VideoRecordingState ?: VideoRecordingState.Idle,
+                    toolbarExpanded = values[22] as? Boolean ?: false,
+                    exposureMinIndex = values[23] as? Int ?: 0,
+                    exposureMaxIndex = values[24] as? Int ?: 0,
+                    exposureIndex = values[25] as? Int ?: 0,
+                    answerSdp = values[26] as String?,
+                    rtcSessionId = values[27] as String?,
+                    sessionVersion = values[28] as? Long ?: 0L,
+                    previewWidth = values[29] as? Int ?: 0,
+                    previewHeight = values[30] as? Int ?: 0,
+                    focusRequestId = values[31] as? Long ?: 0L,
+                    focusLockEnabled = values[32] as? Boolean ?: false
                 )
             }.collect { state ->
                 _remoteUiState.value = state

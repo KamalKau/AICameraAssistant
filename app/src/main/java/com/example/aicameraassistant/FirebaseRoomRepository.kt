@@ -228,6 +228,16 @@ class FirebaseRoomRepository {
         updateRoomSafely(roomCode, "videoHdrEnabled", videoHdrEnabled)
     }
 
+    suspend fun updateVideoRecordingState(roomCode: String, state: VideoRecordingState) {
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "videoRecordingState" to state.toFirebaseValue(),
+                "videoRecordingUpdatedAt" to System.currentTimeMillis()
+            )
+        )
+    }
+
     suspend fun updateToolbarExpanded(roomCode: String, toolbarExpanded: Boolean) {
         updateRoomSafely(roomCode, "toolbarExpanded", toolbarExpanded)
     }
@@ -403,6 +413,8 @@ class FirebaseRoomRepository {
             "nightModeEnabled" to false,
             "videoHdrSupported" to false,
             "videoHdrEnabled" to false,
+            "videoRecordingState" to "idle",
+            "videoRecordingUpdatedAt" to 0L,
             "toolbarExpanded" to false,
             "focusRequestId" to 0L,
             "focusX" to null,
@@ -695,6 +707,16 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getVideoRecordingState(roomCode: String): Flow<VideoRecordingState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(
+                    snapshot?.getString("videoRecordingState").toVideoRecordingState()
+                )
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getToolbarExpanded(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
@@ -968,3 +990,17 @@ internal object FirestoreRoomUpdateFailureClassifier {
             message.contains("NOT_FOUND", ignoreCase = true)
     }
 }
+
+private fun VideoRecordingState.toFirebaseValue(): String =
+    when (this) {
+        VideoRecordingState.Idle -> "idle"
+        VideoRecordingState.Recording -> "recording"
+        VideoRecordingState.Paused -> "paused"
+    }
+
+private fun String?.toVideoRecordingState(): VideoRecordingState =
+    when (this?.lowercase()) {
+        "recording" -> VideoRecordingState.Recording
+        "paused" -> VideoRecordingState.Paused
+        else -> VideoRecordingState.Idle
+    }
