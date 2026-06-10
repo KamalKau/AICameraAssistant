@@ -277,7 +277,7 @@ fun CameraScreen(
     var lastPortraitFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
     var photoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var photoFaceBoxVisible by remember { mutableStateOf(false) }
-    var photoFaceBoxToken by remember { mutableLongStateOf(0L) }
+    var lastPhotoFaceBoxMotionMs by remember { mutableLongStateOf(0L) }
     var pendingPhotoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var consecutivePhotoFaceHits by remember { mutableIntStateOf(0) }
     var consecutivePhotoFaceMisses by remember { mutableIntStateOf(0) }
@@ -292,11 +292,11 @@ fun CameraScreen(
     val faceDetector = remember {
         FaceDetection.getClient(
             FaceDetectorOptions.Builder()
-                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
                 .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
                 .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
                 .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
-                .setMinFaceSize(0.08f)
+                .setMinFaceSize(0.055f)
                 .enableTracking()
                 .build()
             )
@@ -304,6 +304,7 @@ fun CameraScreen(
     val sceneAnalyzer = remember { SceneDetectionAnalyzer() }
     val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val faceBoundsMapper = remember { FaceBoundsMapper() }
+    val stableFaceTracker = remember { StableFaceTracker() }
     val faceOverlayPublisher = remember(roomCode, repository, scope) {
         FaceOverlayPublisher(repository = repository, roomCode = roomCode, scope = scope)
     }
@@ -778,6 +779,8 @@ fun CameraScreen(
 
     fun applyPhotoFaceMetering(bounds: PortraitFaceBounds) {
         if (focusLocked) return
+        if (focusPoint != null) return
+        if (exposureUiState.visible || manualExposureDragging) return
         if (isPortraitMode || !bounds.isValid()) return
         val currentCamera = camera ?: return
         val width = previewView.width.toFloat()
@@ -814,8 +817,10 @@ fun CameraScreen(
     }
 
     fun clearPhotoFaceDetection() {
+        stableFaceTracker.reset()
         photoFaceBounds = emptyList()
         photoFaceBoxVisible = false
+        lastPhotoFaceBoxMotionMs = 0L
         pendingPhotoFaceBounds = emptyList()
         consecutivePhotoFaceHits = 0
         consecutivePhotoFaceMisses = 0
@@ -860,10 +865,12 @@ fun CameraScreen(
                 photoFaceBounds.isEmpty() || plausibleBounds.haveMovedSignificantlyFrom(photoFaceBounds)
             photoFaceBounds = plausibleBounds
             if (shouldShowBox) {
-                photoFaceBoxVisible = true
                 val pulseTimestamp = System.currentTimeMillis()
-                photoFaceBoxToken = pulseTimestamp
-                faceOverlayPublisher.publish(detected = true, bounds = plausibleBounds, force = true)
+                photoFaceBoxVisible = true
+                lastPhotoFaceBoxMotionMs = pulseTimestamp
+            }
+            if (shouldShowBox || photoFaceBoxVisible) {
+                faceOverlayPublisher.publish(detected = true, bounds = plausibleBounds, force = shouldShowBox)
             }
             plausibleBounds.firstOrNull()?.let { applyPhotoFaceMetering(it) }
         }
@@ -874,7 +881,8 @@ fun CameraScreen(
         return previewBitmapFaceDetector.detect(bitmap)
     }
 
-    fun handlePreviewFaces(bounds: List<PortraitFaceBounds>) {
+    fun handleTrackedPreviewFaces(result: StableFaceTrackingResult) {
+        val bounds = result.bounds
         if (bounds.isEmpty()) {
             if (isPortraitMode) {
                 publishPortraitSubjectState(
@@ -891,7 +899,9 @@ fun CameraScreen(
             return
         }
 
-        lastPhotoFaceSeenMs = System.currentTimeMillis()
+        if (result.hasLiveDetection) {
+            lastPhotoFaceSeenMs = System.currentTimeMillis()
+        }
         publishSceneDetection(
             result = sceneDetectionResult("face", 0.92),
             force = lastSceneKey != "face",
@@ -915,7 +925,8 @@ fun CameraScreen(
     }
 
     fun handleAnalyzedFaces(bounds: List<NormalizedFaceBounds>) {
-        handlePreviewFaces(faceBoundsMapper.mapAnalysisBoundsToPreview(bounds, isFrontCamera))
+        val mappedBounds = faceBoundsMapper.mapAnalysisBoundsToPreview(bounds, isFrontCamera)
+        handleTrackedPreviewFaces(stableFaceTracker.update(mappedBounds))
     }
 
     val currentFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
@@ -936,21 +947,26 @@ fun CameraScreen(
         }
     )
     val currentPreviewFaceResultHandler by rememberUpdatedState<(List<NormalizedFaceBounds>) -> Unit>(
-        newValue = { bounds -> handlePreviewFaces(faceBoundsMapper.mapPreviewBounds(bounds)) }
+        newValue = { bounds ->
+            val mappedBounds = faceBoundsMapper.mapPreviewBounds(bounds)
+            handleTrackedPreviewFaces(stableFaceTracker.update(mappedBounds))
+        }
     )
 
-    LaunchedEffect(photoFaceBoxToken) {
-        if (photoFaceBoxToken == 0L) return@LaunchedEffect
-        delay(1500L)
-        photoFaceBoxVisible = false
-        publishFaceDetectionOverlay(detected = false, force = true)
+    LaunchedEffect(lastPhotoFaceBoxMotionMs, photoFaceBoxVisible, focusLocked) {
+        if (!photoFaceBoxVisible || lastPhotoFaceBoxMotionMs == 0L || focusLocked) return@LaunchedEffect
+        delay(950L)
+        if (System.currentTimeMillis() - lastPhotoFaceBoxMotionMs >= 900L) {
+            photoFaceBoxVisible = false
+            publishFaceDetectionOverlay(detected = false)
+        }
     }
 
     LaunchedEffect(isStreaming, cameraAnalysisActive, isPortraitMode, lensFacing) {
         while (isStreaming && isActive) {
             val detectedBounds = detectPreviewBitmapFace()
             currentPreviewFaceResultHandler(detectedBounds)
-            delay(300L)
+            delay(if (firebaseCameraMode == "video") 260L else 320L)
         }
     }
 
@@ -1793,7 +1809,7 @@ fun CameraScreen(
                         faceAnalysisExecutor,
                         MlKitFaceDetectionAnalyzer(
                             detector = faceDetector,
-                            minProcessIntervalMs = 300L,
+                            minProcessIntervalMs = if (firebaseCameraMode == "video") 260L else 220L,
                             sceneAnalyzer = if (firebaseSceneDetectionEnabled) sceneAnalyzer else null,
                             onSceneResult = { result ->
                                 mainExecutor.execute {
@@ -2596,6 +2612,7 @@ fun CameraScreen(
             FaceDetectionFocusBoxes(
                 bounds = photoFaceBounds.map { it.toNormalizedFaceBounds() },
                 visible = photoFaceBoxVisible,
+                locked = focusLocked,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {

@@ -255,7 +255,7 @@ private fun BoxWithNormalizedBounds(
                 .width(boxWidth)
                 .height(boxHeight)
                 .clip(RoundedCornerShape(34.dp))
-                .border(2.dp, borderColor, RoundedCornerShape(34.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(34.dp))
                 .background(Color.White.copy(alpha = 0.035f))
         )
     }

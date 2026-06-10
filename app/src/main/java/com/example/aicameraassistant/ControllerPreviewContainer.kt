@@ -54,15 +54,20 @@ class ControllerPreviewContainer @JvmOverloads constructor(
         faceOverlay.bringToFront()
     }
 
-    fun setFaceDetectionOverlay(bounds: NormalizedFaceBounds, visible: Boolean) {
+    fun setFaceDetectionOverlay(bounds: NormalizedFaceBounds, visible: Boolean, locked: Boolean = false) {
         setFaceDetectionOverlay(
             bounds = if (bounds.isValid()) listOf(bounds) else emptyList(),
-            visible = visible
+            visible = visible,
+            locked = locked
         )
     }
 
-    fun setFaceDetectionOverlay(bounds: List<NormalizedFaceBounds>, visible: Boolean) {
-        faceOverlay.setFaceDetectionOverlay(bounds, visible)
+    fun setFaceDetectionOverlay(
+        bounds: List<NormalizedFaceBounds>,
+        visible: Boolean,
+        locked: Boolean = false
+    ) {
+        faceOverlay.setFaceDetectionOverlay(bounds, visible, locked)
     }
 
     fun setVideoLayout(width: Int, height: Int, rotateClockwise: Boolean, fillFrame: Boolean = false) {
@@ -246,6 +251,7 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
     private val videoRect = RectF()
     private var bounds = emptyList<NormalizedFaceBounds>()
     private var overlayAlpha = 0f
+    private var locked = false
     private var alphaAnimator: ValueAnimator? = null
 
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -254,7 +260,7 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
     }
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 2f * resources.displayMetrics.density
+        strokeWidth = 1f * resources.displayMetrics.density
         color = Color.argb(148, 255, 255, 255)
     }
 
@@ -263,9 +269,11 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
         invalidate()
     }
 
-    fun setFaceDetectionOverlay(nextBounds: List<NormalizedFaceBounds>, visible: Boolean) {
+    fun setFaceDetectionOverlay(nextBounds: List<NormalizedFaceBounds>, visible: Boolean, locked: Boolean) {
         bounds = nextBounds
+        this.locked = locked
         animateAlpha(if (visible && nextBounds.any { it.isValid() }) 1f else 0f)
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -278,7 +286,12 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
         val minBoxHeight = 128f * density
 
         fillPaint.alpha = (9 * overlayAlpha).toInt().coerceIn(0, 255)
-        framePaint.alpha = (148 * overlayAlpha).toInt().coerceIn(0, 255)
+        framePaint.color = if (locked) {
+            Color.argb(184, 255, 213, 79)
+        } else {
+            Color.argb(184, 255, 255, 255)
+        }
+        framePaint.alpha = (184 * overlayAlpha).toInt().coerceIn(0, 255)
 
         bounds.filter { it.isValid() }.forEach { box ->
             val boxWidth = ((box.right - box.left).toFloat() * videoRect.width())

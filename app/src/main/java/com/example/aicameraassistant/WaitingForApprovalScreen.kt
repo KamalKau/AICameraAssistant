@@ -258,11 +258,14 @@ fun WaitingForApprovalScreen(
         previewContainerRef,
         firebaseCameraMode,
         remoteFaceBoxBounds,
-        remoteFaceBoxVisible
+        remoteFaceBoxVisible,
+        focusLocked,
+        firebaseFocusLockEnabled
     ) {
         previewContainerRef?.setFaceDetectionOverlay(
             bounds = remoteFaceBoxBounds,
-            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible,
+            locked = focusLocked || firebaseFocusLockEnabled
         )
     }
 
@@ -1131,7 +1134,8 @@ fun WaitingForApprovalScreen(
                             }
                             container.setFaceDetectionOverlay(
                                 bounds = remoteFaceBoxBounds,
-                                visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+                                visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible,
+                                locked = focusLocked || firebaseFocusLockEnabled
                             )
                             remoteTrack?.let { track ->
                                 container.attachRemoteTrack(track) {
@@ -1169,7 +1173,8 @@ fun WaitingForApprovalScreen(
                         }
                         container.setFaceDetectionOverlay(
                             bounds = remoteFaceBoxBounds,
-                            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible
+                            visible = firebaseCameraMode != "portrait" && remoteFaceBoxVisible,
+                            locked = focusLocked || firebaseFocusLockEnabled
                         )
                         container.onVideoRectChanged = { rect ->
                             val frameLeft = previewFrameRect?.left ?: 0f

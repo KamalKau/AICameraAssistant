@@ -74,4 +74,44 @@ class FaceDetectionSupportTest {
         assertFalse(similar.haveMovedSignificantlyFrom(previous))
         assertTrue(resized.haveMovedSignificantlyFrom(previous))
     }
+
+    @Test
+    fun stableFaceTracker_smoothsSmallMovementAndKeepsLargestFaceFirst() {
+        val tracker = StableFaceTracker()
+        val first = tracker.update(
+            detections = listOf(
+                PortraitFaceBounds(left = 0.10, top = 0.10, right = 0.25, bottom = 0.32),
+                PortraitFaceBounds(left = 0.45, top = 0.18, right = 0.78, bottom = 0.68)
+            ),
+            nowMs = 1_000L
+        )
+        val second = tracker.update(
+            detections = listOf(
+                PortraitFaceBounds(left = 0.47, top = 0.19, right = 0.80, bottom = 0.69),
+                PortraitFaceBounds(left = 0.11, top = 0.11, right = 0.26, bottom = 0.33)
+            ),
+            nowMs = 1_100L
+        )
+
+        assertTrue(first.hasLiveDetection)
+        assertEquals(2, second.bounds.size)
+        assertTrue(second.bounds.first().area > second.bounds.last().area)
+        assertTrue(second.bounds.first().left in 0.45..0.48)
+    }
+
+    @Test
+    fun stableFaceTracker_holdsBriefMissesThenExpires() {
+        val tracker = StableFaceTracker(holdDurationMs = 650L)
+        tracker.update(
+            detections = listOf(PortraitFaceBounds(left = 0.20, top = 0.20, right = 0.44, bottom = 0.52)),
+            nowMs = 1_000L
+        )
+
+        val held = tracker.update(emptyList(), nowMs = 1_400L)
+        val expired = tracker.update(emptyList(), nowMs = 1_800L)
+
+        assertFalse(held.hasLiveDetection)
+        assertEquals(1, held.bounds.size)
+        assertTrue(expired.bounds.isEmpty())
+    }
 }

@@ -94,11 +94,13 @@ fun NightModeAssistLight(
 fun FaceDetectionFocusBox(
     bounds: NormalizedFaceBounds,
     visible: Boolean,
+    locked: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     FaceDetectionFocusBoxes(
         bounds = if (bounds.isValid()) listOf(bounds) else emptyList(),
         visible = visible,
+        locked = locked,
         modifier = modifier
     )
 }
@@ -107,10 +109,12 @@ fun FaceDetectionFocusBox(
 fun FaceDetectionFocusBoxes(
     bounds: List<NormalizedFaceBounds>,
     visible: Boolean,
+    locked: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (visible && bounds.any { it.isValid() }) 1f else 0f,
+        animationSpec = tween(durationMillis = if (visible) 140 else 220),
         label = "face_detection_box_alpha"
     )
     if (alpha <= 0.01f) return
@@ -119,6 +123,7 @@ fun FaceDetectionFocusBoxes(
         val cornerRadius = CornerRadius(34.dp.toPx(), 34.dp.toPx())
         val minBoxWidth = 96.dp.toPx()
         val minBoxHeight = 128.dp.toPx()
+        val frameColor = if (locked) Color(0xFFFFD54F) else Color.White
         bounds.filter { it.isValid() }.forEach { box ->
             val desiredLeft = box.left.toFloat() * size.width
             val desiredTop = box.top.toFloat() * size.height
@@ -139,11 +144,11 @@ fun FaceDetectionFocusBoxes(
                 cornerRadius = cornerRadius
             )
             drawRoundRect(
-                color = Color.White.copy(alpha = 0.58f * alpha),
+                color = frameColor.copy(alpha = 0.72f * alpha),
                 topLeft = Offset(left, top),
                 size = rectSize,
                 cornerRadius = cornerRadius,
-                style = Stroke(width = 2.dp.toPx())
+                style = Stroke(width = 1.dp.toPx())
             )
         }
     }
