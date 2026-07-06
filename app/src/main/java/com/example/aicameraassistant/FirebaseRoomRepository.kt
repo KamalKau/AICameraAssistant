@@ -82,6 +82,10 @@ class FirebaseRoomRepository {
         updateStringIfChanged(roomCode, "cameraMode", cameraMode)
     }
 
+    suspend fun updateBoomerangEnabled(roomCode: String, enabled: Boolean) {
+        updateRoomSafely(roomCode, "boomerangEnabled", enabled)
+    }
+
     suspend fun updateAspectRatioMode(roomCode: String, aspectRatioMode: String) {
         val safeMode = AspectRatioMode.fromKey(aspectRatioMode).key
         updateStringIfChanged(roomCode, "aspectRatioMode", safeMode)
@@ -226,6 +230,18 @@ class FirebaseRoomRepository {
 
     suspend fun updateVideoHdrEnabled(roomCode: String, videoHdrEnabled: Boolean) {
         updateRoomSafely(roomCode, "videoHdrEnabled", videoHdrEnabled)
+    }
+
+    suspend fun updateVideoQuality(roomCode: String, videoQuality: String) {
+        updateStringIfChanged(roomCode, "videoQuality", VideoQualityOption.sanitizeFirebaseValue(videoQuality))
+    }
+
+    suspend fun updateVideoQualitySupportedValues(roomCode: String, supportedValues: List<String>) {
+        updateRoomSafely(
+            roomCode,
+            "videoQualitySupportedValues",
+            supportedValues.map { VideoQualityOption.sanitizeFirebaseValue(it) }.distinct()
+        )
     }
 
     suspend fun updateVideoRecordingState(roomCode: String, state: VideoRecordingState) {
@@ -408,11 +424,14 @@ class FirebaseRoomRepository {
             "minZoom" to 1.0,
             "maxZoom" to 1.0,
             "flashMode" to "off",
+            "boomerangEnabled" to false,
             "flashSupported" to false,
             "gridEnabled" to false,
             "nightModeEnabled" to false,
             "videoHdrSupported" to false,
             "videoHdrEnabled" to false,
+            "videoQuality" to VideoQualityOption.default.firebaseValue,
+            "videoQualitySupportedValues" to emptyList<String>(),
             "videoRecordingState" to "idle",
             "videoRecordingUpdatedAt" to 0L,
             "toolbarExpanded" to false,
@@ -536,6 +555,14 @@ class FirebaseRoomRepository {
                         else -> "photo"
                     }
                 )
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getBoomerangEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("boomerangEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }
@@ -703,6 +730,27 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getBoolean("videoHdrEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getVideoQuality(roomCode: String): Flow<String> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(VideoQualityOption.sanitizeFirebaseValue(snapshot?.getString("videoQuality")))
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun getVideoQualitySupportedValues(roomCode: String): Flow<List<String>> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                val values = (snapshot?.get("videoQualitySupportedValues") as? List<*>)
+                    ?.mapNotNull { it as? String }
+                    ?.map { VideoQualityOption.sanitizeFirebaseValue(it) }
+                    ?.distinct()
+                    .orEmpty()
+                trySend(values)
             }
         awaitClose { listener.remove() }
     }

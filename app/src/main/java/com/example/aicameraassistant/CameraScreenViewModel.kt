@@ -77,6 +77,7 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getZoomLevel(roomCode),
                 repository.getFlashMode(roomCode),
                 repository.getCameraMode(roomCode),
+                repository.getBoomerangEnabled(roomCode),
                 repository.getAspectRatioMode(roomCode),
                 repository.getPortraitBlurLevel(roomCode),
                 repository.getPortraitStrength(roomCode),
@@ -89,6 +90,8 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getNightModeEnabled(roomCode),
                 repository.getVideoHdrSupported(roomCode),
                 repository.getVideoHdrEnabled(roomCode),
+                repository.getVideoQuality(roomCode),
+                repository.getVideoQualitySupportedValues(roomCode),
                 repository.getVideoRecordingState(roomCode),
                 repository.getToolbarExpanded(roomCode),
                 repository.getCaptureRequestState(roomCode),
@@ -101,9 +104,9 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getRtcSessionId(roomCode),
                 repository.getSessionVersion(roomCode)
             ) { values: Array<Any?> ->
-                val portraitSubject = values[10] as? PortraitSubjectState ?: PortraitSubjectState()
-                val faceOverlay = values[11] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
-                val focusRequest = values[23] as? FocusRequestState ?: FocusRequestState()
+                val portraitSubject = values[11] as? PortraitSubjectState ?: PortraitSubjectState()
+                val faceOverlay = values[12] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
+                val focusRequest = values[26] as? FocusRequestState ?: FocusRequestState()
                 CameraRemoteUiState(
                     roomStatus = values[0] as? String ?: "waiting",
                     connectionState = values[1] as? AppConnectionState ?: AppConnectionState.IDLE,
@@ -111,10 +114,11 @@ class CameraScreenViewModel : ViewModel() {
                     zoomLevel = values[3] as? Double ?: 1.0,
                     flashMode = values[4] as? String ?: "off",
                     cameraMode = values[5] as? String ?: "photo",
-                    aspectRatioMode = values[6] as? String ?: "full",
-                    portraitBlurLevel = values[7] as? String ?: "blur",
-                    portraitStrength = values[8] as? Int ?: 5,
-                    portraitEffect = values[9] as? String ?: "blur",
+                    boomerangEnabled = values[6] as? Boolean ?: false,
+                    aspectRatioMode = values[7] as? String ?: "full",
+                    portraitBlurLevel = values[8] as? String ?: "blur",
+                    portraitStrength = values[9] as? Int ?: 5,
+                    portraitEffect = values[10] as? String ?: "blur",
                     portraitStatus = portraitSubject.status,
                     portraitFaceLeft = portraitSubject.left,
                     portraitFaceTop = portraitSubject.top,
@@ -124,26 +128,28 @@ class CameraScreenViewModel : ViewModel() {
                     faceBox = faceOverlay.faceBox,
                     faceBoxes = faceOverlay.faceBoxes,
                     faceDetectionTimestamp = faceOverlay.timestamp,
-                    sceneDetection = values[12] as? SceneDetectionState ?: SceneDetectionState(),
-                    sceneDetectionEnabled = values[13] as? Boolean ?: false,
-                    gridEnabled = values[14] as? Boolean ?: false,
-                    nightModeEnabled = values[15] as? Boolean ?: false,
-                    videoHdrSupported = values[16] as? Boolean ?: false,
-                    videoHdrEnabled = values[17] as? Boolean ?: false,
-                    videoRecordingState = values[18] as? VideoRecordingState ?: VideoRecordingState.Idle,
-                    toolbarExpanded = values[19] as? Boolean ?: false,
-                    captureRequestId = (values[20] as? CaptureRequestState)?.requestId ?: 0L,
-                    captureRequestType = (values[20] as? CaptureRequestState)?.requestType ?: "photo",
-                    requestReceived = values[21] as? Boolean ?: false,
-                    controllerApproved = values[22] as? Boolean ?: false,
+                    sceneDetection = values[13] as? SceneDetectionState ?: SceneDetectionState(),
+                    sceneDetectionEnabled = values[14] as? Boolean ?: false,
+                    gridEnabled = values[15] as? Boolean ?: false,
+                    nightModeEnabled = values[16] as? Boolean ?: false,
+                    videoHdrSupported = values[17] as? Boolean ?: false,
+                    videoHdrEnabled = values[18] as? Boolean ?: false,
+                    videoQuality = values[19] as? String ?: VideoQualityOption.default.firebaseValue,
+                    videoQualitySupportedValues = values[20] as? List<String> ?: emptyList(),
+                    videoRecordingState = values[21] as? VideoRecordingState ?: VideoRecordingState.Idle,
+                    toolbarExpanded = values[22] as? Boolean ?: false,
+                    captureRequestId = (values[23] as? CaptureRequestState)?.requestId ?: 0L,
+                    captureRequestType = (values[23] as? CaptureRequestState)?.requestType ?: "photo",
+                    requestReceived = values[24] as? Boolean ?: false,
+                    controllerApproved = values[25] as? Boolean ?: false,
                     focusRequestId = focusRequest.requestId,
                     focusPointX = focusRequest.x,
                     focusPointY = focusRequest.y,
-                    focusLockEnabled = values[24] as? Boolean ?: false,
-                    exposureIndex = values[25] as? Int ?: 0,
-                    offerSdp = values[26] as String?,
-                    rtcSessionId = values[27] as String?,
-                    sessionVersion = values[28] as? Long ?: 0L
+                    focusLockEnabled = values[27] as? Boolean ?: false,
+                    exposureIndex = values[28] as? Int ?: 0,
+                    offerSdp = values[29] as String?,
+                    rtcSessionId = values[30] as String?,
+                    sessionVersion = values[31] as? Long ?: 0L
                 )
             }.collect { state ->
                 _remoteUiState.value = state

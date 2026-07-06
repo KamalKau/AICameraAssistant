@@ -41,10 +41,15 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwitchCamera
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -200,11 +205,22 @@ fun ControllerBottomControls(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (state.isVideoMode) {
-                VideoHdrButton(
-                    supported = state.videoHdrSupported,
-                    enabled = state.videoHdrEnabled,
-                    onClick = actions.onVideoHdrClick
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    VideoQualityButton(
+                        selectedQuality = state.videoQuality,
+                        supportedValues = state.videoQualitySupportedValues,
+                        changeEnabled = state.videoQualityChangeEnabled,
+                        onSelected = actions.onVideoQualitySelected
+                    )
+                    VideoHdrButton(
+                        supported = state.videoHdrSupported,
+                        enabled = state.videoHdrEnabled,
+                        onClick = actions.onVideoHdrClick
+                    )
+                }
             } else {
                 PortraitFeatureButton(
                     enabled = state.portraitControlsEnabled,
@@ -415,6 +431,75 @@ private fun VideoStopButton(onClick: () -> Unit) {
             tint = Color(0xFFD32F2F),
             modifier = Modifier.size(34.dp)
         )
+    }
+}
+
+@Composable
+private fun VideoQualityButton(
+    selectedQuality: VideoQualityOption,
+    supportedValues: List<String>,
+    changeEnabled: Boolean,
+    onSelected: (VideoQualityOption) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val supportedSet = supportedValues.toSet()
+
+    Box {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.46f))
+                .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
+                .clickable { expanded = true },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = selectedQuality.compactLabel,
+                color = Color.White.copy(alpha = 0.88f),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(Color(0xFF1F1F1F))
+        ) {
+            VideoQualityOption.menuOrder.forEach { option ->
+                val supported = supportedSet.contains(option.firebaseValue)
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = option.menuLabel,
+                                color = if (supported && changeEnabled) {
+                                    Color.White
+                                } else {
+                                    Color.White.copy(alpha = 0.42f)
+                                },
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (!supported) {
+                                Text(
+                                    text = "Not supported on this device",
+                                    color = Color.White.copy(alpha = 0.46f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    },
+                    enabled = supported,
+                    onClick = {
+                        expanded = false
+                        onSelected(option)
+                    }
+                )
+            }
+        }
     }
 }
 

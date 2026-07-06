@@ -114,6 +114,10 @@ fun WaitingForApprovalScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val videoQualityPrefs = remember(context) {
+        context.getSharedPreferences("video_quality", Context.MODE_PRIVATE)
+    }
+    var videoQualityRestoreChecked by remember(roomCode) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val screenViewModel: ControllerScreenViewModel = viewModel()
     val haptic = LocalHapticFeedback.current
@@ -139,6 +143,7 @@ fun WaitingForApprovalScreen(
     val firebaseMaxZoom = remoteUiState.maxZoom
     val firebaseFlashMode = remoteUiState.flashMode
     val firebaseCameraMode = remoteUiState.cameraMode
+    val firebaseBoomerangEnabled = remoteUiState.boomerangEnabled
     val firebaseAspectRatioMode = remoteUiState.aspectRatioMode
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
@@ -159,6 +164,8 @@ fun WaitingForApprovalScreen(
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
+    val firebaseVideoQuality = remoteUiState.videoQuality
+    val firebaseVideoQualitySupportedValues = remoteUiState.videoQualitySupportedValues
     val firebaseVideoRecordingState = remoteUiState.videoRecordingState
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseExposureMinIndex = remoteUiState.exposureMinIndex
@@ -195,7 +202,6 @@ fun WaitingForApprovalScreen(
     var boomerangCaptureEffectVisible by remember { mutableStateOf(false) }
     var boomerangCaptureEffectToken by remember { mutableLongStateOf(0L) }
     var captureRequestSequence by screenViewModel::captureRequestSequence
-    var captureMode by screenViewModel::captureMode
     var videoRecordingInProgress by screenViewModel::videoRecordingInProgress
     var videoRecordingPaused by screenViewModel::videoRecordingPaused
     val videoRecordingElapsedMillis = rememberVideoRecordingElapsedMillis(
@@ -338,6 +344,24 @@ fun WaitingForApprovalScreen(
                 .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
+    LaunchedEffect(roomCode, firebaseVideoQuality) {
+        if (!videoQualityRestoreChecked) {
+            videoQualityRestoreChecked = true
+            if (firebaseVideoQuality == VideoQualityOption.default.firebaseValue) {
+                val rememberedQuality = videoQualityPrefs.getString(
+                    "selected",
+                    VideoQualityOption.default.firebaseValue
+                )
+                if (rememberedQuality != firebaseVideoQuality) {
+                    launchRoomWrite("remembered video quality restore") {
+                        repository.updateVideoQuality(roomCode, rememberedQuality.orEmpty())
+                    }
+                    return@LaunchedEffect
+                }
+            }
+        }
+        videoQualityPrefs.edit().putString("selected", firebaseVideoQuality).apply()
+    }
     val controllerToolRailUiState = buildCameraToolRailUiState(
         flashSupported = firebaseFlashSupported,
         flashMode = firebaseFlashMode,
@@ -348,9 +372,12 @@ fun WaitingForApprovalScreen(
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
         videoHdrEnabled = firebaseVideoHdrEnabled,
+        videoQuality = firebaseVideoQuality,
+        videoQualitySupportedValues = firebaseVideoQualitySupportedValues,
+        videoQualityChangeEnabled = !videoRecordingInProgress,
         cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
-        boomerangSelected = captureMode == "boomerang",
+        boomerangSelected = firebaseBoomerangEnabled,
         exposureSupported = exposureUiState.supported
     )
     fun resetControllerExposureToNeutral() {
@@ -414,13 +441,7 @@ fun WaitingForApprovalScreen(
             controllerCoordinator.updateFlashMode(firebaseFlashMode, firebaseFlashSupported)
         },
         onBoomerangClick = {
-            val selectingBoomerang = captureMode != "boomerang"
-            captureMode = if (selectingBoomerang) "boomerang" else "photo"
-            if (selectingBoomerang && firebaseCameraMode != "photo") {
-                launchRoomWrite("boomerang mode reset") {
-                    repository.updateCameraMode(roomCode, "photo")
-                }
-            }
+            controllerCoordinator.updateBoomerangEnabled(firebaseBoomerangEnabled, firebaseCameraMode)
         },
         onAspectRatioClick = {
             launchRoomWrite("aspect ratio update") {
@@ -448,6 +469,16 @@ fun WaitingForApprovalScreen(
                 currentEnabled = firebaseVideoHdrEnabled,
                 supported = firebaseVideoHdrSupported
             )
+        },
+        onVideoQualitySelected = { option ->
+            if (videoRecordingInProgress) {
+                Toast.makeText(context, "Stop recording to change video quality.", Toast.LENGTH_SHORT).show()
+            } else if (option.firebaseValue != firebaseVideoQuality) {
+                videoQualityPrefs.edit().putString("selected", option.firebaseValue).apply()
+                launchRoomWrite("video quality update") {
+                    repository.updateVideoQuality(roomCode, option.firebaseValue)
+                }
+            }
         },
         onExposureClick = controllerExposureUiActions.onToggle,
         onToolbarExpandedChange = { expanded ->
@@ -483,7 +514,10 @@ fun WaitingForApprovalScreen(
         isVideoPaused = videoRecordingPaused,
         videoHdrSupported = firebaseVideoHdrSupported,
         videoHdrEnabled = firebaseVideoHdrEnabled,
-        boomerangSelected = captureMode == "boomerang",
+        videoQuality = firebaseVideoQuality,
+        videoQualitySupportedValues = firebaseVideoQualitySupportedValues,
+        videoQualityChangeEnabled = !videoRecordingInProgress,
+        boomerangSelected = firebaseBoomerangEnabled,
         burstCaptureCount = burstCaptureCount,
         shutterScale = shutterScale,
         shutterCoreScale = shutterCoreScale,
@@ -531,7 +565,7 @@ fun WaitingForApprovalScreen(
         val requestType = requestTypeOverride ?: if (firebaseCameraMode == "video") {
             if (videoRecordingInProgress) "video_stop" else "video_start"
         } else {
-            captureMode
+            if (firebaseBoomerangEnabled) "boomerang" else "photo"
         }
         controllerCoordinator.triggerCaptureRequest(
             nextRequestId = nextCaptureRequestId(captureRequestSequence),
@@ -1470,6 +1504,7 @@ fun WaitingForApprovalScreen(
                             updatePortraitEffect(effect)
                         },
                         onVideoHdrClick = controllerToolRailActions.onVideoHdrClick,
+                        onVideoQualitySelected = controllerToolRailActions.onVideoQualitySelected,
                         onLensClick = controllerToolRailActions.onLensClick,
                         onVideoPauseToggle = {
                             triggerCaptureRequest(
@@ -1480,7 +1515,7 @@ fun WaitingForApprovalScreen(
                             triggerCaptureRequest("video_stop")
                         },
                         onShutterPress = shutter@{ _ ->
-                            if (firebaseCameraMode != "video" && captureMode == "boomerang") {
+                            if (firebaseCameraMode != "video" && firebaseBoomerangEnabled) {
                                 if (tryAwaitRelease()) {
                                     triggerCaptureRequest("boomerang")
                                 }

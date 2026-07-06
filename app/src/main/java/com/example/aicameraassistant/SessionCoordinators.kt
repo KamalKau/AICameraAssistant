@@ -129,6 +129,16 @@ class HostSessionCoordinator(
         }
     }
 
+    fun updateBoomerangEnabled(currentEnabled: Boolean, currentCameraMode: String) {
+        val nextEnabled = !currentEnabled
+        roomWrites.launch("boomerang update") {
+            repository.updateBoomerangEnabled(roomCode, nextEnabled)
+            if (nextEnabled && currentCameraMode != "photo") {
+                repository.updateCameraMode(roomCode, "photo")
+            }
+        }
+    }
+
     fun updateGridEnabled(currentEnabled: Boolean) {
         roomWrites.launch("grid update") {
             repository.updateGridEnabled(roomCode, !currentEnabled)
@@ -255,6 +265,16 @@ class ControllerSessionCoordinator(
     fun switchLens(currentFacing: String) {
         roomWrites.launch("lens switch") {
             repository.updateLensFacing(roomCode, if (currentFacing == "back") "front" else "back")
+        }
+    }
+
+    fun updateBoomerangEnabled(currentEnabled: Boolean, currentCameraMode: String) {
+        val nextEnabled = !currentEnabled
+        roomWrites.launch("boomerang update") {
+            repository.updateBoomerangEnabled(roomCode, nextEnabled)
+            if (nextEnabled && currentCameraMode != "photo") {
+                repository.updateCameraMode(roomCode, "photo")
+            }
         }
     }
 

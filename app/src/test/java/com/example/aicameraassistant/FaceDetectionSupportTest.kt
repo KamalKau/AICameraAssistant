@@ -114,4 +114,5 @@ class FaceDetectionSupportTest {
         assertEquals(1, held.bounds.size)
         assertTrue(expired.bounds.isEmpty())
     }
+
 }

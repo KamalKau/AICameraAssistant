@@ -142,6 +142,10 @@ fun CameraScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val videoQualityPrefs = remember(context) {
+        context.getSharedPreferences("video_quality", android.content.Context.MODE_PRIVATE)
+    }
+    var videoQualityRestoreChecked by remember(roomCode) { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -156,6 +160,7 @@ fun CameraScreen(
     val firebaseZoomLevel = remoteUiState.zoomLevel
     val firebaseFlashMode = remoteUiState.flashMode
     val firebaseCameraMode = remoteUiState.cameraMode
+    val firebaseBoomerangEnabled = remoteUiState.boomerangEnabled
     val firebaseAspectRatioMode = remoteUiState.aspectRatioMode
     val firebasePortraitBlurLevel = remoteUiState.portraitBlurLevel
     val firebasePortraitStrength = remoteUiState.portraitStrength
@@ -172,6 +177,8 @@ fun CameraScreen(
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
+    val firebaseVideoQuality = remoteUiState.videoQuality
+    val firebaseVideoQualitySupportedValues = remoteUiState.videoQualitySupportedValues
     val firebaseVideoRecordingState = remoteUiState.videoRecordingState
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseCaptureRequestId = remoteUiState.captureRequestId
@@ -261,7 +268,6 @@ fun CameraScreen(
     var showManualBrightnessControl by screenViewModel::showManualBrightnessControl
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
     var boomerangInProgress by screenViewModel::boomerangInProgress
-    var captureMode by screenViewModel::captureMode
     var videoRecordingState by screenViewModel::videoRecordingState
     val videoRecordingElapsedMillis = rememberVideoRecordingElapsedMillis(
         isRecording = videoRecordingState != VideoRecordingState.Idle,
@@ -371,6 +377,24 @@ fun CameraScreen(
                 .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
+    LaunchedEffect(roomCode, firebaseVideoQuality) {
+        if (!videoQualityRestoreChecked) {
+            videoQualityRestoreChecked = true
+            if (firebaseVideoQuality == VideoQualityOption.default.firebaseValue) {
+                val rememberedQuality = videoQualityPrefs.getString(
+                    "selected",
+                    VideoQualityOption.default.firebaseValue
+                )
+                if (rememberedQuality != firebaseVideoQuality) {
+                    launchRoomWrite("remembered video quality restore") {
+                        repository.updateVideoQuality(roomCode, rememberedQuality.orEmpty())
+                    }
+                    return@LaunchedEffect
+                }
+            }
+        }
+        videoQualityPrefs.edit().putString("selected", firebaseVideoQuality).apply()
+    }
     val hostTopOverlayUiState = buildHostTopOverlayUiState(
         roomCode = roomCode,
         roomStatus = roomStatus,
@@ -390,9 +414,12 @@ fun CameraScreen(
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
         videoHdrEnabled = firebaseVideoHdrEnabled,
+        videoQuality = firebaseVideoQuality,
+        videoQualitySupportedValues = firebaseVideoQualitySupportedValues,
+        videoQualityChangeEnabled = videoRecordingState == VideoRecordingState.Idle,
         cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
-        boomerangSelected = captureMode == "boomerang",
+        boomerangSelected = firebaseBoomerangEnabled,
         exposureSupported = exposureUiState.supported
     )
     fun resetExposureToNeutral() {
@@ -462,13 +489,7 @@ fun CameraScreen(
             hostCoordinator.updateFlashMode(firebaseFlashMode, flashSupported)
         },
         onBoomerangClick = {
-            val selectingBoomerang = captureMode != "boomerang"
-            captureMode = if (selectingBoomerang) "boomerang" else "photo"
-            if (selectingBoomerang && firebaseCameraMode != "photo") {
-                launchRoomWrite("boomerang mode reset") {
-                    repository.updateCameraMode(roomCode, "photo")
-                }
-            }
+            hostCoordinator.updateBoomerangEnabled(firebaseBoomerangEnabled, firebaseCameraMode)
         },
         onAspectRatioClick = {
             launchRoomWrite("aspect ratio update") {
@@ -493,6 +514,16 @@ fun CameraScreen(
         },
         onVideoHdrClick = {
             hostCoordinator.updateVideoHdrEnabled(firebaseVideoHdrEnabled, firebaseVideoHdrSupported)
+        },
+        onVideoQualitySelected = { option ->
+            if (videoRecordingState != VideoRecordingState.Idle) {
+                Toast.makeText(context, "Stop recording to change video quality.", Toast.LENGTH_SHORT).show()
+            } else if (option.firebaseValue != firebaseVideoQuality) {
+                videoQualityPrefs.edit().putString("selected", option.firebaseValue).apply()
+                launchRoomWrite("video quality update") {
+                    repository.updateVideoQuality(roomCode, option.firebaseValue)
+                }
+            }
         },
         onExposureClick = hostExposureUiActions.onToggle,
         onToolbarExpandedChange = { expanded ->
@@ -1625,6 +1656,7 @@ fun CameraScreen(
         isStreaming,
         firebaseCameraMode,
         firebaseVideoHdrEnabled,
+        firebaseVideoQuality,
         firebaseSceneDetectionEnabled,
         configuration.orientation,
         displayRotation
@@ -1700,6 +1732,18 @@ fun CameraScreen(
 
             val supportedDynamicRanges = Recorder.getVideoCapabilities(firstCamera.cameraInfo)
                 .supportedDynamicRanges
+            val supportedVideoQualities = supportedVideoQualityValues(firstCamera.cameraInfo)
+            val selectedVideoQuality = VideoQualityOption.fromFirebaseValue(firebaseVideoQuality)
+            val resolvedVideoQuality =
+                if (supportedVideoQualities.contains(selectedVideoQuality.firebaseValue)) {
+                    selectedVideoQuality
+                } else if (supportedVideoQualities.contains(VideoQualityOption.default.firebaseValue)) {
+                    VideoQualityOption.default
+                } else {
+                    supportedVideoQualities.firstOrNull()
+                        ?.let { VideoQualityOption.fromFirebaseValue(it) }
+                        ?: VideoQualityOption.default
+                }
             val videoHdrSupportedForLens = supportedDynamicRanges.any { dynamicRange ->
                 dynamicRange != DynamicRange.SDR &&
                     dynamicRange.bitDepth == DynamicRange.BIT_DEPTH_10_BIT
@@ -1712,18 +1756,23 @@ fun CameraScreen(
                     repository.updateVideoHdrEnabled(roomCode, false)
                 }
             }
+            launchRoomWrite("video quality support publish") {
+                repository.updateVideoQualitySupportedValues(roomCode, supportedVideoQualities)
+            }
 
             fun buildVideoCapture(dynamicRange: DynamicRange): VideoCapture<Recorder> {
+                val cameraXQuality = resolvedVideoQuality.cameraXQuality() ?: Quality.FHD
                 val recorder = Recorder.Builder()
                     .setQualitySelector(
                         QualitySelector.fromOrderedList(
-                            listOf(Quality.HD, Quality.SD),
-                            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+                            listOf(cameraXQuality),
+                            FallbackStrategy.higherQualityOrLowerThan(cameraXQuality)
                         )
                     )
                     .build()
                 return VideoCapture.Builder(recorder)
                     .setDynamicRange(dynamicRange)
+                    .setTargetFrameRate(resolvedVideoQuality.targetFrameRateRange())
                     .setTargetRotation(targetRotation)
                     .build()
             }

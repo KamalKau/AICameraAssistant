@@ -19,6 +19,9 @@ class ScreenStatePresentersTest {
             nightModeEnabled = false,
             videoHdrSupported = false,
             videoHdrEnabled = false,
+            videoQuality = VideoQualityOption.default.firebaseValue,
+            videoQualitySupportedValues = emptyList(),
+            videoQualityChangeEnabled = true,
             cameraMode = "photo",
             toolbarExpanded = false,
             boomerangSelected = false,
@@ -44,6 +47,9 @@ class ScreenStatePresentersTest {
             nightModeEnabled = true,
             videoHdrSupported = true,
             videoHdrEnabled = true,
+            videoQuality = VideoQualityOption.Fhd60.firebaseValue,
+            videoQualitySupportedValues = listOf(VideoQualityOption.Fhd60.firebaseValue),
+            videoQualityChangeEnabled = false,
             cameraMode = "video",
             toolbarExpanded = true,
             boomerangSelected = true,
@@ -56,6 +62,8 @@ class ScreenStatePresentersTest {
         assertEquals("9:16", state.aspectRatioLabel)
         assertTrue(state.videoMode)
         assertTrue(state.videoHdrEnabled)
+        assertEquals(VideoQualityOption.Fhd60, state.videoQuality)
+        assertFalse(state.videoQualityChangeEnabled)
         assertFalse(state.exposureSupported)
     }
 
