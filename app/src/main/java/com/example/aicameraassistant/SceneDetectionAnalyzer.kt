@@ -38,6 +38,7 @@ class SceneDetectionAnalyzer {
 
         var samples = 0
         var luminanceSum = 0.0
+        val luminanceHistogram = IntArray(256)
         var saturatedWarm = 0
         var greenBlue = 0
         var skyBlue = 0
@@ -59,6 +60,7 @@ class SceneDetectionAnalyzer {
                 val saturation = maxChannel - minChannel
 
                 luminanceSum += luma
+                luminanceHistogram[luma.coerceIn(0, 255)] += 1
                 samples += 1
 
                 if (saturation > 42 && rgb.red > rgb.green * 0.95 && rgb.green > rgb.blue * 0.75) {
@@ -90,18 +92,41 @@ class SceneDetectionAnalyzer {
         if (samples == 0) return sceneDetectionResult("auto", 0.0)
 
         val averageLuma = luminanceSum / samples
+        val shadowLuma = histogramPercentile(luminanceHistogram, samples, 0.25)
+        val highlightLuma = histogramPercentile(luminanceHistogram, samples, 0.90)
+        val clippedHighlights = luminanceHistogram.sliceArray(245..255).sum().toDouble() / samples
         val warmRatio = saturatedWarm.toDouble() / samples.toDouble()
         val landscapeRatio = (greenBlue + skyBlue).toDouble() / samples.toDouble()
         val edgeRatio = strongEdges.toDouble() / samples.toDouble()
         val textRatio = textLikeEdges.toDouble() / samples.toDouble()
 
         return when {
-            averageLuma < 54.0 -> sceneDetectionResult("night", (1.0 - averageLuma / 72.0).coerceIn(0.45, 0.94))
+            (averageLuma < 60.0 && shadowLuma < 48) ||
+                (shadowLuma < 30 && averageLuma < 102.0 && clippedHighlights < 0.32) -> {
+                val shadowDarkness = (1.0 - shadowLuma / 65.0).coerceIn(0.0, 1.0)
+                val sceneDarkness = (1.0 - averageLuma / 115.0).coerceIn(0.0, 1.0)
+                val highlightProtection = if (highlightLuma > 225) 0.04 else 0.0
+                sceneDetectionResult(
+                    "night",
+                    (0.68 * shadowDarkness + 0.32 * sceneDarkness - highlightProtection)
+                        .coerceIn(0.48, 0.94)
+                )
+            }
             textRatio > 0.34 && edgeRatio > 0.26 -> sceneDetectionResult("text", textRatio.coerceIn(0.48, 0.9))
             warmRatio > 0.22 && averageLuma > 62.0 -> sceneDetectionResult("food", warmRatio.coerceIn(0.46, 0.88))
             landscapeRatio > 0.34 && averageLuma > 70.0 -> sceneDetectionResult("landscape", landscapeRatio.coerceIn(0.46, 0.88))
             else -> sceneDetectionResult("auto", 0.32)
         }
+    }
+
+    private fun histogramPercentile(histogram: IntArray, samples: Int, percentile: Double): Int {
+        val target = (samples * percentile).toInt().coerceIn(1, samples)
+        var cumulative = 0
+        histogram.forEachIndexed { value, count ->
+            cumulative += count
+            if (cumulative >= target) return value
+        }
+        return 255
     }
 
     private fun readRgb(imageProxy: ImageProxy, x: Int, y: Int, luma: Int): RgbSample {

@@ -69,6 +69,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.5.0")
     implementation("androidx.camera:camera-view:1.5.0")
     implementation("androidx.camera:camera-video:1.5.0")
+    implementation("androidx.camera:camera-extensions:1.5.0")
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.compose.material:material-icons-extended")

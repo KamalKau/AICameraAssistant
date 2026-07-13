@@ -26,6 +26,8 @@ import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.extensions.ExtensionMode
+import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -194,6 +196,9 @@ fun CameraScreen(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var extensionsManager by remember { mutableStateOf<ExtensionsManager?>(null) }
+    var nightExtensionSupportByLens by remember { mutableStateOf<Map<Int, Boolean>>(emptyMap()) }
+    var nightExtensionActive by remember { mutableStateOf(false) }
     var boundPreviewUseCases by remember { mutableStateOf<List<Preview>>(emptyList()) }
     var boundAnalysisUseCases by remember { mutableStateOf<List<ImageAnalysis>>(emptyList()) }
     var appliedVideoQuality by remember(roomCode) {
@@ -346,6 +351,12 @@ fun CameraScreen(
     val hasLedFlash = camera?.cameraInfo?.hasFlashUnit() == true
     val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
     val flashSupported = hasLedFlash || lensFacing == CameraSelector.LENS_FACING_FRONT
+    val shouldBindNightExtension =
+        firebaseNightModeEnabled &&
+            firebaseCameraMode == "photo" &&
+            firebaseFlashMode == "off" &&
+            !isStreaming &&
+            nightExtensionSupportByLens[lensFacing] == true
     val nightModeExposurePolicy = remember { NightModeExposurePolicy() }
     val shutterSound = remember {
         MediaActionSound().apply {
@@ -1391,6 +1402,9 @@ fun CameraScreen(
 
             var brightnessTotal = 0.0
             var sharpnessTotal = 0.0
+            var smoothRegionNoiseTotal = 0.0
+            var clippedHighlights = 0
+            var crushedShadows = 0
             var sampleCount = 0
             val step = 3
             var y = step
@@ -1419,6 +1433,11 @@ fun CameraScreen(
 
                     brightnessTotal += luma
                     sharpnessTotal += kotlin.math.abs(luma - leftLuma) + kotlin.math.abs(luma - topLuma)
+                    if (kotlin.math.abs(leftLuma - topLuma) < 8.0) {
+                        smoothRegionNoiseTotal += kotlin.math.abs(luma - ((leftLuma + topLuma) / 2.0))
+                    }
+                    if (luma >= 245.0) clippedHighlights++
+                    if (luma <= 12.0) crushedShadows++
                     sampleCount++
                     x += step
                 }
@@ -1430,7 +1449,14 @@ fun CameraScreen(
             } else {
                 val brightnessScore = brightnessTotal / sampleCount
                 val sharpnessScore = sharpnessTotal / sampleCount
-                brightnessScore + (sharpnessScore * 1.8)
+                val smoothRegionNoise = smoothRegionNoiseTotal / sampleCount
+                val clippedRatio = clippedHighlights.toDouble() / sampleCount
+                val crushedRatio = crushedShadows.toDouble() / sampleCount
+                (brightnessScore * 0.35) +
+                    (sharpnessScore * 2.4) -
+                    (smoothRegionNoise * 1.25) -
+                    (clippedRatio * 90.0) -
+                    (crushedRatio * 24.0)
             }
         } finally {
             bitmap.recycle()
@@ -1462,7 +1488,7 @@ fun CameraScreen(
         }
     }
 
-    suspend fun captureNightAssistPhoto(): Boolean {
+    suspend fun captureNightAssistPhoto(motionDetected: Boolean): Boolean {
         val currentCapture = imageCapture ?: run {
             Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
             return false
@@ -1475,30 +1501,31 @@ fun CameraScreen(
             nightAssistInProgress = true
 
             if (currentCamera != null && exposureUiState.supported) {
-                val boostedExposure = exposureMaxIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
-                exposureIndex = boostedExposure
-                runCatching {
-                    currentCamera.cameraControl.setExposureCompensationIndex(boostedExposure)
-                }.onFailure {
-                    Log.w("CAMERA_EXPOSURE", "Night Assist exposure boost failed", it)
+                val boostedExposure = nightModeExposurePolicy.resolveCaptureIndex(
+                    currentIndex = originalExposureIndex,
+                    minIndex = exposureMinIndex,
+                    maxIndex = exposureMaxIndex,
+                    motionDetected = motionDetected
+                )
+                if (boostedExposure != originalExposureIndex) {
+                    runCatching {
+                        val future = currentCamera.cameraControl.setExposureCompensationIndex(boostedExposure)
+                        withContext(Dispatchers.IO) { future.get() }
+                    }.onFailure {
+                        Log.w("CAMERA_EXPOSURE", "Night Assist exposure boost failed", it)
+                    }
                 }
-            }
-
-            val useLedTorch = currentCamera != null && hasLedFlash && !isFrontCamera
-            if (useLedTorch) {
-                runCatching { currentCamera?.cameraControl?.enableTorch(true) }
-                delay(300)
-                playShutterClick()
             }
 
             var bestScore = Double.NEGATIVE_INFINITY
             var bestBytes: ByteArray? = null
-            repeat(3) { index ->
+            val captureCount = if (motionDetected) 1 else 3
+            repeat(captureCount) { index ->
                 val bytes = captureJpegBytes(
                     capture = currentCapture,
                     useFrontScreenFlash = useFrontScreenFlash,
-                    playShutterSound = !useLedTorch && index == 0,
-                    forcedCaptureFlashMode = if (useLedTorch) ImageCapture.FLASH_MODE_OFF else null
+                    playShutterSound = index == 0,
+                    forcedCaptureFlashMode = ImageCapture.FLASH_MODE_OFF
                 )
                 if (bytes != null) {
                     val score = withContext(Dispatchers.Default) {
@@ -1509,8 +1536,8 @@ fun CameraScreen(
                         bestBytes = bytes
                     }
                 }
-                if (index < 2) {
-                    delay(120)
+                if (index < captureCount - 1) {
+                    delay(90)
                 }
             }
 
@@ -1518,13 +1545,10 @@ fun CameraScreen(
         } finally {
             nightAssistInProgress = false
 
-            if (currentCamera != null && hasLedFlash && !isFrontCamera) {
-                runCatching { currentCamera.cameraControl.enableTorch(false) }
-            }
-
-            if (currentCamera != null && exposureUiState.supported && !firebaseNightModeEnabled) {
+            if (currentCamera != null && exposureUiState.supported) {
                 runCatching {
-                    currentCamera.cameraControl.setExposureCompensationIndex(originalExposureIndex)
+                    val future = currentCamera.cameraControl.setExposureCompensationIndex(originalExposureIndex)
+                    withContext(Dispatchers.IO) { future.get() }
                 }
             }
         }
@@ -1637,26 +1661,43 @@ fun CameraScreen(
             return
         }
 
-        if (firebaseNightModeEnabled && isFrontCamera) {
+        val shouldUseFrontNightFallback =
+            firebaseNightModeEnabled &&
+                isFrontCamera &&
+                !nightExtensionActive &&
+                firebaseFlashMode == "off"
+        val firstNightSample = if (shouldUseFrontNightFallback) {
+            capturePreviewLumaSample(previewView)
+        } else {
+            null
+        }
+        val lowLightConfirmed = firstNightSample?.isLowLight ?: (
+            !firebaseSceneDetectionEnabled ||
+                (firebaseSceneDetection.key == "night" && firebaseSceneDetection.confidence >= 0.5)
+            )
+
+        if (shouldUseFrontNightFallback && lowLightConfirmed) {
+            delay(70)
+            val motionScore = previewMotionScore(
+                firstNightSample,
+                capturePreviewLumaSample(previewView)
+            )
+            val motionDetected = motionScore >= 9.0
             val previousBrightness = activity?.window?.attributes?.screenBrightness
             selfieLightVisible = true
-            Log.d("AICameraAssistant", "FRONT_SCREEN_LIGHT_ON")
+            Log.d(
+                "NIGHT_FALLBACK",
+                "Front Night fallback motionScore=$motionScore motionDetected=$motionDetected"
+            )
             setScreenBrightness(1f)
-            Log.d("AICameraAssistant", "SCREEN_BRIGHTNESS_MAX")
             delay(400)
-            Log.d("AICameraAssistant", "WAIT_BEFORE_CAPTURE_DONE")
-            Log.d("AICameraAssistant", "TAKE_PICTURE_NOW")
 
             var saved = false
             try {
-                saved = captureNightAssistPhoto()
-                if (saved) {
-                    Log.d("AICameraAssistant", "IMAGE_SAVED")
-                }
+                saved = captureNightAssistPhoto(motionDetected = motionDetected)
             } finally {
                 selfieLightVisible = false
                 previousBrightness?.let { setScreenBrightness(it) }
-                Log.d("AICameraAssistant", "FRONT_SCREEN_LIGHT_OFF")
             }
             lastHandledCaptureRequestId = requestId
             launchRoomWrite("capture reset") { repository.resetCaptureRequest(roomCode) }
@@ -1767,16 +1808,48 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(context) {
+        val provider = runCatching {
+            withContext(Dispatchers.IO) { ProcessCameraProvider.getInstance(context).get() }
+        }.onFailure {
+            Log.w("NIGHT_EXTENSION", "Camera provider unavailable for Night capability query", it)
+        }.getOrNull() ?: return@LaunchedEffect
+
+        val manager = runCatching {
+            withContext(Dispatchers.IO) {
+                ExtensionsManager.getInstanceAsync(context, provider).get()
+            }
+        }.onFailure {
+            Log.w("NIGHT_EXTENSION", "CameraX Extensions initialization failed", it)
+        }.getOrNull() ?: return@LaunchedEffect
+
+        extensionsManager = manager
+        nightExtensionSupportByLens = listOf(
+            CameraSelector.LENS_FACING_BACK,
+            CameraSelector.LENS_FACING_FRONT
+        ).associateWith { facing ->
+            val selector = CameraSelector.Builder().requireLensFacing(facing).build()
+            runCatching {
+                manager.isExtensionAvailable(selector, ExtensionMode.NIGHT)
+            }.onFailure {
+                Log.w("NIGHT_EXTENSION", "Night capability query failed for lens=$facing", it)
+            }.getOrDefault(false)
+        }
+        Log.i("NIGHT_EXTENSION", "Night support by lens=$nightExtensionSupportByLens")
+    }
+
     LaunchedEffect(
         lensFacing,
         isStreaming,
         firebaseCameraMode,
         firebaseVideoHdrEnabled,
         appliedVideoQuality,
-        firebaseSceneDetectionEnabled
+        firebaseSceneDetectionEnabled,
+        shouldBindNightExtension
     ) {
         cameraPreviewReady = false
         cameraStartupFailed = false
+        nightExtensionActive = false
         boundPreviewUseCases = emptyList()
         boundAnalysisUseCases = emptyList()
         supportedVideoQualitiesForLens = emptyList()
@@ -1837,6 +1910,17 @@ fun CameraScreen(
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
             .build()
+        val nightManager = extensionsManager
+        val nightExtensionSelector = if (shouldBindNightExtension && nightManager != null) {
+            runCatching {
+                nightManager.getExtensionEnabledCameraSelector(cameraSelector, ExtensionMode.NIGHT)
+            }.onFailure {
+                Log.w("NIGHT_EXTENSION", "Unable to create Night-enabled selector", it)
+            }.getOrNull()
+        } else {
+            null
+        }
+        var bindWithNightExtension = nightExtensionSelector != null
 
         try {
             cameraProvider.unbindAll()
@@ -2022,7 +2106,12 @@ fun CameraScreen(
                         )
                     )
                 }
-            if (!isStreaming) {
+            val extensionSupportsAnalysis =
+                !bindWithNightExtension ||
+                    runCatching {
+                        nightManager?.isImageAnalysisSupported(cameraSelector, ExtensionMode.NIGHT) == true
+                    }.getOrDefault(false)
+            if (!isStreaming && extensionSupportsAnalysis) {
                 finalUseCases.add(faceAnalysis)
             } else {
                 faceAnalysis.clearAnalyzer()
@@ -2140,11 +2229,20 @@ fun CameraScreen(
                         setFrameRateRange(resolvedVideoQuality.targetFrameRateRange())
                     }
                 }.build()
-                return cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    sessionConfig
-                )
+                val selector = if (bindWithNightExtension) nightExtensionSelector!! else cameraSelector
+                return try {
+                    cameraProvider.bindToLifecycle(lifecycleOwner, selector, sessionConfig)
+                } catch (extensionError: Exception) {
+                    if (!bindWithNightExtension) throw extensionError
+                    Log.w(
+                        "NIGHT_EXTENSION",
+                        "OEM Night bind failed; retrying standard camera pipeline",
+                        extensionError
+                    )
+                    bindWithNightExtension = false
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, sessionConfig)
+                }
             }
 
             val finalCamera = try {
@@ -2248,6 +2346,11 @@ fun CameraScreen(
             }
 
             camera = finalCamera
+            nightExtensionActive = bindWithNightExtension
+            Log.i(
+                "NIGHT_EXTENSION",
+                "Night extension active=$nightExtensionActive lens=$lensFacing"
+            )
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null
             boundPreviewUseCases = finalUseCases.filterIsInstance<Preview>()
@@ -2381,13 +2484,14 @@ fun CameraScreen(
         firebaseExposureIndex,
         exposureMinIndex,
         exposureMaxIndex,
-        firebaseNightModeEnabled
+        firebaseNightModeEnabled,
+        nightExtensionActive
     ) {
         val currentCamera = camera ?: return@LaunchedEffect
         if (!exposureUiState.supported) return@LaunchedEffect
 
         val targetExposure = nightModeExposurePolicy.resolveTargetIndex(
-            nightModeEnabled = firebaseNightModeEnabled,
+            nightModeEnabled = firebaseNightModeEnabled && !nightExtensionActive,
             requestedIndex = firebaseExposureIndex,
             minIndex = exposureMinIndex,
             maxIndex = exposureMaxIndex
@@ -2416,7 +2520,7 @@ fun CameraScreen(
         if (
             firebaseSceneDetectionEnabled &&
             firebaseSceneDetection.key == "night" &&
-                firebaseSceneDetection.confidence >= 0.62 &&
+                firebaseSceneDetection.confidence >= 0.58 &&
                 !firebaseNightModeEnabled
         ) {
             val now = System.currentTimeMillis()
