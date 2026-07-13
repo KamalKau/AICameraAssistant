@@ -1,10 +1,7 @@
 package com.example.aicameraassistant
 
 import android.util.Range
-import androidx.camera.core.CameraInfo
-import androidx.camera.core.DynamicRange
 import androidx.camera.video.Quality
-import androidx.camera.video.Recorder
 
 enum class VideoQualityOption(
     val firebaseValue: String,
@@ -12,7 +9,7 @@ enum class VideoQualityOption(
     val menuLabel: String,
     val frameRate: Int,
 ) {
-    Uhd8K30("UHD8K_30", "8K 30", "8K 30 FPS", 30),
+    Uhd8K30("EIGHT_K_30", "8K 30", "8K 30 FPS", 30),
     Uhd60("UHD_60", "UHD 60", "UHD (4K) 60 FPS", 60),
     Uhd30("UHD_30", "UHD 30", "UHD (4K) 30 FPS", 30),
     Fhd60("FHD_60", "FHD 60", "FHD (1080p) 60 FPS", 60),
@@ -26,7 +23,14 @@ enum class VideoQualityOption(
         val default: VideoQualityOption = Fhd30
 
         fun fromFirebaseValue(value: String?): VideoQualityOption =
-            menuOrder.firstOrNull { it.firebaseValue == value } ?: default
+            fromFirebaseValueOrNull(value) ?: default
+
+        fun fromFirebaseValueOrNull(value: String?): VideoQualityOption? =
+            menuOrder.firstOrNull { it.firebaseValue == value } ?: when (value) {
+                // Migrate rooms written by the incomplete selector implementation.
+                "UHD8K_30" -> Uhd8K30
+                else -> null
+            }
 
         fun sanitizeFirebaseValue(value: String?): String =
             fromFirebaseValue(value).firebaseValue
@@ -44,21 +48,18 @@ fun VideoQualityOption.cameraXQuality(): Quality? =
         VideoQualityOption.Fhd60,
         VideoQualityOption.Fhd30 -> Quality.FHD
         VideoQualityOption.Hd30 -> Quality.HD
-    }
-
-fun supportedVideoQualityValues(cameraInfo: CameraInfo): List<String> {
-    val capabilities = Recorder.getVideoCapabilities(cameraInfo)
-    val frameRateRanges = cameraInfo.supportedFrameRateRanges
-    return VideoQualityOption.menuOrder
-        .filter { option ->
-            val quality = option.cameraXQuality() ?: return@filter false
-            capabilities.isQualitySupported(quality, DynamicRange.SDR) &&
-                frameRateRanges.supportsFrameRate(option.frameRate)
-        }
-        .map { it.firebaseValue }
 }
 
-fun Set<Range<Int>>.supportsFrameRate(frameRate: Int): Boolean =
-    isEmpty() || any { range ->
-        range.lower <= frameRate && frameRate <= range.upper
+fun resolveVideoQuality(
+    requestedValue: String?,
+    supportedValues: List<String>
+): VideoQualityOption? {
+    val supported = supportedValues.mapNotNull(VideoQualityOption::fromFirebaseValueOrNull)
+    val requested = VideoQualityOption.fromFirebaseValueOrNull(requestedValue)
+    return when {
+        requested != null && requested in supported -> requested
+        VideoQualityOption.Fhd30 in supported -> VideoQualityOption.Fhd30
+        VideoQualityOption.Hd30 in supported -> VideoQualityOption.Hd30
+        else -> supported.firstOrNull()
     }
+}

@@ -29,7 +29,8 @@ import kotlinx.coroutines.withContext
 enum class VideoRecordingState {
     Idle,
     Recording,
-    Paused
+    Paused,
+    Finalizing
 }
 
 class CameraVideoRecorder(private val context: Context) {
@@ -60,7 +61,8 @@ class CameraVideoRecorder(private val context: Context) {
         videoCapture: VideoCapture<Recorder>?,
         onRecordingStateChanged: (VideoRecordingState) -> Unit,
         onRequestHandled: () -> Unit,
-        showStartToast: Boolean = true
+        showStartToast: Boolean = true,
+        startPaused: Boolean = false
     ): Boolean {
         if (activeRecording != null) {
             onRequestHandled()
@@ -98,7 +100,12 @@ class CameraVideoRecorder(private val context: Context) {
             when (event) {
                 is VideoRecordEvent.Start -> {
                     if (!isCurrentRecording) return@start
-                    recordingState = VideoRecordingState.Recording
+                    recordingState = if (startPaused) {
+                        startedRecording?.pause()
+                        VideoRecordingState.Paused
+                    } else {
+                        VideoRecordingState.Recording
+                    }
                     onRecordingStateChanged(recordingState)
                     onRequestHandled()
                     if (showStartToast) {
@@ -187,10 +194,16 @@ class CameraVideoRecorder(private val context: Context) {
     }
 
     fun stopForCameraSwitch(onRecordingStateChanged: (VideoRecordingState) -> Unit = {}): Boolean {
-        val recording = activeRecording ?: return recordingState == VideoRecordingState.Recording
+        val stateToRestore = if (recordingState == VideoRecordingState.Idle && activeRecording != null) {
+            VideoRecordingState.Recording
+        } else {
+            recordingState
+        }
+        val recording = activeRecording ?: return stateToRestore == VideoRecordingState.Recording ||
+            stateToRestore == VideoRecordingState.Paused
         recording.stop()
         activeRecording = null
-        recordingState = VideoRecordingState.Recording
+        recordingState = stateToRestore
         onRecordingStateChanged(recordingState)
         return true
     }
@@ -215,7 +228,7 @@ class CameraVideoRecorder(private val context: Context) {
             recording.stop()
             activeRecording = null
         }
-        recordingState = VideoRecordingState.Idle
+        recordingState = VideoRecordingState.Finalizing
         onRecordingStateChanged(recordingState)
         onRequestHandled()
         maybeMergeFinalVideo(onRecordingStateChanged)

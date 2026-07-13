@@ -91,7 +91,7 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getVideoHdrSupported(roomCode),
                 repository.getVideoHdrEnabled(roomCode),
                 repository.getVideoQuality(roomCode),
-                repository.getVideoQualitySupportedValues(roomCode),
+                repository.getSupportedVideoQualities(roomCode),
                 repository.getVideoRecordingState(roomCode),
                 repository.getToolbarExpanded(roomCode),
                 repository.getCaptureRequestState(roomCode),

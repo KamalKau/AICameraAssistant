@@ -232,15 +232,17 @@ class FirebaseRoomRepository {
         updateRoomSafely(roomCode, "videoHdrEnabled", videoHdrEnabled)
     }
 
-    suspend fun updateVideoQuality(roomCode: String, videoQuality: String) {
-        updateStringIfChanged(roomCode, "videoQuality", VideoQualityOption.sanitizeFirebaseValue(videoQuality))
+    suspend fun updateVideoQuality(roomCode: String, quality: String) {
+        updateStringIfChanged(roomCode, "videoQuality", VideoQualityOption.sanitizeFirebaseValue(quality))
     }
 
-    suspend fun updateVideoQualitySupportedValues(roomCode: String, supportedValues: List<String>) {
-        updateRoomSafely(
+    suspend fun updateSupportedVideoQualities(roomCode: String, supportedValues: List<String>) {
+        updateStringListIfChanged(
             roomCode,
-            "videoQualitySupportedValues",
-            supportedValues.map { VideoQualityOption.sanitizeFirebaseValue(it) }.distinct()
+            "supportedVideoQualities",
+            supportedValues.mapNotNull(VideoQualityOption::fromFirebaseValueOrNull)
+                .map { it.firebaseValue }
+                .distinct()
         )
     }
 
@@ -431,7 +433,7 @@ class FirebaseRoomRepository {
             "videoHdrSupported" to false,
             "videoHdrEnabled" to false,
             "videoQuality" to VideoQualityOption.default.firebaseValue,
-            "videoQualitySupportedValues" to emptyList<String>(),
+            "supportedVideoQualities" to emptyList<String>(),
             "videoRecordingState" to "idle",
             "videoRecordingUpdatedAt" to 0L,
             "toolbarExpanded" to false,
@@ -742,12 +744,14 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
-    fun getVideoQualitySupportedValues(roomCode: String): Flow<List<String>> = callbackFlow {
+    fun getSupportedVideoQualities(roomCode: String): Flow<List<String>> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                val values = (snapshot?.get("videoQualitySupportedValues") as? List<*>)
+                val values = ((snapshot?.get("supportedVideoQualities")
+                    ?: snapshot?.get("videoQualitySupportedValues")) as? List<*>)
                     ?.mapNotNull { it as? String }
-                    ?.map { VideoQualityOption.sanitizeFirebaseValue(it) }
+                    ?.mapNotNull(VideoQualityOption::fromFirebaseValueOrNull)
+                    ?.map { it.firebaseValue }
                     ?.distinct()
                     .orEmpty()
                 trySend(values)
@@ -1011,6 +1015,19 @@ class FirebaseRoomRepository {
         updateRoomSafely(roomCode, field, value)
     }
 
+    private suspend fun updateStringListIfChanged(
+        roomCode: String,
+        field: String,
+        value: List<String>
+    ) {
+        val docRef = db.collection("rooms").document(roomCode)
+        val snapshot = docRef.get().await()
+        if (!snapshot.exists()) return
+        val current = (snapshot.get(field) as? List<*>)?.mapNotNull { it as? String }.orEmpty()
+        if (current == value) return
+        updateRoomSafely(roomCode, field, value)
+    }
+
     private suspend fun updateRoomSafely(roomCode: String, field: String, value: Any?) {
         updateRoomSafely(roomCode, mapOf(field to value))
     }
@@ -1044,11 +1061,13 @@ private fun VideoRecordingState.toFirebaseValue(): String =
         VideoRecordingState.Idle -> "idle"
         VideoRecordingState.Recording -> "recording"
         VideoRecordingState.Paused -> "paused"
+        VideoRecordingState.Finalizing -> "finalizing"
     }
 
 private fun String?.toVideoRecordingState(): VideoRecordingState =
     when (this?.lowercase()) {
         "recording" -> VideoRecordingState.Recording
         "paused" -> VideoRecordingState.Paused
+        "finalizing" -> VideoRecordingState.Finalizing
         else -> VideoRecordingState.Idle
     }

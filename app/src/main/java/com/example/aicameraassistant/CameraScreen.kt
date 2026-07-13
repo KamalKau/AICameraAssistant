@@ -20,16 +20,16 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.ExperimentalSessionConfig
+import androidx.camera.core.SessionConfig
 import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
-import androidx.camera.view.ExperimentalPreviewViewScreenFlash
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -134,7 +134,7 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.Executors
 import org.webrtc.IceCandidate
 
-@ExperimentalPreviewViewScreenFlash
+@OptIn(ExperimentalSessionConfig::class)
 @Composable
 fun CameraScreen(
     roomCode: String,
@@ -142,10 +142,6 @@ fun CameraScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val videoQualityPrefs = remember(context) {
-        context.getSharedPreferences("video_quality", android.content.Context.MODE_PRIVATE)
-    }
-    var videoQualityRestoreChecked by remember(roomCode) { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -178,7 +174,6 @@ fun CameraScreen(
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseVideoQuality = remoteUiState.videoQuality
-    val firebaseVideoQualitySupportedValues = remoteUiState.videoQualitySupportedValues
     val firebaseVideoRecordingState = remoteUiState.videoRecordingState
     val firebaseToolbarExpanded = remoteUiState.toolbarExpanded
     val firebaseCaptureRequestId = remoteUiState.captureRequestId
@@ -195,9 +190,21 @@ fun CameraScreen(
     val firebaseSessionVersion = remoteUiState.sessionVersion
 
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var pendingLocalLensFacing by remember(roomCode) { mutableStateOf<String?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var boundPreviewUseCases by remember { mutableStateOf<List<Preview>>(emptyList()) }
+    var boundAnalysisUseCases by remember { mutableStateOf<List<ImageAnalysis>>(emptyList()) }
+    var appliedVideoQuality by remember(roomCode) {
+        mutableStateOf(VideoQualityOption.default.firebaseValue)
+    }
+    var pendingLocalVideoQuality by remember(roomCode) { mutableStateOf<String?>(null) }
+    var supportedVideoQualitiesForLens by remember { mutableStateOf<List<String>>(emptyList()) }
+    var capabilitiesLensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var rejectedVideoQualitiesByLens by remember(roomCode) {
+        mutableStateOf<Map<Int, Set<String>>>(emptyMap())
+    }
     var lastGestureZoomPublishMs by remember { mutableLongStateOf(0L) }
     var lastGestureZoomPublishedRatio by remember { mutableFloatStateOf(Float.NaN) }
     var lastGestureExposurePublishMs by remember { mutableLongStateOf(0L) }
@@ -269,14 +276,17 @@ fun CameraScreen(
     var manualExposureProgressOverride by screenViewModel::manualExposureProgressOverride
     var boomerangInProgress by screenViewModel::boomerangInProgress
     var videoRecordingState by screenViewModel::videoRecordingState
+    var activeRecordingTargetRotation by remember { mutableStateOf<Int?>(null) }
     val videoRecordingElapsedMillis = rememberVideoRecordingElapsedMillis(
-        isRecording = videoRecordingState != VideoRecordingState.Idle,
+        isRecording = videoRecordingState == VideoRecordingState.Recording ||
+            videoRecordingState == VideoRecordingState.Paused,
         isPaused = videoRecordingState == VideoRecordingState.Paused
     )
     val videoRecorder = remember(context) { CameraVideoRecorder(context) }
     val videoFrameSource = remember { WebRtcImageFrameSource() }
     var selfieLightVisible by remember { mutableStateOf(false) }
     var restartRecordingAfterCameraBind by remember { mutableStateOf(false) }
+    var restartRecordingPausedAfterCameraBind by remember { mutableStateOf(false) }
     var nightAssistInProgress by remember { mutableStateOf(false) }
     var lastPortraitFacePublishMs by remember { mutableStateOf(0L) }
     var lastPortraitStatus by remember { mutableStateOf("Finding subject...") }
@@ -377,23 +387,67 @@ fun CameraScreen(
                 .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
-    LaunchedEffect(roomCode, firebaseVideoQuality) {
-        if (!videoQualityRestoreChecked) {
-            videoQualityRestoreChecked = true
-            if (firebaseVideoQuality == VideoQualityOption.default.firebaseValue) {
-                val rememberedQuality = videoQualityPrefs.getString(
-                    "selected",
-                    VideoQualityOption.default.firebaseValue
-                )
-                if (rememberedQuality != firebaseVideoQuality) {
-                    launchRoomWrite("remembered video quality restore") {
-                        repository.updateVideoQuality(roomCode, rememberedQuality.orEmpty())
+    fun applyExposureCompensation(targetIndex: Int, source: String) {
+        val activeCamera = camera ?: return
+        val clampedIndex = targetIndex.coerceIn(exposureMinIndex, exposureMaxIndex)
+        val future = activeCamera.cameraControl.setExposureCompensationIndex(clampedIndex)
+        future.addListener(
+            {
+                runCatching { future.get() }
+                    .onSuccess { appliedIndex ->
+                        if (camera === activeCamera) {
+                            exposureIndex = appliedIndex
+                            Log.d(
+                                "CAMERA_EXPOSURE",
+                                "Applied exposure index=$appliedIndex requested=$clampedIndex source=$source"
+                            )
+                        }
                     }
-                    return@LaunchedEffect
+                    .onFailure { error ->
+                        Log.w(
+                            "CAMERA_EXPOSURE",
+                            "Exposure request failed index=$clampedIndex source=$source",
+                            error
+                        )
+                    }
+            },
+            ContextCompat.getMainExecutor(context)
+        )
+    }
+    LaunchedEffect(
+        roomCode,
+        firebaseVideoQuality,
+        pendingLocalVideoQuality,
+        supportedVideoQualitiesForLens,
+        capabilitiesLensFacing,
+        lensFacing,
+        videoRecordingState
+    ) {
+        pendingLocalVideoQuality?.let { pendingQuality ->
+            if (firebaseVideoQuality != pendingQuality) return@LaunchedEffect
+            pendingLocalVideoQuality = null
+        }
+        if (capabilitiesLensFacing != lensFacing) {
+            return@LaunchedEffect
+        }
+        if (videoRecordingState != VideoRecordingState.Idle) {
+            if (firebaseVideoQuality != appliedVideoQuality) {
+                launchRoomWrite("reject video quality change while recording") {
+                    repository.updateVideoQuality(roomCode, appliedVideoQuality)
                 }
             }
+            return@LaunchedEffect
         }
-        videoQualityPrefs.edit().putString("selected", firebaseVideoQuality).apply()
+        val resolved = resolveVideoQuality(firebaseVideoQuality, supportedVideoQualitiesForLens)
+            ?: return@LaunchedEffect
+        if (appliedVideoQuality != resolved.firebaseValue) {
+            appliedVideoQuality = resolved.firebaseValue
+        }
+        if (firebaseVideoQuality != resolved.firebaseValue) {
+            launchRoomWrite("unsupported video quality fallback") {
+                repository.updateVideoQuality(roomCode, resolved.firebaseValue)
+            }
+        }
     }
     val hostTopOverlayUiState = buildHostTopOverlayUiState(
         roomCode = roomCode,
@@ -414,8 +468,8 @@ fun CameraScreen(
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
         videoHdrEnabled = firebaseVideoHdrEnabled,
-        videoQuality = firebaseVideoQuality,
-        videoQualitySupportedValues = firebaseVideoQualitySupportedValues,
+        videoQuality = appliedVideoQuality,
+        videoQualitySupportedValues = supportedVideoQualitiesForLens,
         videoQualityChangeEnabled = videoRecordingState == VideoRecordingState.Idle,
         cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
@@ -433,8 +487,7 @@ fun CameraScreen(
         manualExposureProgressOverride = defaultProgress
         manualExposureInteractionToken = System.currentTimeMillis()
         if (neutralIndex != exposureIndex) {
-            exposureIndex = neutralIndex
-            camera?.cameraControl?.setExposureCompensationIndex(neutralIndex)
+            applyExposureCompensation(neutralIndex, "reset")
         }
         hostCoordinator.updateExposureFromProgress(
             progress = defaultProgress,
@@ -458,10 +511,18 @@ fun CameraScreen(
             }
         },
         onProgressChange = { progress ->
-            manualExposureProgressOverride = progress.coerceIn(0f, 1f)
+            val clampedProgress = progress.coerceIn(0f, 1f)
+            manualExposureProgressOverride = clampedProgress
             manualExposureInteractionToken = System.currentTimeMillis()
+            val targetIndex = (
+                exposureMinIndex +
+                    ((1f - clampedProgress) * (exposureMaxIndex - exposureMinIndex))
+                ).roundToInt().coerceIn(exposureMinIndex, exposureMaxIndex)
+            if (targetIndex != exposureIndex) {
+                applyExposureCompensation(targetIndex, "host toolbar")
+            }
             hostCoordinator.updateExposureFromProgress(
-                progress = progress,
+                progress = clampedProgress,
                 exposureMinIndex = exposureMinIndex,
                 exposureMaxIndex = exposureMaxIndex,
                 currentExposureIndex = firebaseExposureIndex,
@@ -501,7 +562,32 @@ fun CameraScreen(
         },
         onLensClick = {
             resetExposureToNeutral()
-            hostCoordinator.switchLens(firebaseLensFacing)
+            val nextFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                "front"
+            } else {
+                "back"
+            }
+            Log.i("CAMERA_BIND", "Applying local lens switch to $nextFacing")
+            pendingLocalLensFacing = nextFacing
+            lensFacing = if (nextFacing == "front") {
+                CameraSelector.LENS_FACING_FRONT
+            } else {
+                CameraSelector.LENS_FACING_BACK
+            }
+            scope.launch {
+                runCatching { repository.updateLensFacing(roomCode, nextFacing) }
+                    .onFailure { error ->
+                        Log.w("CAMERA_BIND", "Lens synchronization failed", error)
+                        if (pendingLocalLensFacing == nextFacing) {
+                            pendingLocalLensFacing = null
+                            lensFacing = if (firebaseLensFacing == "front") {
+                                CameraSelector.LENS_FACING_FRONT
+                            } else {
+                                CameraSelector.LENS_FACING_BACK
+                            }
+                        }
+                    }
+            }
         },
         onGridClick = {
             hostCoordinator.updateGridEnabled(firebaseGridEnabled)
@@ -518,10 +604,21 @@ fun CameraScreen(
         onVideoQualitySelected = { option ->
             if (videoRecordingState != VideoRecordingState.Idle) {
                 Toast.makeText(context, "Stop recording to change video quality.", Toast.LENGTH_SHORT).show()
-            } else if (option.firebaseValue != firebaseVideoQuality) {
-                videoQualityPrefs.edit().putString("selected", option.firebaseValue).apply()
-                launchRoomWrite("video quality update") {
-                    repository.updateVideoQuality(roomCode, option.firebaseValue)
+            } else if (
+                option.firebaseValue in supportedVideoQualitiesForLens &&
+                option.firebaseValue != appliedVideoQuality
+            ) {
+                Log.i("VideoQuality", "Applying local selection ${option.firebaseValue}")
+                pendingLocalVideoQuality = option.firebaseValue
+                appliedVideoQuality = option.firebaseValue
+                scope.launch {
+                    runCatching { repository.updateVideoQuality(roomCode, option.firebaseValue) }
+                        .onFailure { error ->
+                            Log.w("VideoQuality", "Local video quality update failed", error)
+                            if (pendingLocalVideoQuality == option.firebaseValue) {
+                                pendingLocalVideoQuality = null
+                            }
+                        }
                 }
             }
         },
@@ -657,8 +754,7 @@ fun CameraScreen(
         val previousExposureIndex = exposureIndex
 
         if (targetIndex != previousExposureIndex) {
-            exposureIndex = targetIndex
-            camera?.cameraControl?.setExposureCompensationIndex(targetIndex)
+            applyExposureCompensation(targetIndex, "focus slider")
         }
 
         val now = System.currentTimeMillis()
@@ -1071,7 +1167,11 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(firebaseLensFacing) {
+    LaunchedEffect(firebaseLensFacing, pendingLocalLensFacing) {
+        pendingLocalLensFacing?.let { pendingFacing ->
+            if (firebaseLensFacing != pendingFacing) return@LaunchedEffect
+            pendingLocalLensFacing = null
+        }
         lensFacing = if (firebaseLensFacing == "front") {
             CameraSelector.LENS_FACING_FRONT
         } else {
@@ -1079,7 +1179,7 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(firebaseLensFacing) {
+    LaunchedEffect(lensFacing) {
         if (hasSeenLensTransitionKey) {
             lensFadeAlpha.snapTo(0.58f)
             lensFadeAlpha.animateTo(0f, animationSpec = tween(durationMillis = 260))
@@ -1149,7 +1249,7 @@ fun CameraScreen(
 
     fun applyCaptureTargetRotation(
         imageCaptureOverride: ImageCapture? = imageCapture,
-        videoCaptureOverride: VideoCapture<Recorder>? = videoCapture
+        videoCaptureOverride: VideoCapture<Recorder>? = null
     ): Int {
         val targetRotation = displayRotation
         imageCaptureOverride?.targetRotation = targetRotation
@@ -1432,13 +1532,18 @@ fun CameraScreen(
 
     fun updateVideoRecordingState(state: VideoRecordingState) {
         videoRecordingState = state
+        if (state == VideoRecordingState.Idle) {
+            activeRecordingTargetRotation = null
+            videoCapture?.targetRotation = displayRotation
+        }
         launchRoomWrite("video recording state publish") {
             repository.updateVideoRecordingState(roomCode, state)
         }
     }
 
     fun updateVideoCaptureTargetRotation() {
-        val targetRotation = applyCaptureTargetRotation()
+        val targetRotation = activeRecordingTargetRotation ?: displayRotation
+        activeRecordingTargetRotation = targetRotation
         videoCapture?.targetRotation = targetRotation
     }
 
@@ -1646,9 +1751,20 @@ fun CameraScreen(
         previewView.setScreenFlashWindow(activity?.window)
     }
 
-    LaunchedEffect(displayRotation, imageCapture, videoCapture) {
+    LaunchedEffect(
+        displayRotation,
+        imageCapture,
+        videoCapture,
+        videoRecordingState,
+        boundPreviewUseCases,
+        boundAnalysisUseCases
+    ) {
+        boundPreviewUseCases.forEach { it.targetRotation = displayRotation }
+        boundAnalysisUseCases.forEach { it.targetRotation = displayRotation }
         imageCapture?.targetRotation = displayRotation
-        videoCapture?.targetRotation = displayRotation
+        if (videoRecordingState == VideoRecordingState.Idle) {
+            videoCapture?.targetRotation = displayRotation
+        }
     }
 
     LaunchedEffect(
@@ -1656,16 +1772,21 @@ fun CameraScreen(
         isStreaming,
         firebaseCameraMode,
         firebaseVideoHdrEnabled,
-        firebaseVideoQuality,
-        firebaseSceneDetectionEnabled,
-        configuration.orientation,
-        displayRotation
+        appliedVideoQuality,
+        firebaseSceneDetectionEnabled
     ) {
         cameraPreviewReady = false
         cameraStartupFailed = false
+        boundPreviewUseCases = emptyList()
+        boundAnalysisUseCases = emptyList()
+        supportedVideoQualitiesForLens = emptyList()
         val shouldRestartRecordingAfterBind =
-            videoRecorder.isRecording && firebaseCameraMode == "video"
+            videoRecorder.isRecording &&
+                videoRecorder.state != VideoRecordingState.Finalizing &&
+                firebaseCameraMode == "video"
         restartRecordingAfterCameraBind = shouldRestartRecordingAfterBind
+        restartRecordingPausedAfterCameraBind =
+            shouldRestartRecordingAfterBind && videoRecorder.state == VideoRecordingState.Paused
         if (shouldRestartRecordingAfterBind) {
             videoRecorder.stopForCameraSwitch(onRecordingStateChanged = ::updateVideoRecordingState)
         } else {
@@ -1677,6 +1798,7 @@ fun CameraScreen(
         } catch (_: Exception) {
             cameraStartupFailed = true
             restartRecordingAfterCameraBind = false
+            restartRecordingPausedAfterCameraBind = false
             if (shouldRestartRecordingAfterBind) {
                 updateVideoRecordingState(VideoRecordingState.Idle)
             }
@@ -1688,7 +1810,7 @@ fun CameraScreen(
         } else {
             getResolutionForCurrentOrientation(context)
         }
-        val targetRotation = displayRotation
+        val targetRotation = activeRecordingTargetRotation ?: displayRotation
 
         val resolutionSelector = ResolutionSelector.Builder()
             .setResolutionStrategy(
@@ -1732,18 +1854,36 @@ fun CameraScreen(
 
             val supportedDynamicRanges = Recorder.getVideoCapabilities(firstCamera.cameraInfo)
                 .supportedDynamicRanges
-            val supportedVideoQualities = supportedVideoQualityValues(firstCamera.cameraInfo)
-            val selectedVideoQuality = VideoQualityOption.fromFirebaseValue(firebaseVideoQuality)
-            val resolvedVideoQuality =
-                if (supportedVideoQualities.contains(selectedVideoQuality.firebaseValue)) {
-                    selectedVideoQuality
-                } else if (supportedVideoQualities.contains(VideoQualityOption.default.firebaseValue)) {
-                    VideoQualityOption.default
-                } else {
-                    supportedVideoQualities.firstOrNull()
-                        ?.let { VideoQualityOption.fromFirebaseValue(it) }
-                        ?: VideoQualityOption.default
+            val rejectedVideoQualities = rejectedVideoQualitiesByLens[lensFacing].orEmpty()
+            val supportedVideoQualities = VideoQualityCapabilities
+                .supportedValues(firstCamera.cameraInfo)
+                .filterNot(rejectedVideoQualities::contains)
+            capabilitiesLensFacing = lensFacing
+            supportedVideoQualitiesForLens = supportedVideoQualities
+            val resolvedVideoQuality = resolveVideoQuality(
+                appliedVideoQuality,
+                supportedVideoQualities
+            ) ?: VideoQualityOption.default
+            if (
+                shouldRestartRecordingAfterBind &&
+                resolvedVideoQuality.firebaseValue != appliedVideoQuality
+            ) {
+                Log.i(
+                    "VideoQuality",
+                    "Lens switch requires ${appliedVideoQuality} -> " +
+                        resolvedVideoQuality.firebaseValue
+                )
+                appliedVideoQuality = resolvedVideoQuality.firebaseValue
+                launchRoomWrite("lens video quality fallback") {
+                    repository.updateVideoQuality(roomCode, resolvedVideoQuality.firebaseValue)
                 }
+                return@LaunchedEffect
+            }
+            Log.i(
+                "VideoQuality",
+                "Binding lens=$lensFacing requested=$appliedVideoQuality " +
+                    "resolved=${resolvedVideoQuality.firebaseValue} supported=$supportedVideoQualities"
+            )
             val videoHdrSupportedForLens = supportedDynamicRanges.any { dynamicRange ->
                 dynamicRange != DynamicRange.SDR &&
                     dynamicRange.bitDepth == DynamicRange.BIT_DEPTH_10_BIT
@@ -1756,25 +1896,33 @@ fun CameraScreen(
                     repository.updateVideoHdrEnabled(roomCode, false)
                 }
             }
-            launchRoomWrite("video quality support publish") {
-                repository.updateVideoQualitySupportedValues(roomCode, supportedVideoQualities)
-            }
-
             fun buildVideoCapture(dynamicRange: DynamicRange): VideoCapture<Recorder> {
-                val cameraXQuality = resolvedVideoQuality.cameraXQuality() ?: Quality.FHD
-                val recorder = Recorder.Builder()
-                    .setQualitySelector(
-                        QualitySelector.fromOrderedList(
-                            listOf(cameraXQuality),
-                            FallbackStrategy.higherQualityOrLowerThan(cameraXQuality)
-                        )
-                    )
-                    .build()
-                return VideoCapture.Builder(recorder)
+                val isEightK = resolvedVideoQuality == VideoQualityOption.Uhd8K30
+                val cameraXQuality = resolvedVideoQuality.cameraXQuality() ?: Quality.UHD
+                val recorderBuilder = Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(cameraXQuality))
+                if (isEightK) {
+                    VideoQualityCapabilities.eightKEncodingBitRate(firstCamera.cameraInfo)
+                        ?.let(recorderBuilder::setTargetVideoEncodingBitRate)
+                }
+                val recorder = recorderBuilder.build()
+                val videoCaptureBuilder = VideoCapture.Builder(recorder)
                     .setDynamicRange(dynamicRange)
-                    .setTargetFrameRate(resolvedVideoQuality.targetFrameRateRange())
                     .setTargetRotation(targetRotation)
-                    .build()
+                if (isEightK) {
+                    videoCaptureBuilder.setHighResolutionDisabled(false)
+                    videoCaptureBuilder.setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    Size(7680, 4320),
+                                    ResolutionStrategy.FALLBACK_RULE_NONE
+                                )
+                            )
+                            .build()
+                    )
+                }
+                return videoCaptureBuilder.build()
             }
             var activeVideoCapture = buildVideoCapture(
                 if (enableVideoHdrForBind) {
@@ -1982,12 +2130,22 @@ fun CameraScreen(
                 finalUseCases.add(activeVideoCapture)
             }
 
-            fun bindFinalUseCases(useCases: List<UseCase>): Camera =
-                cameraProvider.bindToLifecycle(
+            // CameraX 1.4 treated VideoCapture.setTargetFrameRate() as a hint and could resolve
+            // a [30, 60] camera range back to the OEM profile's default 30fps. A session-level
+            // frame rate is deterministic: binding fails instead of silently recording 30fps.
+            cameraProvider.unbindAll()
+            fun bindFinalUseCases(useCases: List<UseCase>): Camera {
+                val sessionConfig = SessionConfig.Builder(useCases).apply {
+                    if (firebaseCameraMode == "video" && useCases.contains(activeVideoCapture)) {
+                        setFrameRateRange(resolvedVideoQuality.targetFrameRateRange())
+                    }
+                }.build()
+                return cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
-                    *useCases.toTypedArray()
+                    sessionConfig
                 )
+            }
 
             val finalCamera = try {
                 bindFinalUseCases(finalUseCases).also {
@@ -2092,6 +2250,43 @@ fun CameraScreen(
             camera = finalCamera
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null
+            boundPreviewUseCases = finalUseCases.filterIsInstance<Preview>()
+            boundAnalysisUseCases = finalUseCases.filterIsInstance<ImageAnalysis>()
+            val selectedBindFailed = firebaseCameraMode == "video" && videoCapture == null
+            val boundVideoQualities = if (selectedBindFailed) {
+                Log.w(
+                    "VideoQuality",
+                    "Rejecting ${resolvedVideoQuality.firebaseValue}: VideoCapture failed full use-case bind"
+                )
+                rejectedVideoQualitiesByLens = rejectedVideoQualitiesByLens + (
+                    lensFacing to (
+                        rejectedVideoQualitiesByLens[lensFacing].orEmpty() +
+                            resolvedVideoQuality.firebaseValue
+                        )
+                    )
+                supportedVideoQualities - resolvedVideoQuality.firebaseValue
+            } else {
+                supportedVideoQualities
+            }
+            supportedVideoQualitiesForLens = boundVideoQualities
+            launchRoomWrite("video quality support republish after bind") {
+                repository.updateSupportedVideoQualities(roomCode, boundVideoQualities)
+            }
+            if (selectedBindFailed) {
+                resolveVideoQuality(resolvedVideoQuality.firebaseValue, boundVideoQualities)
+                    ?.takeIf { it.firebaseValue != appliedVideoQuality }
+                    ?.let { fallback ->
+                        Log.w(
+                            "VideoQuality",
+                            "Falling back from ${resolvedVideoQuality.firebaseValue} " +
+                                "to ${fallback.firebaseValue}"
+                        )
+                        appliedVideoQuality = fallback.firebaseValue
+                        launchRoomWrite("video quality bind fallback") {
+                            repository.updateVideoQuality(roomCode, fallback.firebaseValue)
+                        }
+                    }
+            }
             publishExposureState(finalCamera)
             if (focusLocked) {
                 focusPoint?.let { lockedPoint ->
@@ -2110,9 +2305,11 @@ fun CameraScreen(
                     videoCapture = videoCapture,
                     onRecordingStateChanged = ::updateVideoRecordingState,
                     onRequestHandled = {},
-                    showStartToast = false
+                    showStartToast = false,
+                    startPaused = restartRecordingPausedAfterCameraBind
                 )
                 restartRecordingAfterCameraBind = false
+                restartRecordingPausedAfterCameraBind = false
                 if (!restarted) {
                     updateVideoRecordingState(VideoRecordingState.Idle)
                     Toast.makeText(context, "Video is not ready", Toast.LENGTH_SHORT).show()
@@ -2124,6 +2321,7 @@ fun CameraScreen(
             videoCapture = null
             cameraStartupFailed = true
             restartRecordingAfterCameraBind = false
+            restartRecordingPausedAfterCameraBind = false
             if (shouldRestartRecordingAfterBind) {
                 updateVideoRecordingState(VideoRecordingState.Idle)
             }
@@ -2195,12 +2393,7 @@ fun CameraScreen(
             maxIndex = exposureMaxIndex
         )
         if (targetExposure != exposureIndex) {
-            exposureIndex = targetExposure
-            runCatching {
-                currentCamera.cameraControl.setExposureCompensationIndex(targetExposure)
-            }.onFailure {
-                Log.w("CAMERA_EXPOSURE", "Exposure compensation failed", it)
-            }
+            applyExposureCompensation(targetExposure, "firebase synchronization")
             if (!firebaseNightModeEnabled) {
                 launchRoomWrite("exposure state publish") {
                     repository.updateExposureState(
@@ -2737,7 +2930,11 @@ fun CameraScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HostTopOverlay(state = hostTopOverlayUiState, actions = hostTopOverlayActions)
-            if (firebaseCameraMode == "video" && videoRecordingState != VideoRecordingState.Idle) {
+            if (
+                firebaseCameraMode == "video" &&
+                (videoRecordingState == VideoRecordingState.Recording ||
+                    videoRecordingState == VideoRecordingState.Paused)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center
@@ -2761,6 +2958,7 @@ fun CameraScreen(
         CameraToolRail(
             state = hostToolRailUiState,
             actions = hostToolRailActions,
+            showVideoQuality = true,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 16.dp)

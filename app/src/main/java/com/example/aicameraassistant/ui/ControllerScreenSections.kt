@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -196,7 +197,10 @@ fun ControllerBottomControls(
 
             VideoStopButton(onClick = actions.onVideoStop)
 
-            Spacer(modifier = Modifier.width(32.dp))
+            LensFlipButton(
+                label = state.lensLabel,
+                onClick = actions.onLensClick
+            )
         }
     } else {
         Row(
@@ -205,9 +209,10 @@ fun ControllerBottomControls(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (state.isVideoMode) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.offset(x = (-8).dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     VideoQualityButton(
                         selectedQuality = state.videoQuality,
@@ -435,75 +440,6 @@ private fun VideoStopButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun VideoQualityButton(
-    selectedQuality: VideoQualityOption,
-    supportedValues: List<String>,
-    changeEnabled: Boolean,
-    onSelected: (VideoQualityOption) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val supportedSet = supportedValues.toSet()
-
-    Box {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.46f))
-                .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
-                .clickable { expanded = true },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = selectedQuality.compactLabel,
-                color = Color.White.copy(alpha = 0.88f),
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(Color(0xFF1F1F1F))
-        ) {
-            VideoQualityOption.menuOrder.forEach { option ->
-                val supported = supportedSet.contains(option.firebaseValue)
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(
-                                text = option.menuLabel,
-                                color = if (supported && changeEnabled) {
-                                    Color.White
-                                } else {
-                                    Color.White.copy(alpha = 0.42f)
-                                },
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            if (!supported) {
-                                Text(
-                                    text = "Not supported on this device",
-                                    color = Color.White.copy(alpha = 0.46f),
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                    },
-                    enabled = supported,
-                    onClick = {
-                        expanded = false
-                        onSelected(option)
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun VideoHdrButton(
     supported: Boolean,
     enabled: Boolean,
@@ -511,7 +447,7 @@ private fun VideoHdrButton(
 ) {
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(36.dp)
             .clip(CircleShape)
             .background(
                 when {
@@ -521,7 +457,7 @@ private fun VideoHdrButton(
                 }
             )
             .border(
-                width = if (enabled) 1.3.dp else 1.dp,
+                width = if (enabled) 1.dp else 0.8.dp,
                 color = when {
                     !supported -> Color.White.copy(alpha = 0.10f)
                     enabled -> Color(0xFFFFD54F)

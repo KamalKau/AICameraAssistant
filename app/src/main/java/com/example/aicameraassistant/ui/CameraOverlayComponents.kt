@@ -328,7 +328,7 @@ fun SharedFocusExposureHandleSamsung(
                             val progressChange = currentOnProgressChange ?: return@detectDragGestures
                             change.consume()
                             val nextProgress =
-                                (dragProgress + (dragAmount.y / (trackHeightPx * 6.5f)))
+                                (dragProgress + (dragAmount.y / trackHeightPx))
                                     .coerceIn(0f, 1f)
                             if (kotlin.math.abs(nextProgress - dragProgress) < 0.0025f) {
                                 return@detectDragGestures

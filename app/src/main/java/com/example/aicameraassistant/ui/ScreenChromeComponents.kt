@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.DarkMode
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -53,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Canvas
 import kotlin.math.roundToInt
+import com.example.aicameraassistant.VideoQualityOption
 
 @Composable
 fun SessionStatusChip(
@@ -376,7 +381,8 @@ fun CameraToolButton(
 fun CameraToolRail(
     state: CameraToolRailUiState,
     actions: CameraToolRailActions,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showVideoQuality: Boolean = false
 ) {
     val labelsExpanded = state.toolbarExpanded
 
@@ -385,6 +391,15 @@ fun CameraToolRail(
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(if (labelsExpanded) 9.dp else 7.dp)
     ) {
+        if (state.videoMode && showVideoQuality) {
+            VideoQualityButton(
+                selectedQuality = state.videoQuality,
+                supportedValues = state.videoQualitySupportedValues,
+                changeEnabled = state.videoQualityChangeEnabled,
+                showLabel = labelsExpanded,
+                onSelected = actions.onVideoQualitySelected
+            )
+        }
         CameraToolButton(
             icon = state.flashIcon,
             label = state.flashLabel,
@@ -533,13 +548,13 @@ fun ManualExposurePanel(
                             ?: downEvent.changes.firstOrNull()
                             ?: return@awaitEachGesture
                         val width = size.width.toFloat().coerceAtLeast(1f)
-                        val startX = down.position.x
-                        val dragStartSlopPx = 5.dp.toPx()
                         fun progressFor(x: Float): Float = (x / width).coerceIn(0f, 1f)
 
                         isDragging = true
                         onDragStart()
-                        var nextProgress = dragProgress
+                        var nextProgress = progressFor(down.position.x)
+                        dragProgress = nextProgress
+                        onProgressChange(nextProgress)
 
                         try {
                             while (true) {
@@ -550,10 +565,6 @@ fun ManualExposurePanel(
 
                                 if (!change.pressed) {
                                     break
-                                }
-
-                                if (kotlin.math.abs(change.position.x - startX) < dragStartSlopPx) {
-                                    continue
                                 }
 
                                 change.consume()
@@ -745,6 +756,131 @@ fun ManualExposureSlider(
 }
 
 @Composable
+fun VideoQualityButton(
+    selectedQuality: VideoQualityOption,
+    supportedValues: List<String>,
+    changeEnabled: Boolean,
+    showLabel: Boolean = false,
+    onSelected: (VideoQualityOption) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val supportedOptions = VideoQualityOption.menuOrder.filter {
+        it.firebaseValue in supportedValues
+    }
+    val accentColor by animateColorAsState(
+        targetValue = if (expanded) Color(0xFF68D8FF) else Color(0xFF9BE7FF),
+        animationSpec = tween(180),
+        label = "video_quality_accent"
+    )
+    val resolution = selectedQuality.compactLabel.substringBeforeLast(' ')
+    val fps = selectedQuality.compactLabel.substringAfterLast(' ')
+
+    Box {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.width(if (showLabel) 104.dp else 36.dp)
+        ) {
+            if (showLabel) {
+                Text(
+                    text = "$resolution ${fps}fps",
+                    color = if (changeEnabled) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    modifier = Modifier.width(64.dp)
+                )
+            }
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                CompactTextToolButton(
+                    text = resolution,
+                    enabled = changeEnabled,
+                    clickEnabled = true,
+                    selected = expanded,
+                    onClick = {
+                        if (changeEnabled) expanded = true else onSelected(selectedQuality)
+                    }
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .width(218.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xF51A2027))
+        ) {
+            Text(
+                text = "VIDEO QUALITY",
+                color = Color.White.copy(alpha = 0.46f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp,
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 5.dp)
+            )
+            supportedOptions.forEach { option ->
+                val selected = option == selectedQuality
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(1.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = option.compactLabel.substringBeforeLast(' '),
+                                    color = if (selected) accentColor else Color.White.copy(alpha = 0.92f),
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${option.frameRate} FPS",
+                                    color = Color.White.copy(alpha = 0.48f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            if (selected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .background(accentColor.copy(alpha = 0.16f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = accentColor,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelected(option)
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (selected) accentColor.copy(alpha = 0.09f) else Color.Transparent
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun HdrToggleButton(
     supported: Boolean,
     isActive: Boolean,
@@ -752,7 +888,8 @@ private fun HdrToggleButton(
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.width(104.dp)
     ) {
         Text(
             text = if (isActive) "HDR On" else "HDR",
@@ -763,31 +900,47 @@ private fun HdrToggleButton(
             maxLines = 1,
             modifier = Modifier.width(64.dp)
         )
-        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 30.dp) {
-            Box(
-                modifier = Modifier
-                    .size(30.dp)
-                    .background(
-                        if (isActive) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f),
-                        CircleShape
-                    )
-                    .border(
-                        width = if (isActive) 1.dp else 0.8.dp,
-                        color = if (isActive) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f),
-                        shape = CircleShape
-                    )
-                    .clickable(enabled = supported, onClick = onClick),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "HDR",
-                    color = if (supported) Color.White else Color.White.copy(alpha = 0.35f),
-                    fontSize = 7.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-            }
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+            CompactTextToolButton(
+                text = "HDR",
+                enabled = supported,
+                selected = isActive,
+                onClick = onClick
+            )
         }
+    }
+}
+
+@Composable
+private fun CompactTextToolButton(
+    text: String,
+    enabled: Boolean,
+    clickEnabled: Boolean = enabled,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(
+                if (selected) Color.White.copy(alpha = 0.18f) else Color.Black.copy(alpha = 0.3f)
+            )
+            .border(
+                width = if (selected) 1.dp else 0.8.dp,
+                color = if (selected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f),
+                shape = CircleShape
+            )
+            .clickable(enabled = clickEnabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 

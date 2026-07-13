@@ -114,10 +114,6 @@ fun WaitingForApprovalScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val videoQualityPrefs = remember(context) {
-        context.getSharedPreferences("video_quality", Context.MODE_PRIVATE)
-    }
-    var videoQualityRestoreChecked by remember(roomCode) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val screenViewModel: ControllerScreenViewModel = viewModel()
     val haptic = LocalHapticFeedback.current
@@ -344,24 +340,6 @@ fun WaitingForApprovalScreen(
                 .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
-    LaunchedEffect(roomCode, firebaseVideoQuality) {
-        if (!videoQualityRestoreChecked) {
-            videoQualityRestoreChecked = true
-            if (firebaseVideoQuality == VideoQualityOption.default.firebaseValue) {
-                val rememberedQuality = videoQualityPrefs.getString(
-                    "selected",
-                    VideoQualityOption.default.firebaseValue
-                )
-                if (rememberedQuality != firebaseVideoQuality) {
-                    launchRoomWrite("remembered video quality restore") {
-                        repository.updateVideoQuality(roomCode, rememberedQuality.orEmpty())
-                    }
-                    return@LaunchedEffect
-                }
-            }
-        }
-        videoQualityPrefs.edit().putString("selected", firebaseVideoQuality).apply()
-    }
     val controllerToolRailUiState = buildCameraToolRailUiState(
         flashSupported = firebaseFlashSupported,
         flashMode = firebaseFlashMode,
@@ -473,8 +451,10 @@ fun WaitingForApprovalScreen(
         onVideoQualitySelected = { option ->
             if (videoRecordingInProgress) {
                 Toast.makeText(context, "Stop recording to change video quality.", Toast.LENGTH_SHORT).show()
-            } else if (option.firebaseValue != firebaseVideoQuality) {
-                videoQualityPrefs.edit().putString("selected", option.firebaseValue).apply()
+            } else if (
+                option.firebaseValue in firebaseVideoQualitySupportedValues &&
+                option.firebaseValue != firebaseVideoQuality
+            ) {
                 launchRoomWrite("video quality update") {
                     repository.updateVideoQuality(roomCode, option.firebaseValue)
                 }
