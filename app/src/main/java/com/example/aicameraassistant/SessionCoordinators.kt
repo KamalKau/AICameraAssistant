@@ -17,6 +17,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.webrtc.VideoTrack
@@ -26,9 +28,11 @@ private class RoomWriteDispatcher(
     private val scope: CoroutineScope,
     private val tag: String = "SESSION_END"
 ) {
+    private val writeMutex = Mutex()
+
     fun launch(operation: String, block: suspend () -> Unit) {
         scope.launch {
-            runCatching { block() }
+            runCatching { writeMutex.withLock { block() } }
                 .onFailure { Log.w(tag, "Room write failed during $operation", it) }
         }
     }
@@ -43,14 +47,16 @@ private class LocalSessionShutdown(
     fun run(
         setIsEndingSession: (Boolean) -> Unit,
         exitScreen: Boolean,
+        clearAllConnections: Boolean = true,
         cleanup: () -> Unit = {}
     ) {
         if (shutdownStarted) return
         shutdownStarted = true
         setIsEndingSession(true)
         runCatching { cleanup() }
-        runCatching { WebRtcSessionManager.stopLocalCamera() }
-        runCatching { WebRtcSessionManager.clearConnections() }
+        if (clearAllConnections) {
+            runCatching { WebRtcSessionManager.clearConnections() }
+        }
 
         if (exitScreen) {
             scope.launch {
@@ -214,6 +220,10 @@ class ControllerSessionCoordinator(
     private val roomWrites = RoomWriteDispatcher(scope)
     private val localShutdown = LocalSessionShutdown(scope, onExit)
 
+    private suspend fun sendCommand(type: String, vararg values: Pair<String, Any?>) {
+        repository.sendReliableCommand(roomCode, type, mapOf(*values))
+    }
+
     fun shutdownSession(
         isEndingSession: Boolean,
         setIsEndingSession: (Boolean) -> Unit,
@@ -225,6 +235,7 @@ class ControllerSessionCoordinator(
         localShutdown.run(
             setIsEndingSession = setIsEndingSession,
             exitScreen = exitScreen,
+            clearAllConnections = false,
             cleanup = performCleanup
         )
     }
@@ -245,6 +256,7 @@ class ControllerSessionCoordinator(
         localShutdown.run(
             setIsEndingSession = setIsEndingSession,
             exitScreen = true,
+            clearAllConnections = false,
             cleanup = performCleanup
         )
     }
@@ -258,13 +270,16 @@ class ControllerSessionCoordinator(
             else -> "off"
         }
         roomWrites.launch("flash update") {
-            repository.updateFlashMode(roomCode, nextFlashMode)
+            sendCommand("flash", "flashMode" to nextFlashMode)
         }
     }
 
     fun switchLens(currentFacing: String) {
         roomWrites.launch("lens switch") {
-            repository.updateLensFacing(roomCode, if (currentFacing == "back") "front" else "back")
+            sendCommand(
+                "camera_flip",
+                "lensFacing" to if (currentFacing == "back") "front" else "back"
+            )
         }
     }
 
@@ -286,20 +301,20 @@ class ControllerSessionCoordinator(
 
     fun updateNightModeEnabled(currentEnabled: Boolean) {
         roomWrites.launch("night mode update") {
-            repository.updateNightModeEnabled(roomCode, !currentEnabled)
+            sendCommand("night_mode", "nightModeEnabled" to !currentEnabled)
         }
     }
 
     fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
         roomWrites.launch("scene detection update") {
-            repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
+            sendCommand("smart_framing", "sceneDetectionEnabled" to !currentEnabled)
         }
     }
 
     fun updateVideoHdrEnabled(currentEnabled: Boolean, supported: Boolean) {
         if (!supported) return
         roomWrites.launch("video HDR update") {
-            repository.updateVideoHdrEnabled(roomCode, !currentEnabled)
+            sendCommand("hdr", "videoHdrEnabled" to !currentEnabled)
         }
     }
 
@@ -324,7 +339,7 @@ class ControllerSessionCoordinator(
 
         onLastSentZoomChanged(clampedZoom)
         roomWrites.launch("zoom update") {
-            repository.updateZoomLevel(roomCode, clampedZoom)
+            sendCommand("zoom", "zoomLevel" to clampedZoom)
         }
     }
 
@@ -424,12 +439,12 @@ class ControllerSessionCoordinator(
 
         onFocusUiUpdated(clampedPoint, lockFocus)
         roomWrites.launch("focus request") {
-            repository.updateFocusRequest(
-                roomCode = roomCode,
-                normalizedX = normalizedX.toDouble(),
-                normalizedY = normalizedY.toDouble(),
-                requestId = maxOf(System.currentTimeMillis(), currentFocusRequestId + 1L),
-                lockEnabled = lockFocus
+            sendCommand(
+                "focus",
+                "focusX" to normalizedX.toDouble(),
+                "focusY" to normalizedY.toDouble(),
+                "focusRequestId" to maxOf(System.currentTimeMillis(), currentFocusRequestId + 1L),
+                "focusLockEnabled" to lockFocus
             )
         }
     }
@@ -458,7 +473,7 @@ class ControllerSessionCoordinator(
         lastRequestedExposureIndex = targetIndex
 
         roomWrites.launch("exposure update") {
-            repository.updateExposureIndex(roomCode, targetIndex)
+            sendCommand("exposure", "exposureIndex" to targetIndex.toLong())
         }
     }
 }

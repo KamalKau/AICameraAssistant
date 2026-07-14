@@ -74,6 +74,7 @@ data class SceneDetectionState(
 )
 
 data class ControllerRemoteUiState(
+    val roomCode: String = "",
     val roomStatus: String = "waiting",
     val connectionState: AppConnectionState = AppConnectionState.IDLE,
     val lensFacing: String = "back",

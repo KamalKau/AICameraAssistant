@@ -24,7 +24,22 @@ enum class AppConnectionState {
     DISCONNECTED
 }
 
+data class WebRtcDiagnostics(
+    val connectionState: AppConnectionState = AppConnectionState.IDLE,
+    val iceState: String = "NEW",
+    val signalingState: String = "STABLE",
+    val reconnectAttempts: Int = 0,
+    val averageLatencyMs: Double = 0.0,
+    val packetLossPercent: Double = 0.0,
+    val bitrateBps: Long = 0L,
+    val framesPerSecond: Double = 0.0
+)
+
 object WebRtcSessionManager {
+    private data class ControllerSession(
+        val roomCode: String,
+        val generation: Long
+    )
     private data class ConnectionHealth(
         var hasEverConnected: Boolean = false,
         var lastConnectedAtMs: Long = 0L,
@@ -84,6 +99,26 @@ object WebRtcSessionManager {
     private var controllerWeakNetworkJob: Job? = null
     private val cameraConnectionHealth = ConnectionHealth()
     private val controllerConnectionHealth = ConnectionHealth()
+    private var cameraIceCandidateHandler: (IceCandidate) -> Unit = {}
+    private var controllerIceCandidateHandler: (IceCandidate) -> Unit = {}
+    private var controllerRemoteTrackHandler: (VideoTrack) -> Unit = {}
+    private var cameraPeerGeneration = 0L
+    private var controllerPeerGeneration = 0L
+    private var cameraRtcSessionId: String? = null
+    private var controllerRtcSessionId: String? = null
+    private val cameraRemoteCandidateKeys = mutableSetOf<String>()
+    private val controllerRemoteCandidateKeys = mutableSetOf<String>()
+    private var cameraSessionOwner: String? = null
+    private var controllerSessionOwner: String? = null
+    private var controllerSessionCounter = 0L
+    private var activeControllerSession: ControllerSession? = null
+    private var controllerPeerOwner: ControllerSession? = null
+    private val _diagnostics = MutableStateFlow(WebRtcDiagnostics())
+    val diagnostics: StateFlow<WebRtcDiagnostics> = _diagnostics.asStateFlow()
+    private var statsJob: Job? = null
+    private var previousStatsAtMs = 0L
+    private var previousBytesSent = 0L
+    private var previousFramesSent = 0L
 
     @Synchronized
     fun initialize(context: Context) {
@@ -285,6 +320,7 @@ object WebRtcSessionManager {
             captureRotationDegrees = 0
             imageFrameSourceActive = true
             attachLocalTracksToCameraPeer()
+            startStatsMonitoring()
             Log.d("WEBRTC_LOG", "Image WebRTC source started with size: ${captureWidth}x${captureHeight}")
             vSource
         } catch (t: Throwable) {
@@ -335,11 +371,22 @@ object WebRtcSessionManager {
 
 
     @Synchronized
-    fun createCameraPeerConnection(onIceCandidate: (IceCandidate) -> Unit): PeerConnection? {
+    fun createCameraPeerConnection(
+        onIceCandidate: (IceCandidate) -> Unit,
+        reuseExisting: Boolean = false
+    ): PeerConnection? {
         val f = factory ?: return null
+        cameraIceCandidateHandler = onIceCandidate
+        if (reuseExisting) {
+            cameraPeerConnection?.let { existing ->
+                updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.CONNECTING)
+                return existing
+            }
+        }
         val oldConnection = cameraPeerConnection
         cameraPeerConnection = null
         disposePeerConnection(oldConnection)
+        val generation = ++cameraPeerGeneration
         resetConnectionHealth(ConnectionSide.CAMERA)
         cancelConnectionJobs(ConnectionSide.CAMERA)
         updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.CONNECTING)
@@ -348,8 +395,11 @@ object WebRtcSessionManager {
             cameraPeerConnection = f.createPeerConnection(
                 buildRtcConfig(),
                 object : PeerConnection.Observer {
-                    override fun onIceCandidate(candidate: IceCandidate) = onIceCandidate(candidate)
+                    override fun onIceCandidate(candidate: IceCandidate) {
+                        if (generation == cameraPeerGeneration) cameraIceCandidateHandler(candidate)
+                    }
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
+                        if (generation != cameraPeerGeneration) return
                         Log.d("WEBRTC_LOG", "Camera ICE state: $s")
                         handleIceConnectionChange(ConnectionSide.CAMERA, s)
                     }
@@ -359,7 +409,9 @@ object WebRtcSessionManager {
                     }
                     override fun onTrack(transceiver: RtpTransceiver) {}
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
-                    override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
+                    override fun onSignalingChange(s: PeerConnection.SignalingState?) {
+                        updateDiagnostics(signalingState = s?.name ?: "UNKNOWN")
+                    }
                     override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
                     override fun onAddStream(s: MediaStream?) {}
                     override fun onRemoveStream(s: MediaStream?) {}
@@ -377,13 +429,38 @@ object WebRtcSessionManager {
 
     @Synchronized
     fun createControllerPeerConnection(
+        roomCode: String,
+        sessionGeneration: Long,
         onIceCandidate: (IceCandidate) -> Unit,
-        onRemoteTrack: (VideoTrack) -> Unit
+        onRemoteTrack: (VideoTrack) -> Unit,
+        reuseExisting: Boolean = false
     ): PeerConnection? {
         val f = factory ?: return null
-        val oldConnection = controllerPeerConnection
-        controllerPeerConnection = null
-        disposePeerConnection(oldConnection)
+        if (!isControllerSessionActive(roomCode, sessionGeneration)) {
+            Log.w(
+                "SESSION_TRACE",
+                "Ignoring peer creation room=$roomCode generation=$sessionGeneration active=$activeControllerSession"
+            )
+            return null
+        }
+        controllerIceCandidateHandler = onIceCandidate
+        controllerRemoteTrackHandler = onRemoteTrack
+        if (reuseExisting) {
+            if (controllerPeerOwner == ControllerSession(roomCode, sessionGeneration)) {
+                controllerPeerConnection?.let { existing ->
+                    updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.CONNECTING)
+                    return existing
+                }
+            } else if (controllerPeerConnection != null) {
+                Log.d(
+                    "SESSION_TRACE",
+                    "Ignoring reuse because active peer=$controllerPeerOwner " +
+                        "requestedRoom=$roomCode requestedGeneration=$sessionGeneration"
+                )
+            }
+        }
+        controllerPeerOwner?.let { owner -> disposeControllerPeerLocked(owner) }
+        val generation = ++controllerPeerGeneration
         resetConnectionHealth(ConnectionSide.CONTROLLER)
         cancelConnectionJobs(ConnectionSide.CONTROLLER)
         updateConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.CONNECTING)
@@ -392,23 +469,35 @@ object WebRtcSessionManager {
             controllerPeerConnection = f.createPeerConnection(
                 buildRtcConfig(),
                 object : PeerConnection.Observer {
-                    override fun onIceCandidate(candidate: IceCandidate) = onIceCandidate(candidate)
+                    override fun onIceCandidate(candidate: IceCandidate) {
+                        if (
+                            generation == controllerPeerGeneration &&
+                            isControllerSessionActive(roomCode, sessionGeneration)
+                        ) controllerIceCandidateHandler(candidate)
+                    }
 
                     override fun onTrack(transceiver: RtpTransceiver) {
+                        if (!isControllerSessionActive(roomCode, sessionGeneration)) return
                         val track = transceiver.receiver.track()
                         if (track is VideoTrack) {
                             remoteVideoTrack = track
-                            onRemoteTrack(track)
+                            controllerRemoteTrackHandler(track)
                         }
                     }
 
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
+                        if (
+                            generation != controllerPeerGeneration ||
+                            !isControllerSessionActive(roomCode, sessionGeneration)
+                        ) return
                         Log.d("WEBRTC_LOG", "Controller ICE state: $s")
                         handleIceConnectionChange(ConnectionSide.CONTROLLER, s)
                     }
 
                     override fun onIceCandidatesRemoved(c: Array<out IceCandidate>) {}
-                    override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
+                    override fun onSignalingChange(s: PeerConnection.SignalingState?) {
+                        updateDiagnostics(signalingState = s?.name ?: "UNKNOWN")
+                    }
                     override fun onIceConnectionReceivingChange(b: Boolean) {
                         Log.d("WEBRTC_LOG", "Controller ICE Receiving Change: $b")
                         handleIceReceivingChange(ConnectionSide.CONTROLLER, b)
@@ -428,12 +517,143 @@ object WebRtcSessionManager {
                     RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
                 )
             )
+            if (controllerPeerConnection != null) {
+                controllerPeerOwner = ControllerSession(roomCode, sessionGeneration)
+            }
         } catch (t: Throwable) {
+            controllerPeerOwner = null
             Log.e("WEBRTC_LOG", "Failed to create controller peer connection", t)
         }
 
         return controllerPeerConnection
     }
+
+    @Synchronized
+    fun beginControllerSession(roomCode: String): Long {
+        require(roomCode.isNotBlank()) { "roomCode must not be blank" }
+        val previous = activeControllerSession
+        val generation = ++controllerSessionCounter
+        if (previous != null) {
+            disposeControllerPeerLocked(previous)
+        }
+        activeControllerSession = ControllerSession(roomCode, generation)
+        controllerSessionOwner = roomCode
+        controllerRtcSessionId = null
+        controllerRemoteCandidateKeys.clear()
+        remoteVideoTrack = null
+        Log.d("SESSION_TRACE", "Beginning controller room=$roomCode generation=$generation")
+        return generation
+    }
+
+    @Synchronized
+    fun isControllerSessionActive(roomCode: String, sessionGeneration: Long): Boolean =
+        activeControllerSession == ControllerSession(roomCode, sessionGeneration)
+
+    @Synchronized
+    fun clearControllerConnection(roomCode: String, sessionGeneration: Long): Boolean {
+        val active = activeControllerSession
+        if (active != ControllerSession(roomCode, sessionGeneration)) {
+            val activeDescription = active?.let { "room=${it.roomCode} generation=${it.generation}" } ?: "none"
+            Log.d(
+                "SESSION_TRACE",
+                "Ignoring cleanup because active=$activeDescription " +
+                    "cleanupRoom=$roomCode cleanupGeneration=$sessionGeneration"
+            )
+            return false
+        }
+        disposeControllerPeerLocked(active)
+        activeControllerSession = null
+        controllerSessionOwner = null
+        return true
+    }
+
+    @Synchronized
+    fun resetControllerPeer(roomCode: String, sessionGeneration: Long): Boolean {
+        if (!isControllerSessionActive(roomCode, sessionGeneration)) return false
+        disposeControllerPeerLocked(ControllerSession(roomCode, sessionGeneration))
+        return true
+    }
+
+    private fun disposeControllerPeerLocked(owner: ControllerSession) {
+        if (controllerPeerOwner != null && controllerPeerOwner != owner) {
+            val activeOwner = controllerPeerOwner
+            Log.d(
+                "SESSION_TRACE",
+                "Ignoring cleanup because active room=${activeOwner?.roomCode} " +
+                    "generation=${activeOwner?.generation} cleanupRoom=${owner.roomCode} " +
+                    "cleanupGeneration=${owner.generation}"
+            )
+            return
+        }
+        Log.d("SESSION_TRACE", "Disposing room=${owner.roomCode} generation=${owner.generation}")
+        cancelConnectionJobs(ConnectionSide.CONTROLLER)
+        val connection = controllerPeerConnection
+        controllerPeerConnection = null
+        controllerPeerOwner = null
+        controllerPeerGeneration += 1L
+        controllerRemoteCandidateKeys.clear()
+        controllerRtcSessionId = null
+        remoteVideoTrack = null
+        disposePeerConnection(connection)
+        resetConnectionState(ConnectionSide.CONTROLLER, AppConnectionState.DISCONNECTED)
+    }
+
+    @Synchronized
+    fun claimSession(cameraSide: Boolean, owner: String) {
+        if (owner.isBlank()) return
+        if (cameraSide) cameraSessionOwner = owner else controllerSessionOwner = owner
+        Log.d("SESSION_TRACE", "claim side=${if (cameraSide) "camera" else "controller"} room=$owner")
+    }
+
+    @Synchronized
+    fun isSessionOwner(cameraSide: Boolean, owner: String): Boolean =
+        owner.isNotBlank() &&
+            (if (cameraSide) cameraSessionOwner == owner else controllerSessionOwner == owner)
+
+    @Synchronized
+    fun clearConnectionsIfOwned(cameraSide: Boolean, owner: String): Boolean {
+        if (!isSessionOwner(cameraSide, owner)) {
+            Log.d(
+                "SESSION_TRACE",
+                "ignore stale cleanup side=${if (cameraSide) "camera" else "controller"} room=$owner"
+            )
+            return false
+        }
+        clearConnections()
+        if (cameraSide) cameraSessionOwner = null else controllerSessionOwner = null
+        return true
+    }
+
+    @Synchronized
+    fun beginRemoteIceSession(cameraSide: Boolean, rtcSessionId: String) {
+        if (cameraSide) {
+            if (cameraRtcSessionId != rtcSessionId) {
+                cameraRtcSessionId = rtcSessionId
+                cameraRemoteCandidateKeys.clear()
+            }
+        } else if (controllerRtcSessionId != rtcSessionId) {
+            controllerRtcSessionId = rtcSessionId
+            controllerRemoteCandidateKeys.clear()
+        }
+    }
+
+    @Synchronized
+    fun addRemoteIceCandidate(cameraSide: Boolean, candidate: IceCandidate): Boolean {
+        val connection = (if (cameraSide) cameraPeerConnection else controllerPeerConnection)
+            ?: return false
+        val keys = if (cameraSide) cameraRemoteCandidateKeys else controllerRemoteCandidateKeys
+        val key = "${candidate.sdpMid}|${candidate.sdpMLineIndex}|${candidate.sdp}"
+        if (!keys.add(key)) return true
+        val added = runCatching { connection.addIceCandidate(candidate) }.getOrDefault(false)
+        if (!added) keys.remove(key)
+        return added
+    }
+
+    @Synchronized
+    fun restartControllerIce(): Boolean = runCatching {
+        controllerPeerConnection?.restartIce() ?: return false
+        true
+    }.getOrDefault(false)
 
     fun sessionDescriptionObserver(
         onCreateSuccess: (SessionDescription) -> Unit = {},
@@ -463,6 +683,13 @@ object WebRtcSessionManager {
             val cameraConnection = cameraPeerConnection
             controllerPeerConnection = null
             cameraPeerConnection = null
+            controllerPeerOwner = null
+            cameraPeerGeneration += 1
+            controllerPeerGeneration += 1
+            cameraRemoteCandidateKeys.clear()
+            controllerRemoteCandidateKeys.clear()
+            statsJob?.cancel()
+            statsJob = null
             disposePeerConnection(controllerConnection)
             disposePeerConnection(cameraConnection)
             remoteVideoTrack = null
@@ -483,14 +710,20 @@ object WebRtcSessionManager {
         if (peerConnection == null) return
         runCatching { peerConnection.close() }
             .onFailure { Log.w("WEBRTC_LOG", "Peer connection close failed", it) }
-        runCatching { peerConnection.dispose() }
-            .onFailure { Log.w("WEBRTC_LOG", "Peer connection dispose failed", it) }
+        connectionScope.launch {
+            // Native WebRTC may still deliver a final observer callback immediately after close().
+            // Let that callback drain before freeing the native peer.
+            delay(300L)
+            runCatching { peerConnection.dispose() }
+                .onFailure { Log.w("WEBRTC_LOG", "Peer connection dispose failed", it) }
+        }
     }
 
     private fun handleIceConnectionChange(
         side: ConnectionSide,
         state: PeerConnection.IceConnectionState?
     ) {
+        updateDiagnostics(iceState = state?.name ?: "UNKNOWN")
         val health = getConnectionHealth(side)
         val currentState = getConnectionStateFlow(side).value
         val now = SystemClock.elapsedRealtime()
@@ -595,6 +828,116 @@ object WebRtcSessionManager {
         val flow = getConnectionStateFlow(side)
         if (flow.value != state) {
             flow.value = state
+            if (side == ConnectionSide.CAMERA) applyAdaptiveSenderProfile(state)
+            updateDiagnostics(
+                connectionState = state,
+                reconnectAttempts = _diagnostics.value.reconnectAttempts +
+                    if (state == AppConnectionState.RETRYING) 1 else 0
+            )
+        }
+    }
+
+    @Synchronized
+    private fun applyAdaptiveSenderProfile(state: AppConnectionState) {
+        val sender = cameraPeerConnection?.senders?.firstOrNull { it.track() is VideoTrack } ?: return
+        runCatching {
+            val params = sender.parameters
+            params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+            params.encodings.firstOrNull()?.let { encoding ->
+                when (state) {
+                    AppConnectionState.CONNECTED -> {
+                        encoding.minBitrateBps = VIDEO_MIN_BITRATE_BPS
+                        encoding.maxBitrateBps = VIDEO_MAX_BITRATE_BPS
+                        encoding.maxFramerate = VIDEO_MAX_FRAMERATE
+                    }
+                    AppConnectionState.WEAK_NETWORK -> {
+                        encoding.minBitrateBps = 600_000
+                        encoding.maxBitrateBps = 2_500_000
+                        encoding.maxFramerate = 22
+                    }
+                    AppConnectionState.RETRYING -> {
+                        encoding.minBitrateBps = 300_000
+                        encoding.maxBitrateBps = 900_000
+                        encoding.maxFramerate = 12
+                    }
+                    else -> Unit
+                }
+            }
+            sender.parameters = params
+        }.onFailure { Log.w("WEBRTC_STATS", "Unable to adapt sender profile", it) }
+    }
+
+    private fun updateDiagnostics(
+        connectionState: AppConnectionState = _diagnostics.value.connectionState,
+        iceState: String = _diagnostics.value.iceState,
+        signalingState: String = _diagnostics.value.signalingState,
+        reconnectAttempts: Int = _diagnostics.value.reconnectAttempts
+    ) {
+        _diagnostics.value = _diagnostics.value.copy(
+            connectionState = connectionState,
+            iceState = iceState,
+            signalingState = signalingState,
+            reconnectAttempts = reconnectAttempts
+        )
+        if (Log.isLoggable("WEBRTC_STATS", Log.DEBUG)) {
+            Log.d("WEBRTC_STATS", _diagnostics.value.toString())
+        }
+    }
+
+    private fun startStatsMonitoring() {
+        statsJob?.cancel()
+        previousStatsAtMs = 0L
+        previousBytesSent = 0L
+        previousFramesSent = 0L
+        statsJob = connectionScope.launch {
+            while (true) {
+                delay(2_000L)
+                val peer = cameraPeerConnection ?: continue
+                peer.getStats { report ->
+                    val stats = report.statsMap.values
+                    val outbound = stats.firstOrNull {
+                        it.type == "outbound-rtp" && it.members["kind"] == "video"
+                    } ?: return@getStats
+                    val remoteInbound = stats.firstOrNull {
+                        it.type == "remote-inbound-rtp" && it.members["kind"] == "video"
+                    }
+                    val now = SystemClock.elapsedRealtime()
+                    val elapsedMs = (now - previousStatsAtMs).coerceAtLeast(1L)
+                    val bytesSent = (outbound.members["bytesSent"] as? Number)?.toLong() ?: 0L
+                    val framesSent = (outbound.members["framesEncoded"] as? Number)?.toLong() ?: 0L
+                    val bitrate = if (previousStatsAtMs == 0L) 0L else {
+                        (bytesSent - previousBytesSent).coerceAtLeast(0L) * 8_000L / elapsedMs
+                    }
+                    val fps = if (previousStatsAtMs == 0L) 0.0 else {
+                        (framesSent - previousFramesSent).coerceAtLeast(0L) * 1_000.0 / elapsedMs
+                    }
+                    val packetsLost =
+                        (remoteInbound?.members?.get("packetsLost") as? Number)?.toDouble() ?: 0.0
+                    val packetsReceived =
+                        (remoteInbound?.members?.get("packetsReceived") as? Number)?.toDouble() ?: 0.0
+                    val packetLoss = if (packetsLost + packetsReceived <= 0.0) 0.0 else {
+                        (packetsLost * 100.0 / (packetsLost + packetsReceived)).coerceIn(0.0, 100.0)
+                    }
+                    val latencyMs =
+                        ((remoteInbound?.members?.get("roundTripTime") as? Number)?.toDouble()
+                            ?: 0.0) * 1_000.0
+                    previousStatsAtMs = now
+                    previousBytesSent = bytesSent
+                    previousFramesSent = framesSent
+                    _diagnostics.value = _diagnostics.value.copy(
+                        averageLatencyMs = latencyMs,
+                        packetLossPercent = packetLoss,
+                        bitrateBps = bitrate,
+                        framesPerSecond = fps
+                    )
+                    if (
+                        packetLoss >= 8.0 &&
+                        _cameraConnectionState.value == AppConnectionState.CONNECTED
+                    ) {
+                        updateConnectionState(ConnectionSide.CAMERA, AppConnectionState.WEAK_NETWORK)
+                    }
+                }
+            }
         }
     }
 

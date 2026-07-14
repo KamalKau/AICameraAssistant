@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
         
         try {
             WebRtcSessionManager.initialize(this)
+            NetworkRecoveryMonitor.initialize(this)
         } catch (t: Throwable) {
             t.printStackTrace()
         }
@@ -90,6 +91,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        NetworkRecoveryMonitor.notifyForeground()
     }
 }
 
@@ -163,7 +169,6 @@ fun MainContent() {
                     repository = repository,
                     onBack = {
                         currentScreen = "home"
-                        cameraRoomCode = generateRoomCode()
                     }
                 )
                 } else {
@@ -187,6 +192,10 @@ fun MainContent() {
                             scope.launch {
                                 val exists = repository.sendConnectionRequest(roomCode)
                                 if (exists) {
+                                    WebRtcSessionManager.claimSession(
+                                        cameraSide = false,
+                                        owner = roomCode
+                                    )
                                     currentScreen = "waiting_for_approval"
                                 } else {
                                     controlRoomCodeError = "Room code not found"
@@ -206,7 +215,6 @@ fun MainContent() {
                         repository = repository,
                         onBack = {
                             currentScreen = "home"
-                            pendingRoomCode = ""
                         }
                     )
                 } else {
@@ -219,22 +227,22 @@ fun MainContent() {
                     HomeScreen(
                         onStartCamera = {
                             scope.launch {
-                                if (cameraRoomCode.isBlank()) {
-                                    cameraRoomCode = generateRoomCode()
-                                }
+                                val nextRoomCode = generateRoomCode()
+                                cameraRoomCode = nextRoomCode
                                 WebRtcSessionManager.stopLocalCamera()
                                 WebRtcSessionManager.clearConnections()
-                                repository.createRoom(cameraRoomCode)
+                                repository.createRoom(nextRoomCode)
+                                WebRtcSessionManager.claimSession(
+                                    cameraSide = true,
+                                    owner = nextRoomCode
+                                )
                                 currentScreen = "camera"
                             }
                         },
                         onControlCamera = {
-                            if (pendingRoomCode.isNotBlank()) {
-                                currentScreen = "waiting_for_approval"
-                            } else {
-                                controlRoomCodeError = null
-                                currentScreen = "controller"
-                            }
+                            pendingRoomCode = ""
+                            controlRoomCodeError = null
+                            currentScreen = "controller"
                         }
                     )
                 } else {
@@ -388,6 +396,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             }
         }
     }
+
 }
 
 @Composable

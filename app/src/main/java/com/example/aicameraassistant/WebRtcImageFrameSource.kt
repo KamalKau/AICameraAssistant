@@ -11,6 +11,7 @@ class WebRtcImageFrameSource(
     private val minFrameIntervalMs: Long = 66L,
     private val frameConverter: ImageProxyI420Converter = ImageProxyI420Converter
 ) {
+    private val sourceLock = Any()
     private var videoSource: VideoSource? = null
     private var lastFrameMs = 0L
 
@@ -19,13 +20,21 @@ class WebRtcImageFrameSource(
         width: Int,
         height: Int
     ): Boolean {
-        videoSource = WebRtcSessionManager.startImageFrameSource(
-            context = context,
-            width = width,
-            height = height
-        )
+        synchronized(sourceLock) {
+            videoSource = WebRtcSessionManager.startImageFrameSource(
+                context = context,
+                width = width,
+                height = height
+            )
+        }
         lastFrameMs = 0L
         return videoSource != null
+    }
+
+    fun stop() {
+        synchronized(sourceLock) {
+            videoSource = null
+        }
     }
 
     fun buildAnalyzer(mirrorHorizontally: Boolean): ImageAnalysis.Analyzer =
@@ -44,23 +53,25 @@ class WebRtcImageFrameSource(
         val now = System.currentTimeMillis()
         if (now - lastFrameMs < minFrameIntervalMs) return false
 
-        val source = videoSource ?: return false
-        lastFrameMs = now
+        return synchronized(sourceLock) {
+            val source = videoSource ?: return@synchronized false
+            lastFrameMs = now
 
-        val buffer = frameConverter.convert(
-            image = image,
-            mirrorHorizontally = mirrorHorizontally,
-            rotationDegrees = image.imageInfo.rotationDegrees
-        )
-        val frame = VideoFrame(buffer, 0, System.nanoTime())
-        return try {
-            source.capturerObserver.onFrameCaptured(frame)
-            true
-        } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to push image frame", t)
-            false
-        } finally {
-            frame.release()
+            val buffer = frameConverter.convert(
+                image = image,
+                mirrorHorizontally = mirrorHorizontally,
+                rotationDegrees = image.imageInfo.rotationDegrees
+            )
+            val frame = VideoFrame(buffer, 0, System.nanoTime())
+            try {
+                source.capturerObserver.onFrameCaptured(frame)
+                true
+            } catch (t: Throwable) {
+                Log.e("WEBRTC_LOG", "Failed to push image frame", t)
+                false
+            } finally {
+                frame.release()
+            }
         }
     }
 }

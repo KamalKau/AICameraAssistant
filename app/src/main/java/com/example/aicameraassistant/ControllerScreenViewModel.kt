@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import org.webrtc.VideoTrack
 import kotlinx.coroutines.launch
+import android.util.Log
 
 class ControllerScreenViewModel : ViewModel() {
     private val _remoteUiState = MutableStateFlow(ControllerRemoteUiState())
@@ -55,6 +56,7 @@ class ControllerScreenViewModel : ViewModel() {
     var currentOfferSessionId by mutableStateOf<String?>(null)
     var lastOfferCreatedAtMs by mutableLongStateOf(0L)
     var previewRetryCount by mutableIntStateOf(0)
+    var sessionGeneration by mutableLongStateOf(0L)
 
     private fun resetSessionState() {
         remoteTrack = null
@@ -90,8 +92,24 @@ class ControllerScreenViewModel : ViewModel() {
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
+        Log.d("SESSION_TRACE", "controller bind room=$roomCode previous=$boundRoomCode")
+        if (roomCode.isBlank()) {
+            bindJob?.cancel()
+            bindJob = null
+            boundRoomCode = null
+            resetSessionState()
+            _remoteUiState.value = ControllerRemoteUiState()
+            return
+        }
         resetSessionState()
-        _remoteUiState.value = ControllerRemoteUiState(roomStatus = "request_received")
+        offerCreated = false
+        currentOfferSessionId = null
+        lastOfferCreatedAtMs = 0L
+        previewRetryCount = 0
+        _remoteUiState.value = ControllerRemoteUiState(
+            roomCode = roomCode,
+            roomStatus = "request_received"
+        )
 
         if (boundRoomCode == roomCode && bindJob?.isActive == true) return
 
@@ -139,6 +157,7 @@ class ControllerScreenViewModel : ViewModel() {
                 val portraitSubject = values[13] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[14] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
                 ControllerRemoteUiState(
+                    roomCode = roomCode,
                     roomStatus = values[0] as? String ?: "waiting",
                     connectionState = values[1] as? AppConnectionState ?: AppConnectionState.IDLE,
                     lensFacing = values[2] as? String ?: "back",
@@ -184,6 +203,13 @@ class ControllerScreenViewModel : ViewModel() {
                     focusLockEnabled = values[35] as? Boolean ?: false
                 )
             }.collect { state ->
+                if (boundRoomCode != roomCode) {
+                    Log.d("SESSION_TRACE", "Ignoring stale Firebase callback room=$roomCode active=$boundRoomCode")
+                    return@collect
+                }
+                if (_remoteUiState.value.roomStatus != state.roomStatus) {
+                    Log.d("SESSION_TRACE", "controller room=$roomCode status=${state.roomStatus}")
+                }
                 _remoteUiState.value = state
             }
         }

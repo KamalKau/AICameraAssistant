@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import org.webrtc.MediaConstraints
 import org.webrtc.SessionDescription
@@ -16,16 +15,21 @@ fun createSharedAnswer(
     offerSdp: String,
     rtcSessionId: String,
     repository: FirebaseRoomRepository,
-    onRemoteDescriptionSet: () -> Unit
+    onRemoteDescriptionSet: () -> Unit,
+    reusePeerConnection: Boolean = false
 ): Boolean {
+    Log.d("SESSION_TRACE", "createAnswer room=$roomCode rtc=$rtcSessionId reuse=$reusePeerConnection")
     WebRtcSessionManager.initialize(context)
 
-    val pc = WebRtcSessionManager.createCameraPeerConnection { candidate ->
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching { repository.addCameraIceCandidate(roomCode, candidate, rtcSessionId) }
-                .onFailure { Log.w("WEBRTC_LOG", "Unable to publish camera ICE candidate", it) }
-        }
-    } ?: return false
+    val pc = WebRtcSessionManager.createCameraPeerConnection(
+        onIceCandidate = { candidate ->
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching { repository.addCameraIceCandidate(roomCode, candidate, rtcSessionId) }
+                    .onFailure { Log.w("WEBRTC_LOG", "Unable to publish camera ICE candidate", it) }
+            }
+        },
+        reuseExisting = reusePeerConnection
+    ) ?: return false
 
     runCatching {
         pc.setRemoteDescription(
@@ -74,35 +78,57 @@ fun createSharedAnswer(
 fun createSharedOffer(
     context: Context,
     roomCode: String,
+    sessionGeneration: Long,
     rtcSessionId: String,
     repository: FirebaseRoomRepository,
-    onRemoteTrackReady: (VideoTrack) -> Unit
+    onRemoteTrackReady: (VideoTrack) -> Unit,
+    iceRestart: Boolean = false
 ): Boolean {
+    Log.d(
+        "SESSION_TRACE",
+        "Creating offer room=$roomCode generation=$sessionGeneration rtc=$rtcSessionId restart=$iceRestart"
+    )
     WebRtcSessionManager.initialize(context)
 
     val pc = WebRtcSessionManager.createControllerPeerConnection(
+        roomCode = roomCode,
+        sessionGeneration = sessionGeneration,
         onIceCandidate = { candidate ->
-            @Suppress("OPT_IN_USAGE")
-            GlobalScope.launch {
+            CoroutineScope(Dispatchers.IO).launch {
+                if (!WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+                    return@launch
+                }
                 runCatching { repository.addControllerIceCandidate(roomCode, candidate, rtcSessionId) }
                     .onFailure { Log.w("WEBRTC_LOG", "Unable to publish controller ICE candidate", it) }
             }
         },
         onRemoteTrack = { videoTrack ->
-            onRemoteTrackReady(videoTrack)
-        }
+            if (WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+                onRemoteTrackReady(videoTrack)
+            }
+        },
+        reuseExisting = iceRestart
     ) ?: return false
+
+    if (iceRestart && !WebRtcSessionManager.restartControllerIce()) return false
 
     runCatching {
         pc.createOffer(
             WebRtcSessionManager.sessionDescriptionObserver(
                 onCreateSuccess = { desc ->
+                    if (!WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+                        return@sessionDescriptionObserver
+                    }
                     runCatching {
                         pc.setLocalDescription(
                             WebRtcSessionManager.sessionDescriptionObserver(
                                 onSetSuccess = {
-                                    @Suppress("OPT_IN_USAGE")
-                                    GlobalScope.launch {
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        if (!WebRtcSessionManager.isControllerSessionActive(
+                                                roomCode,
+                                                sessionGeneration
+                                            )
+                                        ) return@launch
                                         runCatching {
                                             repository.saveOffer(
                                                 roomCode = roomCode,
@@ -120,7 +146,11 @@ fun createSharedOffer(
                     }
                 }
             ),
-            MediaConstraints()
+            MediaConstraints().apply {
+                if (iceRestart) {
+                    mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+                }
+            }
         )
     }.onFailure {
         return false

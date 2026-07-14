@@ -5,25 +5,46 @@ import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import org.webrtc.IceCandidate
+import java.security.MessageDigest
+import java.util.UUID
 
 class FirebaseRoomRepository {
     private val db = FirebaseFirestore.getInstance()
 
     suspend fun createRoom(roomCode: String) {
+        Log.d("SESSION_TRACE", "createRoom start room=$roomCode")
         val docRef = db.collection("rooms").document(roomCode)
         clearIceCandidates(roomCode)
         docRef.set(defaultRoomData(roomCode)).await()
+        Log.d("SESSION_TRACE", "createRoom committed room=$roomCode")
     }
 
     suspend fun sendConnectionRequest(roomCode: String): Boolean {
+        Log.d("SESSION_TRACE", "connectionRequest start room=$roomCode")
         val docRef = db.collection("rooms").document(roomCode)
         val snapshot = docRef.get().await()
 
-        if (!snapshot.exists()) return false
+        if (!snapshot.exists()) {
+            Log.w("SESSION_TRACE", "connectionRequest missing room=$roomCode")
+            return false
+        }
+        val lastActivityAt = snapshot.getLong("lastActivityAt")
+            ?: snapshot.getLong("createdAt")
+            ?: 0L
+        val abandoned =
+            lastActivityAt > 0L &&
+                System.currentTimeMillis() - lastActivityAt > ABANDONED_ROOM_TIMEOUT_MS &&
+                snapshot.getString("status") != "connected"
+        if (abandoned) {
+            clearIceCandidates(roomCode)
+            docRef.delete().await()
+            return false
+        }
 
         clearIceCandidates(roomCode)
         updateRoomSafely(
@@ -38,6 +59,8 @@ class FirebaseRoomRepository {
             )
         )
 
+        Log.d("SESSION_TRACE", "connectionRequest committed room=$roomCode")
+
         return true
     }
 
@@ -50,6 +73,7 @@ class FirebaseRoomRepository {
                 "status" to if (approved) "connected" else "denied"
             )
         )
+        Log.d("SESSION_TRACE", "approval committed room=$roomCode approved=$approved")
     }
 
     suspend fun updateLensFacing(roomCode: String, lensFacing: String) {
@@ -337,9 +361,10 @@ class FirebaseRoomRepository {
         requestId: Long,
         requestType: String = "photo"
     ) {
-        updateRoomSafely(
-            roomCode,
-            mapOf(
+        sendReliableCommand(
+            roomCode = roomCode,
+            type = requestType,
+            values = mapOf(
                 "captureRequest" to true,
                 "captureRequestId" to requestId,
                 "captureRequestType" to requestType
@@ -353,9 +378,13 @@ class FirebaseRoomRepository {
             mapOf(
                 "offer" to offerSdp,
                 "answer" to null,
-                "rtcSessionId" to rtcSessionId
+                "rtcSessionId" to rtcSessionId,
+                "offerCreatedAt" to System.currentTimeMillis(),
+                "answerCreatedAt" to 0L,
+                "lastActivityAt" to System.currentTimeMillis()
             )
         )
+        Log.d("SESSION_TRACE", "offer committed room=$roomCode rtc=$rtcSessionId")
     }
 
     suspend fun saveAnswer(roomCode: String, answerSdp: String, rtcSessionId: String) {
@@ -363,9 +392,12 @@ class FirebaseRoomRepository {
             roomCode,
             mapOf(
                 "answer" to answerSdp,
-                "rtcSessionId" to rtcSessionId
+                "rtcSessionId" to rtcSessionId,
+                "answerCreatedAt" to System.currentTimeMillis(),
+                "lastActivityAt" to System.currentTimeMillis()
             )
         )
+        Log.d("SESSION_TRACE", "answer committed room=$roomCode rtc=$rtcSessionId")
     }
 
     suspend fun endSession(roomCode: String, expectedSessionVersion: Long? = null) {
@@ -449,10 +481,19 @@ class FirebaseRoomRepository {
             "offer" to null,
             "answer" to null,
             "rtcSessionId" to null,
+            "offerCreatedAt" to 0L,
+            "answerCreatedAt" to 0L,
+            "commandId" to null,
+            "commandType" to null,
+            "commandSequence" to 0L,
+            "commandIssuedAt" to 0L,
+            "commandAckId" to null,
+            "commandAckSequence" to 0L,
             "previewWidth" to 0L,
             "previewHeight" to 0L,
             "sessionVersion" to System.currentTimeMillis(),
-            "createdAt" to System.currentTimeMillis()
+            "createdAt" to System.currentTimeMillis(),
+            "lastActivityAt" to System.currentTimeMillis()
         )
 
     suspend fun clearIceCandidates(roomCode: String) {
@@ -469,12 +510,14 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesController")
-            .add(
+            .document(candidateDocumentId(rtcSessionId, candidate))
+            .set(
                 mapOf(
                     "sdpMid" to candidate.sdpMid,
                     "sdpMLineIndex" to candidate.sdpMLineIndex,
                     "candidate" to candidate.sdp,
-                    "rtcSessionId" to rtcSessionId
+                    "rtcSessionId" to rtcSessionId,
+                    "createdAt" to System.currentTimeMillis()
                 )
             )
             .await()
@@ -488,15 +531,81 @@ class FirebaseRoomRepository {
         db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesCamera")
-            .add(
+            .document(candidateDocumentId(rtcSessionId, candidate))
+            .set(
                 mapOf(
                     "sdpMid" to candidate.sdpMid,
                     "sdpMLineIndex" to candidate.sdpMLineIndex,
                     "candidate" to candidate.sdp,
-                    "rtcSessionId" to rtcSessionId
+                    "rtcSessionId" to rtcSessionId,
+                    "createdAt" to System.currentTimeMillis()
                 )
             )
             .await()
+    }
+
+    suspend fun sendReliableCommand(
+        roomCode: String,
+        type: String,
+        values: Map<String, Any?>
+    ): String {
+        val commandId = UUID.randomUUID().toString()
+        val roomRef = db.collection("rooms").document(roomCode)
+        var sequence = 0L
+        repeat(3) { attempt ->
+            try {
+                db.runTransaction { transaction ->
+                    val snapshot = transaction.get(roomRef)
+                    sequence = (snapshot.getLong("commandSequence") ?: 0L) + 1L
+                    transaction.update(
+                        roomRef,
+                        values + mapOf(
+                            "commandId" to commandId,
+                            "commandType" to type,
+                            "commandSequence" to sequence,
+                            "commandIssuedAt" to System.currentTimeMillis(),
+                            "lastActivityAt" to System.currentTimeMillis()
+                        )
+                    )
+                }.await()
+                return commandId
+            } catch (throwable: Throwable) {
+                if (attempt == 2) throw throwable
+                delay(250L shl attempt)
+            }
+        }
+        return commandId
+    }
+
+    fun listenToReliableCommands(
+        roomCode: String,
+        onCommand: (id: String, sequence: Long) -> Unit
+    ): ListenerRegistration {
+        if (roomCode.isBlank()) return ListenerRegistration { }
+        return db.collection("rooms").document(roomCode).addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) return@addSnapshotListener
+            val id = snapshot.getString("commandId") ?: return@addSnapshotListener
+            val sequence = snapshot.getLong("commandSequence") ?: return@addSnapshotListener
+            onCommand(id, sequence)
+        }
+    }
+
+    suspend fun acknowledgeReliableCommand(roomCode: String, id: String, sequence: Long) {
+        val roomRef = db.collection("rooms").document(roomCode)
+        db.runTransaction { transaction ->
+            val snapshot = transaction.get(roomRef)
+            val currentAck = snapshot.getLong("commandAckSequence") ?: 0L
+            if (sequence > currentAck && snapshot.getString("commandId") == id) {
+                transaction.update(
+                    roomRef,
+                    mapOf(
+                        "commandAckId" to id,
+                        "commandAckSequence" to sequence,
+                        "commandAckAt" to System.currentTimeMillis()
+                    )
+                )
+            }
+        }.await()
     }
 
     fun getRoomStatus(roomCode: String): Flow<String> = callbackFlow {
@@ -955,6 +1064,7 @@ class FirebaseRoomRepository {
         rtcSessionId: String,
         onCandidate: (IceCandidate) -> Unit
     ): ListenerRegistration {
+        if (roomCode.isBlank() || rtcSessionId.isBlank()) return ListenerRegistration { }
         return db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesController")
@@ -979,6 +1089,7 @@ class FirebaseRoomRepository {
         rtcSessionId: String,
         onCandidate: (IceCandidate) -> Unit
     ): ListenerRegistration {
+        if (roomCode.isBlank() || rtcSessionId.isBlank()) return ListenerRegistration { }
         return db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesCamera")
@@ -1033,19 +1144,32 @@ class FirebaseRoomRepository {
     }
 
     private suspend fun updateRoomSafely(roomCode: String, values: Map<String, Any?>) {
-        runCatching {
-            db.collection("rooms")
-                .document(roomCode)
-                .update(values)
-                .await()
-        }.onFailure { throwable ->
-            if (FirestoreRoomUpdateFailureClassifier.isMissingRoomUpdate(throwable)) {
-                Log.w("FirebaseRoomRepository", "Ignoring update for missing room $roomCode")
-            } else {
-                throw throwable
+        repeat(3) { attempt ->
+            try {
+                db.collection("rooms")
+                    .document(roomCode)
+                    .update(values + ("lastActivityAt" to System.currentTimeMillis()))
+                    .await()
+                return
+            } catch (throwable: Throwable) {
+                if (FirestoreRoomUpdateFailureClassifier.isMissingRoomUpdate(throwable)) {
+                    Log.w("FirebaseRoomRepository", "Ignoring update for missing room $roomCode")
+                    return
+                }
+                if (attempt == 2) throw throwable
+                delay(200L shl attempt)
             }
         }
     }
+}
+
+private const val ABANDONED_ROOM_TIMEOUT_MS = 30L * 60L * 1_000L
+
+private fun candidateDocumentId(rtcSessionId: String, candidate: IceCandidate): String {
+    val value = "$rtcSessionId|${candidate.sdpMid}|${candidate.sdpMLineIndex}|${candidate.sdp}"
+    return MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 }
 
 internal object FirestoreRoomUpdateFailureClassifier {

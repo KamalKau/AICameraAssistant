@@ -149,6 +149,7 @@ fun CameraScreen(
     val scope = rememberCoroutineScope()
     val screenViewModel: CameraScreenViewModel = viewModel()
     LaunchedEffect(roomCode) {
+        WebRtcSessionManager.claimSession(cameraSide = true, owner = roomCode)
         screenViewModel.bind(repository, roomCode)
     }
     val remoteUiState by screenViewModel.remoteUiState.collectAsState()
@@ -344,6 +345,7 @@ fun CameraScreen(
     }
 
     val pendingCandidates = remember { mutableListOf<IceCandidate>() }
+    var lastAcknowledgedCommandSequence by remember(roomCode) { mutableLongStateOf(0L) }
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
     var lastHandledOfferSessionId by screenViewModel::lastHandledOfferSessionId
     val sessionIsActive = roomStatus == "connected"
@@ -841,9 +843,13 @@ fun CameraScreen(
 
     DisposableEffect(roomCode, firebaseRtcSessionId) {
         val activeRtcSessionId = firebaseRtcSessionId
-        if (activeRtcSessionId == null) {
+        if (roomCode.isBlank() || activeRtcSessionId == null) {
             onDispose { }
         } else {
+            WebRtcSessionManager.beginRemoteIceSession(
+                cameraSide = true,
+                rtcSessionId = activeRtcSessionId
+            )
             val registration = repository.listenToControllerIceCandidates(
                 roomCode = roomCode,
                 rtcSessionId = activeRtcSessionId
@@ -851,10 +857,33 @@ fun CameraScreen(
                 if (isEndingSession || roomStatus != "connected") return@listenToControllerIceCandidates
                 val pc = WebRtcSessionManager.cameraPeerConnection
                 if (isRemoteDescriptionSet && pc != null) {
-                    runCatching { pc.addIceCandidate(candidate) }
+                    runCatching {
+                        WebRtcSessionManager.addRemoteIceCandidate(
+                            cameraSide = true,
+                            candidate = candidate
+                        )
+                    }
                         .onFailure { Log.w("WEBRTC_LOG", "Camera ignored late ICE candidate", it) }
                 } else {
                     pendingCandidates.add(candidate)
+                }
+            }
+            onDispose { registration.remove() }
+        }
+    }
+
+    DisposableEffect(roomCode) {
+        if (roomCode.isBlank()) {
+            onDispose { }
+        } else {
+            val registration = repository.listenToReliableCommands(roomCode) { id, sequence ->
+                if (sequence <= lastAcknowledgedCommandSequence || isEndingSession) {
+                    return@listenToReliableCommands
+                }
+                lastAcknowledgedCommandSequence = sequence
+                scope.launch(Dispatchers.IO) {
+                    runCatching { repository.acknowledgeReliableCommand(roomCode, id, sequence) }
+                        .onFailure { Log.w("REMOTE_COMMAND", "Unable to acknowledge command $id", it) }
                 }
             }
             onDispose { registration.remove() }
@@ -1119,6 +1148,9 @@ fun CameraScreen(
                 currentRtcSessionId != null &&
                 currentRtcSessionId != lastHandledOfferSessionId
         ) {
+            val canReusePeerConnection =
+                lastHandledOfferSessionId != null &&
+                    WebRtcSessionManager.cameraPeerConnection != null
             isRemoteDescriptionSet = false
             pendingCandidates.clear()
             val answerStarted = createSharedAnswer(
@@ -1133,12 +1165,18 @@ fun CameraScreen(
                     val pc = WebRtcSessionManager.cameraPeerConnection
                     if (pc != null) {
                         pendingCandidates.forEach { candidate ->
-                            runCatching { pc.addIceCandidate(candidate) }
+                            runCatching {
+                                WebRtcSessionManager.addRemoteIceCandidate(
+                                    cameraSide = true,
+                                    candidate = candidate
+                                )
+                            }
                                 .onFailure { Log.w("WEBRTC_LOG", "Camera ignored buffered ICE candidate", it) }
                         }
                         pendingCandidates.clear()
                     }
-                }
+                },
+                reusePeerConnection = canReusePeerConnection
             )
             if (answerStarted) {
                 answerCreated = true
@@ -2209,6 +2247,7 @@ fun CameraScreen(
                 }
             } else {
                 webRtcSourceReady = false
+                videoFrameSource.stop()
                 WebRtcSessionManager.stopLocalCamera()
             }
 
@@ -2285,6 +2324,7 @@ fun CameraScreen(
                             bindWithStreamingVideoError
                         )
                         webRtcSourceReady = false
+                        videoFrameSource.stop()
                         WebRtcSessionManager.stopLocalCamera()
                     }
                     if (removedVideoStreamAnalysis) {
@@ -2294,6 +2334,7 @@ fun CameraScreen(
                             bindWithStreamingVideoError
                         )
                         webRtcSourceReady = false
+                        videoFrameSource.stop()
                         WebRtcSessionManager.stopLocalCamera()
                     }
                     try {
@@ -2573,12 +2614,20 @@ fun CameraScreen(
     DisposableEffect(Unit) {
         onDispose {
             runCatching { videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState) }
-            runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
             runCatching { faceAnalysisExecutor.shutdownNow() }
             runCatching { faceDetector.close() }
             runCatching { shutterSound.release() }
-            runCatching { WebRtcSessionManager.stopLocalCamera() }
-            runCatching { WebRtcSessionManager.clearConnections() }
+            if (WebRtcSessionManager.isSessionOwner(cameraSide = true, owner = roomCode)) {
+                runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
+                runCatching { videoFrameSource.stop() }
+                runCatching { WebRtcSessionManager.stopLocalCamera() }
+                runCatching {
+                    WebRtcSessionManager.clearConnectionsIfOwned(
+                        cameraSide = true,
+                        owner = roomCode
+                    )
+                }
+            }
         }
     }
 

@@ -27,6 +27,8 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     private val faceOverlay = ControllerFaceDetectionOverlayView(context)
     private var attachedTrack: VideoTrack? = null
     private var frameSink: FrameTimestampVideoSink? = null
+    private val rendererLock = Any()
+
     @Volatile
     private var rendererReleased = false
 
@@ -95,6 +97,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
         val sink = FrameTimestampVideoSink(
             renderer = renderer,
+            rendererLock = rendererLock,
             isReleased = { rendererReleased },
             onFrameReceived = onFrameReceived
         )
@@ -115,11 +118,13 @@ class ControllerPreviewContainer @JvmOverloads constructor(
     }
 
     fun releaseRenderer() {
-        if (rendererReleased) return
-        rendererReleased = true
         detachRemoteTrack()
         onVideoRectChanged = null
-        runCatching { renderer.release() }
+        synchronized(rendererLock) {
+            if (rendererReleased) return
+            rendererReleased = true
+            runCatching { renderer.release() }
+        }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -219,6 +224,7 @@ class ControllerPreviewContainer @JvmOverloads constructor(
 
 private class FrameTimestampVideoSink(
     private val renderer: VideoSink,
+    private val rendererLock: Any,
     private val isReleased: () -> Boolean,
     private val onFrameReceived: () -> Unit
 ) : VideoSink {
@@ -237,8 +243,10 @@ private class FrameTimestampVideoSink(
                 }
             }
         }
-        if (!isReleased()) {
-            renderer.onFrame(frame)
+        synchronized(rendererLock) {
+            if (!isReleased()) {
+                renderer.onFrame(frame)
+            }
         }
     }
 

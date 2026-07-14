@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,6 +94,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -131,7 +134,12 @@ fun WaitingForApprovalScreen(
         screenViewModel.bind(repository, roomCode)
     }
     val remoteUiState by screenViewModel.remoteUiState.collectAsState()
-    val roomStatus = remoteUiState.roomStatus
+    val remoteStateMatchesRoom = remoteUiState.roomCode == roomCode
+    val roomStatus = if (remoteStateMatchesRoom) {
+        remoteUiState.roomStatus
+    } else {
+        "request_received"
+    }
     val connectionState = remoteUiState.connectionState
     val firebaseLensFacing = remoteUiState.lensFacing
     val firebaseZoomLevel = remoteUiState.zoomLevel
@@ -214,11 +222,15 @@ fun WaitingForApprovalScreen(
     var remoteFrameRotation by remember { mutableIntStateOf(0) }
     var lastFrameTimestampMs by screenViewModel::lastFrameTimestampMs
     var uiNowMs by screenViewModel::uiNowMs
-    val pendingCandidates = remember { mutableListOf<IceCandidate>() }
+    val pendingCandidates = remember(roomCode) { mutableListOf<IceCandidate>() }
+    var iceRestartInFlight by remember(roomCode) { mutableStateOf(false) }
+    var recoverySignal by remember(roomCode) { mutableLongStateOf(0L) }
+    val latestConnectionState by rememberUpdatedState(connectionState)
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
     var currentOfferSessionId by screenViewModel::currentOfferSessionId
     var lastOfferCreatedAtMs by screenViewModel::lastOfferCreatedAtMs
     var previewRetryCount by screenViewModel::previewRetryCount
+    val sessionGeneration = screenViewModel.sessionGeneration
     var remoteFaceBoxBounds by remember { mutableStateOf(emptyList<NormalizedFaceBounds>()) }
     var remoteFaceBoxVisible by remember { mutableStateOf(false) }
     val aspectRatioMode = AspectRatioMode.fromKey(firebaseAspectRatioMode)
@@ -523,6 +535,17 @@ fun WaitingForApprovalScreen(
         lastFrameTimestampMs = 0L
     }
 
+    LaunchedEffect(roomCode, sessionGeneration) {
+        releaseControllerPreview()
+        pendingCandidates.clear()
+        isRemoteDescriptionSet = false
+        currentOfferSessionId = null
+        lastOfferCreatedAtMs = 0L
+        previewRetryCount = 0
+        offerCreated = false
+        iceRestartInFlight = false
+    }
+
     fun sendZoomUpdate(zoom: Float, force: Boolean = false) {
         controllerCoordinator.sendZoomUpdate(
             zoom = zoom,
@@ -667,22 +690,44 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    DisposableEffect(roomCode, currentOfferSessionId) {
+    DisposableEffect(roomCode, sessionGeneration, currentOfferSessionId) {
         val activeRtcSessionId = currentOfferSessionId
-        if (activeRtcSessionId == null) {
+        val listenerGeneration = sessionGeneration
+        if (
+            roomCode.isBlank() ||
+            activeRtcSessionId == null ||
+            listenerGeneration <= 0L ||
+            !WebRtcSessionManager.isControllerSessionActive(roomCode, listenerGeneration)
+        ) {
             onDispose { }
         } else {
+            WebRtcSessionManager.beginRemoteIceSession(
+                cameraSide = false,
+                rtcSessionId = activeRtcSessionId
+            )
             val registration = repository.listenToCameraIceCandidates(
                 roomCode = roomCode,
                 rtcSessionId = activeRtcSessionId
             ) { candidate ->
+                if (!WebRtcSessionManager.isControllerSessionActive(roomCode, listenerGeneration)) {
+                    return@listenToCameraIceCandidates
+                }
                 if (isEndingSession || roomStatus != "connected") return@listenToCameraIceCandidates
                 scope.launch(Dispatchers.Main) {
-                    if (isEndingSession || roomStatus != "connected") return@launch
+                    if (
+                        isEndingSession ||
+                        roomStatus != "connected" ||
+                        !WebRtcSessionManager.isControllerSessionActive(roomCode, listenerGeneration)
+                    ) return@launch
                     val pc = WebRtcSessionManager.controllerPeerConnection
                     if (isRemoteDescriptionSet && pc != null) {
                         Log.d("WEBRTC_LOG", "Controller applying camera candidate immediately")
-                        runCatching { pc.addIceCandidate(candidate) }
+                        runCatching {
+                            WebRtcSessionManager.addRemoteIceCandidate(
+                                cameraSide = false,
+                                candidate = candidate
+                            )
+                        }
                             .onFailure { Log.w("WEBRTC_LOG", "Controller ignored late ICE candidate", it) }
                     } else {
                         Log.d("WEBRTC_LOG", "Controller buffering camera candidate")
@@ -696,17 +741,47 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(roomCode) {
+        val cleanupRoom = roomCode
+        val cleanupGeneration = if (roomCode.isBlank()) {
+            0L
+        } else {
+            WebRtcSessionManager.beginControllerSession(roomCode).also {
+                screenViewModel.sessionGeneration = it
+            }
+        }
         onDispose {
             previewContainerRef?.detachRemoteTrack()
             previewContainerRef?.releaseRenderer()
             previewContainerRef = null
             remoteTrack = null
-            WebRtcSessionManager.clearConnections()
+            if (cleanupGeneration > 0L) {
+                WebRtcSessionManager.clearControllerConnection(
+                    roomCode = cleanupRoom,
+                    sessionGeneration = cleanupGeneration
+                )
+            }
         }
     }
 
-    LaunchedEffect(roomStatus, connectionState, offerCreated) {
+    LaunchedEffect(Unit) {
+        NetworkRecoveryMonitor.events.collect { signal ->
+            delay(750L)
+            if (
+                latestConnectionState == AppConnectionState.RETRYING ||
+                latestConnectionState == AppConnectionState.DISCONNECTED
+            ) {
+                recoverySignal = signal
+            }
+        }
+    }
+
+    LaunchedEffect(roomCode, roomStatus) {
+        Log.d(
+            "SESSION_TRACE",
+            "offerEffect room=$roomCode status=$roomStatus connection=$connectionState " +
+                "created=$offerCreated rtc=$currentOfferSessionId ending=$isEndingSession"
+        )
         if (roomStatus == "connected") {
             hasSeenConnectedState = true
         }
@@ -738,14 +813,25 @@ fun WaitingForApprovalScreen(
             return@LaunchedEffect
         }
 
+        val controllerSessionActive =
+            sessionGeneration > 0L &&
+                WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
+        val offerBelongsToCurrentRoom =
+            offerCreated &&
+                currentOfferSessionId?.endsWith("-$roomCode") == true &&
+                WebRtcSessionManager.controllerPeerConnection != null
         val shouldCreateOffer =
             roomStatus == "connected" &&
+                controllerSessionActive &&
                 !isEndingSession &&
-                (!offerCreated || connectionState == AppConnectionState.DISCONNECTED)
+                (!offerBelongsToCurrentRoom || connectionState == AppConnectionState.DISCONNECTED)
 
         if (shouldCreateOffer) {
-            if (connectionState == AppConnectionState.DISCONNECTED) {
-                delay(500)
+            val attemptIceRestart =
+                connectionState == AppConnectionState.DISCONNECTED &&
+                    WebRtcSessionManager.controllerPeerConnection != null &&
+                    !iceRestartInFlight
+            if (connectionState == AppConnectionState.DISCONNECTED && !attemptIceRestart) {
                 releaseControllerPreview()
                 pendingCandidates.clear()
                 isRemoteDescriptionSet = false
@@ -756,37 +842,91 @@ fun WaitingForApprovalScreen(
             }.onFailure {
                 Log.w("WEBRTC_LOG", "Unable to clear ICE candidates before creating offer", it)
             }
+            // runCatching also catches CancellationException. Never let an outgoing screen
+            // continue signaling after Compose has cancelled this session's effect.
+            currentCoroutineContext().ensureActive()
+            if (!WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+                return@LaunchedEffect
+            }
 
             val nextRtcSessionId = "${System.currentTimeMillis()}-${roomCode}"
+            iceRestartInFlight = attemptIceRestart
             currentOfferSessionId = nextRtcSessionId
             lastOfferCreatedAtMs = SystemClock.elapsedRealtime()
             lastFrameTimestampMs = 0L
             val offerStarted = createSharedOffer(
                 context = context,
                 roomCode = roomCode,
+                sessionGeneration = sessionGeneration,
                 rtcSessionId = nextRtcSessionId,
                 repository = repository,
                 onRemoteTrackReady = { track ->
                     scope.launch(Dispatchers.Main) {
-                        if (isEndingSession || roomStatus != "connected") return@launch
+                        if (
+                            isEndingSession ||
+                            roomStatus != "connected" ||
+                            !WebRtcSessionManager.isControllerSessionActive(
+                                roomCode,
+                                sessionGeneration
+                            )
+                        ) return@launch
                         Log.d("WEBRTC_LOG", "Controller received remote track")
                         remoteTrack = track
                         previewContainerRef?.attachRemoteTrack(track) {
-                            lastFrameTimestampMs = SystemClock.elapsedRealtime()
+                            if (
+                                WebRtcSessionManager.isControllerSessionActive(
+                                    roomCode,
+                                    sessionGeneration
+                                )
+                            ) {
+                                lastFrameTimestampMs = SystemClock.elapsedRealtime()
+                            }
                         }
                     }
-                }
+                },
+                iceRestart = attemptIceRestart
             )
             if (offerStarted) {
                 offerCreated = true
             } else {
+                iceRestartInFlight = false
                 currentOfferSessionId = null
                 lastOfferCreatedAtMs = 0L
+                if (attemptIceRestart) {
+                    WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
+                    offerCreated = false
+                }
             }
         }
     }
 
-    LaunchedEffect(roomStatus, uiNowMs, offerCreated, lastFrameTimestampMs, lastOfferCreatedAtMs) {
+    LaunchedEffect(roomCode, connectionState, currentOfferSessionId, iceRestartInFlight) {
+        if (connectionState == AppConnectionState.CONNECTED) {
+            iceRestartInFlight = false
+            return@LaunchedEffect
+        }
+        if (!iceRestartInFlight) return@LaunchedEffect
+        delay(10_000L)
+        if (connectionState != AppConnectionState.CONNECTED && iceRestartInFlight) {
+            Log.w("WEBRTC_LOG", "ICE restart timed out; recreating the peer connection")
+            iceRestartInFlight = false
+            releaseControllerPreview()
+            pendingCandidates.clear()
+            isRemoteDescriptionSet = false
+            currentOfferSessionId = null
+            offerCreated = false
+            WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
+        }
+    }
+
+    LaunchedEffect(
+        roomCode,
+        roomStatus,
+        uiNowMs,
+        offerCreated,
+        lastFrameTimestampMs,
+        lastOfferCreatedAtMs
+    ) {
         val waitingForFirstFrame =
             roomStatus == "connected" &&
                 offerCreated &&
@@ -807,11 +947,14 @@ fun WaitingForApprovalScreen(
         currentOfferSessionId = null
         lastOfferCreatedAtMs = 0L
         offerCreated = false
-        WebRtcSessionManager.clearConnections()
+        WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
     }
 
-    LaunchedEffect(firebaseAnswer, firebaseRtcSessionId, currentOfferSessionId) {
+    LaunchedEffect(roomCode, firebaseAnswer) {
         if (isEndingSession || roomStatus != "connected") return@LaunchedEffect
+        if (!WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+            return@LaunchedEffect
+        }
         val answer = firebaseAnswer ?: return@LaunchedEffect
         if (firebaseRtcSessionId == null || firebaseRtcSessionId != currentOfferSessionId) {
             Log.d("WEBRTC_LOG", "Controller ignoring stale answer for session=$firebaseRtcSessionId")
@@ -826,14 +969,26 @@ fun WaitingForApprovalScreen(
                     WebRtcSessionManager.sessionDescriptionObserver(
                         onSetSuccess = {
                             scope.launch(Dispatchers.Main) {
-                                if (isEndingSession || roomStatus != "connected") return@launch
+                                if (
+                                    isEndingSession ||
+                                    roomStatus != "connected" ||
+                                    !WebRtcSessionManager.isControllerSessionActive(
+                                        roomCode,
+                                        sessionGeneration
+                                    )
+                                ) return@launch
                                 Log.d(
                                     "WEBRTC_LOG",
                                     "Controller remote description set, applying ${pendingCandidates.size} candidates"
                                 )
                                 isRemoteDescriptionSet = true
                                 pendingCandidates.forEach { candidate ->
-                                    runCatching { pc.addIceCandidate(candidate) }
+                                    runCatching {
+                                        WebRtcSessionManager.addRemoteIceCandidate(
+                                            cameraSide = false,
+                                            candidate = candidate
+                                        )
+                                    }
                                         .onFailure { Log.w("WEBRTC_LOG", "Controller ignored buffered ICE candidate", it) }
                                 }
                                 pendingCandidates.clear()
@@ -848,8 +1003,12 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    LaunchedEffect(roomStatus) {
-        if (roomStatus == "connected" && remoteTrack == null) {
+    LaunchedEffect(roomCode, sessionGeneration, roomStatus) {
+        if (
+            roomStatus == "connected" &&
+            remoteTrack == null &&
+            WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
+        ) {
             WebRtcSessionManager.remoteVideoTrack?.let { existingTrack ->
                 Log.d("WEBRTC_LOG", "Controller reusing existing remote track")
                 remoteTrack = existingTrack
@@ -857,19 +1016,21 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    DisposableEffect(previewContainerRef, remoteTrack) {
+    LaunchedEffect(roomCode, previewContainerRef, remoteTrack) {
         val container = previewContainerRef
         val track = remoteTrack
-        if (container == null || track == null) {
-            onDispose { }
+        if (
+            container == null ||
+            track == null ||
+            !WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
+        ) {
+            return@LaunchedEffect
         } else {
             Log.d("WEBRTC_LOG", "Controller rendering remote track")
             container.attachRemoteTrack(track) {
-                lastFrameTimestampMs = SystemClock.elapsedRealtime()
-            }
-
-            onDispose {
-                container.detachRemoteTrack()
+                if (WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
+                    lastFrameTimestampMs = SystemClock.elapsedRealtime()
+                }
             }
         }
     }
@@ -891,10 +1052,19 @@ fun WaitingForApprovalScreen(
         focusSucceeded = null
     }
 
-    LaunchedEffect(roomStatus) {
+    LaunchedEffect(roomCode, sessionGeneration, roomStatus) {
         while (roomStatus == "connected" && isActive) {
             uiNowMs = SystemClock.elapsedRealtime()
             delay(750)
+        }
+    }
+
+    LaunchedEffect(roomCode, roomStatus) {
+        if (roomStatus != "request_received") return@LaunchedEffect
+        delay(45_000L)
+        if (roomStatus == "request_received" && !isEndingSession) {
+            runCatching { repository.updateApproval(roomCode, false) }
+                .onFailure { Log.w("SESSION_TIMEOUT", "Unable to expire approval wait", it) }
         }
     }
 
