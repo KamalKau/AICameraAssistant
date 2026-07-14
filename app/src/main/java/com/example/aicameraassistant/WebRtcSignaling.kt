@@ -24,6 +24,10 @@ fun createSharedAnswer(
     val pc = WebRtcSessionManager.createCameraPeerConnection(
         onIceCandidate = { candidate ->
             CoroutineScope(Dispatchers.IO).launch {
+                if (
+                    !WebRtcSessionManager.isSessionOwner(cameraSide = true, owner = roomCode) ||
+                    !WebRtcSessionManager.isRemoteIceSessionActive(true, rtcSessionId)
+                ) return@launch
                 runCatching { repository.addCameraIceCandidate(roomCode, candidate, rtcSessionId) }
                     .onFailure { Log.w("WEBRTC_LOG", "Unable to publish camera ICE candidate", it) }
             }
@@ -35,21 +39,35 @@ fun createSharedAnswer(
         pc.setRemoteDescription(
             WebRtcSessionManager.sessionDescriptionObserver(
                 onSetSuccess = {
+                    if (!WebRtcSessionManager.isRemoteIceSessionActive(true, rtcSessionId)) {
+                        return@sessionDescriptionObserver
+                    }
                     onRemoteDescriptionSet()
                     runCatching {
                         pc.createAnswer(
                             WebRtcSessionManager.sessionDescriptionObserver(
                                 onCreateSuccess = { desc ->
+                                    if (!WebRtcSessionManager.isRemoteIceSessionActive(true, rtcSessionId)) {
+                                        return@sessionDescriptionObserver
+                                    }
                                     runCatching {
                                         pc.setLocalDescription(
                                             WebRtcSessionManager.sessionDescriptionObserver(
                                                 onSetSuccess = {
                                                     CoroutineScope(Dispatchers.IO).launch {
+                                                        if (!WebRtcSessionManager.isRemoteIceSessionActive(
+                                                                true,
+                                                                rtcSessionId
+                                                            )
+                                                        ) return@launch
                                                         runCatching {
                                                             repository.saveAnswer(
                                                                 roomCode = roomCode,
                                                                 answerSdp = desc.description,
-                                                                rtcSessionId = rtcSessionId
+                                                                rtcSessionId = rtcSessionId,
+                                                                signalingGeneration = signalingGenerationFromRtcId(
+                                                                    rtcSessionId
+                                                                )
                                                             )
                                                         }.onFailure {
                                                             Log.w("WEBRTC_LOG", "Unable to save WebRTC answer", it)
@@ -79,6 +97,7 @@ fun createSharedOffer(
     context: Context,
     roomCode: String,
     sessionGeneration: Long,
+    signalingGeneration: Long,
     rtcSessionId: String,
     repository: FirebaseRoomRepository,
     onRemoteTrackReady: (VideoTrack) -> Unit,
@@ -133,7 +152,8 @@ fun createSharedOffer(
                                             repository.saveOffer(
                                                 roomCode = roomCode,
                                                 offerSdp = desc.description,
-                                                rtcSessionId = rtcSessionId
+                                                rtcSessionId = rtcSessionId,
+                                                signalingGeneration = signalingGeneration
                                             )
                                         }.onFailure {
                                             Log.w("WEBRTC_LOG", "Unable to save WebRTC offer", it)
@@ -157,3 +177,6 @@ fun createSharedOffer(
     }
     return true
 }
+
+private fun signalingGenerationFromRtcId(rtcSessionId: String): Long =
+    rtcSessionId.split('-').getOrNull(1)?.toLongOrNull() ?: 0L

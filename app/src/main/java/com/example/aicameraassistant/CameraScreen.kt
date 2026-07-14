@@ -134,6 +134,7 @@ import kotlin.coroutines.resume
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.Executors
+import java.util.UUID
 import org.webrtc.IceCandidate
 
 @OptIn(ExperimentalSessionConfig::class)
@@ -148,6 +149,7 @@ fun CameraScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val screenViewModel: CameraScreenViewModel = viewModel()
+    val cameraInstanceId = remember { UUID.randomUUID().toString() }
     LaunchedEffect(roomCode) {
         WebRtcSessionManager.claimSession(cameraSide = true, owner = roomCode)
         screenViewModel.bind(repository, roomCode)
@@ -192,6 +194,25 @@ fun CameraScreen(
     val firebaseRtcSessionId = remoteUiState.rtcSessionId
     val firebaseSessionVersion = remoteUiState.sessionVersion
 
+    LaunchedEffect(roomCode, firebaseRtcSessionId) {
+        if (roomCode.isBlank()) return@LaunchedEffect
+        while (isActive && WebRtcSessionManager.isSessionOwner(cameraSide = true, owner = roomCode)) {
+            runCatching {
+                repository.updateHeartbeat(
+                    roomCode = roomCode,
+                    role = "camera",
+                    sessionId = firebaseRtcSessionId,
+                    signalingGeneration = firebaseRtcSessionId
+                        ?.split('-')
+                        ?.getOrNull(1)
+                        ?.toLongOrNull() ?: 0L,
+                    instanceId = cameraInstanceId
+                )
+            }.onFailure { Log.w("SESSION_HEARTBEAT", "Camera heartbeat failed room=$roomCode") }
+            delay(15_000L)
+        }
+    }
+
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var pendingLocalLensFacing by remember(roomCode) { mutableStateOf<String?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
@@ -199,7 +220,9 @@ fun CameraScreen(
     var camera by remember { mutableStateOf<Camera?>(null) }
     var extensionsManager by remember { mutableStateOf<ExtensionsManager?>(null) }
     var nightExtensionSupportByLens by remember { mutableStateOf<Map<Int, Boolean>>(emptyMap()) }
+    var hdrExtensionSupportByLens by remember { mutableStateOf<Map<Int, Boolean>>(emptyMap()) }
     var nightExtensionActive by remember { mutableStateOf(false) }
+    var hdrExtensionActive by remember { mutableStateOf(false) }
     var boundPreviewUseCases by remember { mutableStateOf<List<Preview>>(emptyList()) }
     var boundAnalysisUseCases by remember { mutableStateOf<List<ImageAnalysis>>(emptyList()) }
     var appliedVideoQuality by remember(roomCode) {
@@ -359,7 +382,29 @@ fun CameraScreen(
             firebaseFlashMode == "off" &&
             !isStreaming &&
             nightExtensionSupportByLens[lensFacing] == true
+    val shouldBindHdrExtension =
+        !isPortraitMode && HdrCapturePolicy.shouldUsePhotoExtension(
+            enabled = firebaseVideoHdrEnabled,
+            supported = hdrExtensionSupportByLens[lensFacing] == true,
+            cameraMode = firebaseCameraMode,
+            nightModeEnabled = firebaseNightModeEnabled,
+            flashMode = firebaseFlashMode
+        )
     val nightModeExposurePolicy = remember { NightModeExposurePolicy() }
+
+    LaunchedEffect(lensFacing, firebaseCameraMode, hdrExtensionSupportByLens) {
+        if (firebaseCameraMode != "video" && hdrExtensionSupportByLens.containsKey(lensFacing)) {
+            val supported = hdrExtensionSupportByLens[lensFacing] == true
+            runCatching {
+                repository.updateVideoHdrSupported(roomCode, supported)
+                if (!supported && firebaseVideoHdrEnabled) {
+                    repository.updateVideoHdrEnabled(roomCode, false)
+                }
+            }.onFailure {
+                Log.w("HDR_EXTENSION", "Unable to publish HDR support room=$roomCode lens=$lensFacing", it)
+            }
+        }
+    }
     val shutterSound = remember {
         MediaActionSound().apply {
             load(MediaActionSound.SHUTTER_CLICK)
@@ -854,7 +899,15 @@ fun CameraScreen(
                 roomCode = roomCode,
                 rtcSessionId = activeRtcSessionId
             ) { candidate ->
-                if (isEndingSession || roomStatus != "connected") return@listenToControllerIceCandidates
+                if (
+                    isEndingSession ||
+                    roomStatus != "connected" ||
+                    !WebRtcSessionManager.isSessionOwner(cameraSide = true, owner = roomCode) ||
+                    !WebRtcSessionManager.isRemoteIceSessionActive(
+                        cameraSide = true,
+                        rtcSessionId = activeRtcSessionId
+                    )
+                ) return@listenToControllerIceCandidates
                 val pc = WebRtcSessionManager.cameraPeerConnection
                 if (isRemoteDescriptionSet && pc != null) {
                     runCatching {
@@ -876,8 +929,18 @@ fun CameraScreen(
         if (roomCode.isBlank()) {
             onDispose { }
         } else {
-            val registration = repository.listenToReliableCommands(roomCode) { id, sequence ->
-                if (sequence <= lastAcknowledgedCommandSequence || isEndingSession) {
+            val registration = repository.listenToReliableCommands(roomCode) {
+                    id, sequence, commandSessionId, commandGeneration ->
+                val activeGeneration = firebaseRtcSessionId
+                    ?.split('-')
+                    ?.getOrNull(1)
+                    ?.toLongOrNull() ?: 0L
+                if (
+                    sequence <= lastAcknowledgedCommandSequence ||
+                    isEndingSession ||
+                    commandSessionId != firebaseRtcSessionId ||
+                    commandGeneration != activeGeneration
+                ) {
                     return@listenToReliableCommands
                 }
                 lastAcknowledgedCommandSequence = sequence
@@ -1873,7 +1936,19 @@ fun CameraScreen(
                 Log.w("NIGHT_EXTENSION", "Night capability query failed for lens=$facing", it)
             }.getOrDefault(false)
         }
+        hdrExtensionSupportByLens = listOf(
+            CameraSelector.LENS_FACING_BACK,
+            CameraSelector.LENS_FACING_FRONT
+        ).associateWith { facing ->
+            val selector = CameraSelector.Builder().requireLensFacing(facing).build()
+            runCatching {
+                manager.isExtensionAvailable(selector, ExtensionMode.HDR)
+            }.onFailure {
+                Log.w("HDR_EXTENSION", "HDR capability query failed for lens=$facing", it)
+            }.getOrDefault(false)
+        }
         Log.i("NIGHT_EXTENSION", "Night support by lens=$nightExtensionSupportByLens")
+        Log.i("HDR_EXTENSION", "HDR support by lens=$hdrExtensionSupportByLens")
     }
 
     LaunchedEffect(
@@ -1883,11 +1958,13 @@ fun CameraScreen(
         firebaseVideoHdrEnabled,
         appliedVideoQuality,
         firebaseSceneDetectionEnabled,
-        shouldBindNightExtension
+        shouldBindNightExtension,
+        shouldBindHdrExtension
     ) {
         cameraPreviewReady = false
         cameraStartupFailed = false
         nightExtensionActive = false
+        hdrExtensionActive = false
         boundPreviewUseCases = emptyList()
         boundAnalysisUseCases = emptyList()
         supportedVideoQualitiesForLens = emptyList()
@@ -1949,11 +2026,16 @@ fun CameraScreen(
             .requireLensFacing(lensFacing)
             .build()
         val nightManager = extensionsManager
-        val nightExtensionSelector = if (shouldBindNightExtension && nightManager != null) {
+        val requestedExtensionMode = when {
+            shouldBindNightExtension -> ExtensionMode.NIGHT
+            shouldBindHdrExtension -> ExtensionMode.HDR
+            else -> null
+        }
+        val nightExtensionSelector = if (requestedExtensionMode != null && nightManager != null) {
             runCatching {
-                nightManager.getExtensionEnabledCameraSelector(cameraSelector, ExtensionMode.NIGHT)
+                nightManager.getExtensionEnabledCameraSelector(cameraSelector, requestedExtensionMode)
             }.onFailure {
-                Log.w("NIGHT_EXTENSION", "Unable to create Night-enabled selector", it)
+                Log.w("CAMERA_EXTENSION", "Unable to create extension selector mode=$requestedExtensionMode", it)
             }.getOrNull()
         } else {
             null
@@ -2012,10 +2094,12 @@ fun CameraScreen(
             }
             val enableVideoHdrForBind =
                 firebaseCameraMode == "video" && firebaseVideoHdrEnabled && videoHdrSupportedForLens
-            launchRoomWrite("video HDR support publish") {
-                repository.updateVideoHdrSupported(roomCode, videoHdrSupportedForLens)
-                if (!videoHdrSupportedForLens && firebaseVideoHdrEnabled) {
-                    repository.updateVideoHdrEnabled(roomCode, false)
+            if (firebaseCameraMode == "video") {
+                launchRoomWrite("video HDR support publish") {
+                    repository.updateVideoHdrSupported(roomCode, videoHdrSupportedForLens)
+                    if (!videoHdrSupportedForLens && firebaseVideoHdrEnabled) {
+                        repository.updateVideoHdrEnabled(roomCode, false)
+                    }
                 }
             }
             fun buildVideoCapture(dynamicRange: DynamicRange): VideoCapture<Recorder> {
@@ -2147,7 +2231,11 @@ fun CameraScreen(
             val extensionSupportsAnalysis =
                 !bindWithNightExtension ||
                     runCatching {
-                        nightManager?.isImageAnalysisSupported(cameraSelector, ExtensionMode.NIGHT) == true
+                        requestedExtensionMode != null &&
+                            nightManager?.isImageAnalysisSupported(
+                                cameraSelector,
+                                requestedExtensionMode
+                            ) == true
                     }.getOrDefault(false)
             if (!isStreaming && extensionSupportsAnalysis) {
                 finalUseCases.add(faceAnalysis)
@@ -2274,11 +2362,19 @@ fun CameraScreen(
                 } catch (extensionError: Exception) {
                     if (!bindWithNightExtension) throw extensionError
                     Log.w(
-                        "NIGHT_EXTENSION",
-                        "OEM Night bind failed; retrying standard camera pipeline",
+                        "CAMERA_EXTENSION",
+                        "OEM extension bind failed mode=$requestedExtensionMode; retrying standard pipeline",
                         extensionError
                     )
                     bindWithNightExtension = false
+                    if (requestedExtensionMode == ExtensionMode.HDR) {
+                        hdrExtensionSupportByLens =
+                            hdrExtensionSupportByLens + (lensFacing to false)
+                        launchRoomWrite("HDR extension fallback") {
+                            repository.updateVideoHdrSupported(roomCode, false)
+                            repository.updateVideoHdrEnabled(roomCode, false)
+                        }
+                    }
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, sessionConfig)
                 }
@@ -2388,9 +2484,17 @@ fun CameraScreen(
 
             camera = finalCamera
             nightExtensionActive = bindWithNightExtension
+                && requestedExtensionMode == ExtensionMode.NIGHT
+            hdrExtensionActive = bindWithNightExtension
+                && requestedExtensionMode == ExtensionMode.HDR
             Log.i(
                 "NIGHT_EXTENSION",
                 "Night extension active=$nightExtensionActive lens=$lensFacing"
+            )
+            Log.i(
+                "HDR_EXTENSION",
+                "HDR extension active=$hdrExtensionActive lens=$lensFacing " +
+                    "flash=$firebaseFlashMode portrait=$isPortraitMode night=$firebaseNightModeEnabled"
             )
             imageCapture = if (finalUseCases.contains(newImageCapture)) newImageCapture else null
             videoCapture = if (finalUseCases.contains(activeVideoCapture)) activeVideoCapture else null

@@ -28,6 +28,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.aicameraassistant.ui.theme.CameraBlue40
+import com.example.aicameraassistant.ui.theme.CameraBlue80
+import com.example.aicameraassistant.ui.theme.CameraCoral40
+import com.example.aicameraassistant.ui.theme.CameraRose40
 
 @Composable
 fun CameraGridOverlay(modifier: Modifier = Modifier) {
@@ -105,14 +109,14 @@ fun HostTopOverlay(
                 ApprovalActionButton(
                     text = "Allow",
                     icon = Icons.Default.Check,
-                    colors = listOf(Color(0xFF1FA66A), Color(0xFF38D991)),
+                    colors = listOf(CameraBlue40, CameraBlue80),
                     onClick = actions.onAllowController,
                     modifier = Modifier.weight(1f)
                 )
                 ApprovalActionButton(
                     text = "Deny",
                     icon = Icons.Default.Close,
-                    colors = listOf(Color(0xFFB3262E), Color(0xFFFF5A66)),
+                    colors = listOf(CameraCoral40, CameraRose40),
                     onClick = actions.onDenyController,
                     modifier = Modifier.weight(1f)
                 )

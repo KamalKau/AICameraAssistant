@@ -32,7 +32,12 @@ data class WebRtcDiagnostics(
     val averageLatencyMs: Double = 0.0,
     val packetLossPercent: Double = 0.0,
     val bitrateBps: Long = 0L,
-    val framesPerSecond: Double = 0.0
+    val framesPerSecond: Double = 0.0,
+    val availableOutgoingBitrateBps: Long = 0L,
+    val jitterMs: Double = 0.0,
+    val framesDropped: Long = 0L,
+    val selectedCandidateType: String = "unknown",
+    val usingRelay: Boolean = false
 )
 
 object WebRtcSessionManager {
@@ -50,6 +55,8 @@ object WebRtcSessionManager {
         CAMERA,
         CONTROLLER
     }
+
+    private enum class PreviewQuality { EXCELLENT, GOOD, WEAK, VERY_WEAK }
 
     private const val DISCONNECT_TIMEOUT_MS = 5_000L
     private const val WEAK_NETWORK_HOLD_MS = 2_500L
@@ -119,6 +126,44 @@ object WebRtcSessionManager {
     private var previousStatsAtMs = 0L
     private var previousBytesSent = 0L
     private var previousFramesSent = 0L
+    private var configuredIceServers: List<IceServerCredential> = emptyList()
+    private var previewQuality = PreviewQuality.GOOD
+    private var qualityUpgradeSamples = 0
+    private val diagnosticLogTimes = mutableMapOf<String, Long>()
+
+    @Synchronized
+    fun updateIceServers(credentials: List<IceServerCredential>) {
+        configuredIceServers = credentials.filter { it.isUsable() }
+    }
+
+    @Synchronized
+    fun logSessionDiagnostics(
+        role: String,
+        roomCode: String,
+        sessionId: String?,
+        signalingGeneration: Long,
+        reconnectReason: String,
+        reconnectAttempt: Int,
+        lastFrameAtMs: Long
+    ) {
+        if (!BuildConfig.DEBUG) return
+        val key = "$role:$roomCode"
+        val now = SystemClock.elapsedRealtime()
+        if (now - (diagnosticLogTimes[key] ?: 0L) < 5_000L) return
+        diagnosticLogTimes[key] = now
+        val value = diagnostics.value
+        Log.d(
+            "WEBRTC_DIAGNOSTIC",
+            "role=$role room=$roomCode session=$sessionId generation=$signalingGeneration " +
+                "connection=${value.connectionState} ice=${value.iceState} " +
+                "signaling=${value.signalingState} reconnectReason=$reconnectReason " +
+                "attempt=$reconnectAttempt lastFrame=$lastFrameAtMs rttMs=${value.averageLatencyMs} " +
+                "loss=${value.packetLossPercent} bitrate=${value.bitrateBps} " +
+                "available=${value.availableOutgoingBitrateBps} fps=${value.framesPerSecond} " +
+                "jitterMs=${value.jitterMs} dropped=${value.framesDropped} " +
+                "candidate=${value.selectedCandidateType} relay=${value.usingRelay}"
+        )
+    }
 
     @Synchronized
     fun initialize(context: Context) {
@@ -156,21 +201,31 @@ object WebRtcSessionManager {
     }
 
     private fun buildRtcConfig(): PeerConnection.RTCConfiguration {
-        val iceServers = listOf(
+        val stunServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80?transport=udp")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer(),
-            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer()
+            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
         )
+        val provisionedTurn = configuredIceServers.mapNotNull { credential ->
+            if (!credential.isUsable()) return@mapNotNull null
+            PeerConnection.IceServer.builder(credential.urls)
+                .setUsername(credential.username)
+                .setPassword(credential.password)
+                .createIceServer()
+        }
+        val debugTurn = if (BuildConfig.DEBUG && provisionedTurn.isEmpty()) {
+            listOf(
+                PeerConnection.IceServer.builder(
+                    listOf(
+                        "turn:openrelay.metered.ca:80?transport=udp",
+                        "turn:openrelay.metered.ca:443?transport=tcp"
+                    )
+                )
+                    .setUsername("openrelayproject")
+                    .setPassword("openrelayproject")
+                    .createIceServer()
+            )
+        } else emptyList()
+        val iceServers = stunServers + provisionedTurn + debugTurn
 
         return PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -638,6 +693,10 @@ object WebRtcSessionManager {
     }
 
     @Synchronized
+    fun isRemoteIceSessionActive(cameraSide: Boolean, rtcSessionId: String): Boolean =
+        (if (cameraSide) cameraRtcSessionId else controllerRtcSessionId) == rtcSessionId
+
+    @Synchronized
     fun addRemoteIceCandidate(cameraSide: Boolean, candidate: IceCandidate): Boolean {
         val connection = (if (cameraSide) cameraPeerConnection else controllerPeerConnection)
             ?: return false
@@ -867,6 +926,37 @@ object WebRtcSessionManager {
         }.onFailure { Log.w("WEBRTC_STATS", "Unable to adapt sender profile", it) }
     }
 
+    @Synchronized
+    private fun updatePreviewQuality(desired: PreviewQuality) {
+        if (desired == previewQuality) {
+            qualityUpgradeSamples = 0
+            return
+        }
+        if (desired.ordinal < previewQuality.ordinal) {
+            qualityUpgradeSamples += 1
+            if (qualityUpgradeSamples < 4) return
+        }
+        qualityUpgradeSamples = 0
+        val sender = cameraPeerConnection?.senders?.firstOrNull { it.track() is VideoTrack } ?: return
+        runCatching {
+            val params = sender.parameters
+            params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+            params.encodings.firstOrNull()?.let { encoding ->
+                val profile = when (desired) {
+                    PreviewQuality.EXCELLENT -> Triple(1_200_000, 5_000_000, 30)
+                    PreviewQuality.GOOD -> Triple(700_000, 3_000_000, 27)
+                    PreviewQuality.WEAK -> Triple(350_000, 1_500_000, 20)
+                    PreviewQuality.VERY_WEAK -> Triple(180_000, 650_000, 15)
+                }
+                encoding.minBitrateBps = profile.first
+                encoding.maxBitrateBps = profile.second
+                encoding.maxFramerate = profile.third
+            }
+            sender.parameters = params
+            previewQuality = desired
+        }.onFailure { Log.w("WEBRTC_STATS", "Unable to update preview quality", it) }
+    }
+
     private fun updateDiagnostics(
         connectionState: AppConnectionState = _diagnostics.value.connectionState,
         iceState: String = _diagnostics.value.iceState,
@@ -879,7 +969,7 @@ object WebRtcSessionManager {
             signalingState = signalingState,
             reconnectAttempts = reconnectAttempts
         )
-        if (Log.isLoggable("WEBRTC_STATS", Log.DEBUG)) {
+        if (BuildConfig.DEBUG) {
             Log.d("WEBRTC_STATS", _diagnostics.value.toString())
         }
     }
@@ -921,6 +1011,21 @@ object WebRtcSessionManager {
                     val latencyMs =
                         ((remoteInbound?.members?.get("roundTripTime") as? Number)?.toDouble()
                             ?: 0.0) * 1_000.0
+                    val candidatePair = stats.firstOrNull {
+                        it.type == "candidate-pair" &&
+                            (it.members["selected"] == true || it.members["nominated"] == true)
+                    }
+                    val availableOutgoing =
+                        (candidatePair?.members?.get("availableOutgoingBitrate") as? Number)
+                            ?.toLong() ?: 0L
+                    val jitterMs =
+                        ((remoteInbound?.members?.get("jitter") as? Number)?.toDouble() ?: 0.0) * 1_000.0
+                    val framesDropped =
+                        (outbound.members["framesDropped"] as? Number)?.toLong() ?: 0L
+                    val localCandidateId = candidatePair?.members?.get("localCandidateId") as? String
+                    val localCandidate = localCandidateId?.let { report.statsMap[it] }
+                    val candidateType =
+                        localCandidate?.members?.get("candidateType") as? String ?: "unknown"
                     previousStatsAtMs = now
                     previousBytesSent = bytesSent
                     previousFramesSent = framesSent
@@ -928,8 +1033,23 @@ object WebRtcSessionManager {
                         averageLatencyMs = latencyMs,
                         packetLossPercent = packetLoss,
                         bitrateBps = bitrate,
-                        framesPerSecond = fps
+                        framesPerSecond = fps,
+                        availableOutgoingBitrateBps = availableOutgoing,
+                        jitterMs = jitterMs,
+                        framesDropped = framesDropped,
+                        selectedCandidateType = candidateType,
+                        usingRelay = candidateType.equals("relay", ignoreCase = true)
                     )
+                    val desiredQuality = when {
+                        packetLoss >= 12.0 || latencyMs >= 600.0 ||
+                            availableOutgoing in 1 until 500_000 -> PreviewQuality.VERY_WEAK
+                        packetLoss >= 5.0 || latencyMs >= 300.0 ||
+                            availableOutgoing in 1 until 1_500_000 -> PreviewQuality.WEAK
+                        packetLoss >= 2.0 || latencyMs >= 180.0 ||
+                            availableOutgoing in 1 until 3_000_000 -> PreviewQuality.GOOD
+                        else -> PreviewQuality.EXCELLENT
+                    }
+                    updatePreviewQuality(desiredQuality)
                     if (
                         packetLoss >= 8.0 &&
                         _cameraConnectionState.value == AppConnectionState.CONNECTED

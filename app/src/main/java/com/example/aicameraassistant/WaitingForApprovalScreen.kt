@@ -108,6 +108,16 @@ import org.webrtc.IceCandidate
 import org.webrtc.RendererCommon
 import org.webrtc.SessionDescription
 import org.webrtc.VideoTrack
+import java.util.UUID
+
+private enum class ControllerReconnectState {
+    CONNECTED,
+    DISCONNECTED_GRACE_PERIOD,
+    ICE_RESTARTING,
+    REBUILDING,
+    RECONNECTED,
+    FAILED_PERMANENTLY
+}
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -119,6 +129,7 @@ fun WaitingForApprovalScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val screenViewModel: ControllerScreenViewModel = viewModel()
+    val controllerInstanceId = remember { UUID.randomUUID().toString() }
     val haptic = LocalHapticFeedback.current
     val vibrator = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -225,6 +236,9 @@ fun WaitingForApprovalScreen(
     val pendingCandidates = remember(roomCode) { mutableListOf<IceCandidate>() }
     var iceRestartInFlight by remember(roomCode) { mutableStateOf(false) }
     var recoverySignal by remember(roomCode) { mutableLongStateOf(0L) }
+    var reconnectState by remember(roomCode) { mutableStateOf(ControllerReconnectState.CONNECTED) }
+    var reconnectAttempt by remember(roomCode) { mutableIntStateOf(0) }
+    var signalingGeneration by remember(roomCode) { mutableLongStateOf(0L) }
     val latestConnectionState by rememberUpdatedState(connectionState)
     var isRemoteDescriptionSet by screenViewModel::isRemoteDescriptionSet
     var currentOfferSessionId by screenViewModel::currentOfferSessionId
@@ -544,6 +558,41 @@ fun WaitingForApprovalScreen(
         previewRetryCount = 0
         offerCreated = false
         iceRestartInFlight = false
+        reconnectState = ControllerReconnectState.CONNECTED
+        reconnectAttempt = 0
+    }
+
+    LaunchedEffect(roomCode, sessionGeneration, currentOfferSessionId) {
+        if (roomCode.isBlank() || sessionGeneration <= 0L) return@LaunchedEffect
+        while (
+            isActive &&
+            WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
+        ) {
+            runCatching {
+                repository.updateHeartbeat(
+                    roomCode = roomCode,
+                    role = "controller",
+                    sessionId = currentOfferSessionId,
+                    signalingGeneration = signalingGeneration,
+                    instanceId = controllerInstanceId
+                )
+            }.onFailure {
+                Log.w("SESSION_HEARTBEAT", "Controller heartbeat failed room=$roomCode")
+            }
+            delay(15_000L)
+        }
+    }
+
+    LaunchedEffect(roomCode, sessionGeneration, uiNowMs) {
+        WebRtcSessionManager.logSessionDiagnostics(
+            role = "controller",
+            roomCode = roomCode,
+            sessionId = currentOfferSessionId,
+            signalingGeneration = signalingGeneration,
+            reconnectReason = reconnectState.name,
+            reconnectAttempt = reconnectAttempt,
+            lastFrameAtMs = lastFrameTimestampMs
+        )
     }
 
     fun sendZoomUpdate(zoom: Float, force: Boolean = false) {
@@ -776,7 +825,7 @@ fun WaitingForApprovalScreen(
         }
     }
 
-    LaunchedEffect(roomCode, roomStatus) {
+    LaunchedEffect(roomCode, roomStatus, recoverySignal) {
         Log.d(
             "SESSION_TRACE",
             "offerEffect room=$roomCode status=$roomStatus connection=$connectionState " +
@@ -831,14 +880,26 @@ fun WaitingForApprovalScreen(
                 connectionState == AppConnectionState.DISCONNECTED &&
                     WebRtcSessionManager.controllerPeerConnection != null &&
                     !iceRestartInFlight
+            reconnectState = if (attemptIceRestart) {
+                ControllerReconnectState.ICE_RESTARTING
+            } else if (reconnectAttempt > 0) {
+                ControllerReconnectState.REBUILDING
+            } else {
+                ControllerReconnectState.CONNECTED
+            }
             if (connectionState == AppConnectionState.DISCONNECTED && !attemptIceRestart) {
                 releaseControllerPreview()
                 pendingCandidates.clear()
                 isRemoteDescriptionSet = false
             }
 
+            val previousRtcSessionId = currentOfferSessionId
             runCatching {
-                repository.clearIceCandidates(roomCode)
+                if (previousRtcSessionId == null) {
+                    repository.clearIceCandidates(roomCode)
+                } else {
+                    repository.clearIceCandidatesForSession(roomCode, previousRtcSessionId)
+                }
             }.onFailure {
                 Log.w("WEBRTC_LOG", "Unable to clear ICE candidates before creating offer", it)
             }
@@ -849,7 +910,9 @@ fun WaitingForApprovalScreen(
                 return@LaunchedEffect
             }
 
-            val nextRtcSessionId = "${System.currentTimeMillis()}-${roomCode}"
+            signalingGeneration += 1L
+            val nextRtcSessionId =
+                "$sessionGeneration-$signalingGeneration-${System.currentTimeMillis()}-$roomCode"
             iceRestartInFlight = attemptIceRestart
             currentOfferSessionId = nextRtcSessionId
             lastOfferCreatedAtMs = SystemClock.elapsedRealtime()
@@ -858,6 +921,7 @@ fun WaitingForApprovalScreen(
                 context = context,
                 roomCode = roomCode,
                 sessionGeneration = sessionGeneration,
+                signalingGeneration = signalingGeneration,
                 rtcSessionId = nextRtcSessionId,
                 repository = repository,
                 onRemoteTrackReady = { track ->
@@ -895,8 +959,43 @@ fun WaitingForApprovalScreen(
                 if (attemptIceRestart) {
                     WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
                     offerCreated = false
+                    reconnectState = ControllerReconnectState.REBUILDING
+                    recoverySignal += 1L
                 }
             }
+        }
+    }
+
+    LaunchedEffect(roomCode, connectionState) {
+        when (connectionState) {
+            AppConnectionState.CONNECTED -> {
+                if (reconnectAttempt > 0) reconnectState = ControllerReconnectState.RECONNECTED
+                reconnectAttempt = 0
+                iceRestartInFlight = false
+            }
+            AppConnectionState.RETRYING -> {
+                reconnectState = ControllerReconnectState.DISCONNECTED_GRACE_PERIOD
+            }
+            AppConnectionState.DISCONNECTED -> {
+                if (roomStatus != "connected" || isEndingSession) return@LaunchedEffect
+                if (reconnectAttempt >= ConnectivityRetryPolicy.maxReconnectAttempts) {
+                    reconnectState = ControllerReconnectState.FAILED_PERMANENTLY
+                    return@LaunchedEffect
+                }
+                reconnectState = ControllerReconnectState.DISCONNECTED_GRACE_PERIOD
+                delay(
+                    if (reconnectAttempt == 0) 1_500L
+                    else ConnectivityRetryPolicy.delayMs(reconnectAttempt - 1)
+                )
+                if (
+                    connectionState == AppConnectionState.DISCONNECTED &&
+                    WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
+                ) {
+                    reconnectAttempt += 1
+                    recoverySignal += 1L
+                }
+            }
+            else -> Unit
         }
     }
 
@@ -916,6 +1015,8 @@ fun WaitingForApprovalScreen(
             currentOfferSessionId = null
             offerCreated = false
             WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
+            reconnectState = ControllerReconnectState.REBUILDING
+            recoverySignal += 1L
         }
     }
 
@@ -948,6 +1049,8 @@ fun WaitingForApprovalScreen(
         lastOfferCreatedAtMs = 0L
         offerCreated = false
         WebRtcSessionManager.resetControllerPeer(roomCode, sessionGeneration)
+        reconnectState = ControllerReconnectState.REBUILDING
+        recoverySignal += 1L
     }
 
     LaunchedEffect(roomCode, firebaseAnswer) {

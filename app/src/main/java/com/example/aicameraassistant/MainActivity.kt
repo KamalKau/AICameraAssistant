@@ -97,6 +97,11 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         NetworkRecoveryMonitor.notifyForeground()
     }
+
+    override fun onDestroy() {
+        NetworkRecoveryMonitor.shutdown()
+        super.onDestroy()
+    }
 }
 
 @Composable
