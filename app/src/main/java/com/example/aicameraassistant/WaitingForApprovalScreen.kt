@@ -297,9 +297,11 @@ fun WaitingForApprovalScreen(
         )
     }
 
-    val minZoom = firebaseMinZoom.coerceAtLeast(1.0)
+    // CameraX logical cameras may expose values below 1x to switch to an ultrawide
+    // physical lens. Preserve the camera-published range in every capture mode.
+    val minZoom = firebaseMinZoom.takeIf { it.isFinite() && it > 0.0 } ?: 1.0
     val maxZoom = firebaseMaxZoom.coerceAtLeast(minZoom)
-    val controllerMaxZoom = maxZoom.coerceAtLeast(CONTROLLER_ZOOM_BAR_MAX)
+    val controllerMaxZoom = maxZoom
     val exposureUiState = buildExposureUiState(
         minIndex = firebaseExposureMinIndex,
         maxIndex = firebaseExposureMaxIndex,
@@ -1140,10 +1142,14 @@ fun WaitingForApprovalScreen(
 
     LaunchedEffect(firebaseZoomLevel, minZoom, maxZoom, isZoomDragging) {
         if (!isZoomDragging) {
-            zoomUiValue = firebaseZoomLevel.toFloat().coerceIn(
-                minZoom.toFloat(),
-                controllerMaxZoom.toFloat()
-            )
+            val clampedRemoteZoom = firebaseZoomLevel.coerceIn(minZoom, controllerMaxZoom)
+            val pendingZoom = lastSentZoom.takeUnless { it.isNaN() }
+            val remoteReachedPendingValue =
+                pendingZoom == null || abs(clampedRemoteZoom - pendingZoom) < 0.02
+            if (remoteReachedPendingValue) {
+                zoomUiValue = clampedRemoteZoom.toFloat()
+                if (pendingZoom != null) lastSentZoom = Double.NaN
+            }
         }
     }
 
@@ -2316,7 +2322,4 @@ private fun FocusExposureConnector(
         )
     }
 }
-
-private const val CONTROLLER_ZOOM_BAR_MAX = 30.0
-
 

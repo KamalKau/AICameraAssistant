@@ -2577,13 +2577,29 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(camera, firebaseZoomLevel) {
+    LaunchedEffect(camera, firebaseZoomLevel, firebaseCameraMode, lensFacing) {
         val currentCamera = camera ?: return@LaunchedEffect
         val zoomState = currentCamera.cameraInfo.zoomState.value
         val maxZoom = zoomState?.maxZoomRatio ?: 1f
         val minZoom = zoomState?.minZoomRatio ?: 1f
         val clampedZoom = firebaseZoomLevel.toFloat().coerceIn(minZoom, maxZoom)
-        currentCamera.cameraControl.setZoomRatio(clampedZoom)
+        val zoomFuture = currentCamera.cameraControl.setZoomRatio(clampedZoom)
+        zoomFuture.addListener(
+            {
+                runCatching { zoomFuture.get() }
+                    .onFailure { error ->
+                        if (camera === currentCamera) {
+                            Log.w(
+                                "CAMERA_ZOOM",
+                                "Zoom apply failed mode=$firebaseCameraMode lens=$lensFacing " +
+                                    "requested=$firebaseZoomLevel clamped=$clampedZoom",
+                                error
+                            )
+                        }
+                    }
+            },
+            ContextCompat.getMainExecutor(context)
+        )
         if (clampedZoom.toDouble() != firebaseZoomLevel) {
             launchRoomWrite("zoom clamp publish") {
                 repository.updateZoomLevel(roomCode, clampedZoom.toDouble())
@@ -2888,7 +2904,6 @@ fun CameraScreen(
                     )
                     .pointerInput(
                         camera,
-                        firebaseZoomLevel,
                         firebaseCameraMode,
                         exposureUiState.supported,
                         exposureUiState.progress

@@ -131,6 +131,13 @@ class ScreenStatePresentersTest {
     }
 
     @Test
+    fun controllerCommonZoomOptionsKeepsUltrawideLensValue() {
+        val options = buildControllerCommonZoomOptions(minZoom = 0.6, maxZoom = 3.0)
+
+        assertEquals(listOf(0.6f, 1.0f, 2.0f, 3.0f), options)
+    }
+
+    @Test
     fun connectedHostStatusHasNoWarning() {
         val state = buildHostTopOverlayUiState(
             roomCode = "ABCDE",
