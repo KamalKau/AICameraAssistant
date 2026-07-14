@@ -112,7 +112,8 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getExposureIndex(roomCode),
                 repository.getOfferSdp(roomCode),
                 repository.getRtcSessionId(roomCode),
-                repository.getSessionVersion(roomCode)
+                repository.getSessionVersion(roomCode),
+                repository.getGestureCaptureEnabled(roomCode)
             ) { values: Array<Any?> ->
                 val portraitSubject = values[11] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[12] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
@@ -159,7 +160,8 @@ class CameraScreenViewModel : ViewModel() {
                     exposureIndex = values[28] as? Int ?: 0,
                     offerSdp = values[29] as String?,
                     rtcSessionId = values[30] as String?,
-                    sessionVersion = values[31] as? Long ?: 0L
+                    sessionVersion = values[31] as? Long ?: 0L,
+                    gestureCaptureEnabled = values[32] as? Boolean ?: false
                 )
             }.collect { state ->
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {

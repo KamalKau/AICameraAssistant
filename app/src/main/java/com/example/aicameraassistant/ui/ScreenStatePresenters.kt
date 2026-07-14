@@ -134,7 +134,9 @@ fun buildCameraToolRailUiState(
     cameraMode: String,
     toolbarExpanded: Boolean,
     boomerangSelected: Boolean,
-    exposureSupported: Boolean
+    exposureSupported: Boolean,
+    gestureCaptureEnabled: Boolean = false,
+    gestureCaptureSupported: Boolean = false
 ): CameraToolRailUiState =
     CameraToolRailUiState(
         flashIcon = when {
@@ -155,6 +157,8 @@ fun buildCameraToolRailUiState(
         sceneDetectionEnabled = sceneDetectionEnabled,
         gridEnabled = gridEnabled,
         nightModeEnabled = nightModeEnabled,
+        gestureCaptureEnabled = gestureCaptureEnabled,
+        gestureCaptureSupported = gestureCaptureSupported,
         videoHdrSupported = videoHdrSupported,
         videoHdrEnabled = videoHdrEnabled,
         videoQuality = VideoQualityOption.fromFirebaseValue(videoQuality),

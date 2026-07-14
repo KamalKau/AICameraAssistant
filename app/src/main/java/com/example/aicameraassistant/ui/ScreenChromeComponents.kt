@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.BackHand
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
@@ -471,6 +472,15 @@ fun CameraToolRail(
                 selected = state.nightModeEnabled,
                 onClick = actions.onNightModeClick
             )
+            if (state.gestureCaptureSupported) {
+                CameraToolButton(
+                    icon = Icons.Default.BackHand,
+                    label = "Gesture Capture",
+                    showLabel = true,
+                    selected = state.gestureCaptureEnabled,
+                    onClick = actions.onGestureCaptureClick
+                )
+            }
         }
         CameraToolButton(
             icon = if (labelsExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,

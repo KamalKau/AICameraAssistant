@@ -152,7 +152,8 @@ class ControllerScreenViewModel : ViewModel() {
                 repository.getPreviewWidth(roomCode),
                 repository.getPreviewHeight(roomCode),
                 repository.getFocusRequestId(roomCode),
-                repository.getFocusLockEnabled(roomCode)
+                repository.getFocusLockEnabled(roomCode),
+                repository.getGestureCaptureEnabled(roomCode)
             ) { values: Array<Any?> ->
                 val portraitSubject = values[13] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[14] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
@@ -200,7 +201,8 @@ class ControllerScreenViewModel : ViewModel() {
                     previewWidth = values[32] as? Int ?: 0,
                     previewHeight = values[33] as? Int ?: 0,
                     focusRequestId = values[34] as? Long ?: 0L,
-                    focusLockEnabled = values[35] as? Boolean ?: false
+                    focusLockEnabled = values[35] as? Boolean ?: false,
+                    gestureCaptureEnabled = values[36] as? Boolean ?: false
                 )
             }.collect { state ->
                 if (boundRoomCode != roomCode) {

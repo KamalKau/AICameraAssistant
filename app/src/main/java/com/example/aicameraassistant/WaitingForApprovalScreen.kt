@@ -177,6 +177,7 @@ fun WaitingForApprovalScreen(
     val firebaseFlashSupported = remoteUiState.flashSupported
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseGestureCaptureEnabled = remoteUiState.gestureCaptureEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseVideoQuality = remoteUiState.videoQuality
@@ -384,7 +385,10 @@ fun WaitingForApprovalScreen(
         cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
         boomerangSelected = firebaseBoomerangEnabled,
-        exposureSupported = exposureUiState.supported
+        exposureSupported = exposureUiState.supported,
+        gestureCaptureEnabled = firebaseGestureCaptureEnabled,
+        gestureCaptureSupported = firebaseCameraMode == "photo" ||
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
     )
     fun resetControllerExposureToNeutral() {
         if (!exposureUiState.supported) return
@@ -469,6 +473,9 @@ fun WaitingForApprovalScreen(
         },
         onNightModeClick = {
             controllerCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onGestureCaptureClick = {
+            controllerCoordinator.updateGestureCaptureEnabled(firebaseGestureCaptureEnabled)
         },
         onVideoHdrClick = {
             controllerCoordinator.updateVideoHdrEnabled(
@@ -1411,7 +1418,9 @@ fun WaitingForApprovalScreen(
                                     }
                                 }
                             )
-                            renderer.setMirror(shouldMirrorPreview(firebaseLensFacing))
+                            // The remote stream already carries the camera-facing orientation.
+                            // Do not apply a second selfie mirror on the controller.
+                            renderer.setMirror(false)
                             renderer.setEnableHardwareScaler(true)
                             renderer.setScalingType(
                                 RendererCommon.ScalingType.SCALE_ASPECT_FIT,
@@ -1455,7 +1464,7 @@ fun WaitingForApprovalScreen(
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT,
                             RendererCommon.ScalingType.SCALE_ASPECT_FIT
                         )
-                        renderer.setMirror(shouldMirrorPreview(firebaseLensFacing))
+                        renderer.setMirror(false)
                         if (controllerDisplayWidth > 0 && controllerDisplayHeight > 0) {
                             container.setVideoLayout(
                                 controllerDisplayWidth,

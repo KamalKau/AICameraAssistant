@@ -133,6 +133,10 @@ import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.pose.PoseDetection
+import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
+import kotlinx.coroutines.tasks.await
 import java.util.concurrent.Executors
 import java.util.UUID
 import org.webrtc.IceCandidate
@@ -176,6 +180,7 @@ fun CameraScreen(
     val firebaseSceneDetectionEnabled = remoteUiState.sceneDetectionEnabled
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
+    val firebaseGestureCaptureEnabled = remoteUiState.gestureCaptureEnabled
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseVideoQuality = remoteUiState.videoQuality
@@ -333,6 +338,7 @@ fun CameraScreen(
     var lastSceneKey by remember { mutableStateOf("auto") }
     var lastNightAutoAppliedMs by remember { mutableLongStateOf(0L) }
     var cameraAnalysisActive by remember { mutableStateOf(false) }
+    var gestureCaptureAnalysisActive by remember { mutableStateOf(false) }
     var lastCameraAnalysisResultMs by remember { mutableLongStateOf(0L) }
     val faceDetector = remember {
         FaceDetection.getClient(
@@ -346,6 +352,15 @@ fun CameraScreen(
                 .build()
             )
     }
+    val gesturePoseDetector = remember {
+        PoseDetection.getClient(
+            PoseDetectorOptions.Builder()
+                .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+                .build()
+        )
+    }
+    val gestureRecognizer = remember { GestureCaptureRecognizer() }
+    var gestureCaptureInProgress by remember { mutableStateOf(false) }
     val sceneAnalyzer = remember { SceneDetectionAnalyzer() }
     val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val faceBoundsMapper = remember { FaceBoundsMapper() }
@@ -391,6 +406,25 @@ fun CameraScreen(
             flashMode = firebaseFlashMode
         )
     val nightModeExposurePolicy = remember { NightModeExposurePolicy() }
+
+    LaunchedEffect(
+        firebaseGestureCaptureEnabled,
+        firebaseCameraMode,
+        remoteUiState.portraitStatus,
+        camera
+    ) {
+        val modeSupported = firebaseCameraMode == "photo" ||
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
+        val shouldAnalyze = firebaseGestureCaptureEnabled && modeSupported && camera != null
+        if (gestureCaptureAnalysisActive != shouldAnalyze) {
+            gestureCaptureAnalysisActive = shouldAnalyze
+            Log.d(
+                "GESTURE_CAPTURE",
+                "analysisActive=$shouldAnalyze mode=$firebaseCameraMode " +
+                    "portraitStatus=${remoteUiState.portraitStatus}"
+            )
+        }
+    }
 
     LaunchedEffect(lensFacing, firebaseCameraMode, hdrExtensionSupportByLens) {
         if (firebaseCameraMode != "video" && hdrExtensionSupportByLens.containsKey(lensFacing)) {
@@ -532,7 +566,10 @@ fun CameraScreen(
         cameraMode = firebaseCameraMode,
         toolbarExpanded = firebaseToolbarExpanded,
         boomerangSelected = firebaseBoomerangEnabled,
-        exposureSupported = exposureUiState.supported
+        exposureSupported = exposureUiState.supported,
+        gestureCaptureEnabled = firebaseGestureCaptureEnabled,
+        gestureCaptureSupported = firebaseCameraMode == "photo" ||
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
     )
     fun resetExposureToNeutral() {
         if (!exposureUiState.supported) return
@@ -655,6 +692,9 @@ fun CameraScreen(
         },
         onNightModeClick = {
             hostCoordinator.updateNightModeEnabled(firebaseNightModeEnabled)
+        },
+        onGestureCaptureClick = {
+            hostCoordinator.updateGestureCaptureEnabled(firebaseGestureCaptureEnabled)
         },
         onVideoHdrClick = {
             hostCoordinator.updateVideoHdrEnabled(firebaseVideoHdrEnabled, firebaseVideoHdrSupported)
@@ -2285,7 +2325,9 @@ fun CameraScreen(
                             .setTargetRotation(targetRotation)
                             .build()
                             .apply {
-                                val streamAnalyzer = videoFrameSource.buildAnalyzer(mirrorHorizontally = isFrontCamera)
+                                // Keep transmitted frames camera-native. The controller renderer owns
+                                // the single front-camera selfie mirror for every camera mode.
+                                val streamAnalyzer = videoFrameSource.buildAnalyzer(mirrorHorizontally = false)
                                 val mainExecutor = ContextCompat.getMainExecutor(context)
                                 setAnalyzer(
                                     faceAnalysisExecutor,
@@ -2731,11 +2773,61 @@ fun CameraScreen(
         )
     }
 
+    LaunchedEffect(
+        firebaseGestureCaptureEnabled,
+        firebaseCameraMode,
+        remoteUiState.portraitStatus,
+        camera,
+        previewView
+    ) {
+        val supportedMode = firebaseCameraMode == "photo" ||
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
+        if (!firebaseGestureCaptureEnabled || !supportedMode || camera == null) {
+            gestureRecognizer.reset()
+            return@LaunchedEffect
+        }
+
+        try {
+            while (isActive) {
+                val bitmap = previewView.bitmap
+                if (bitmap != null) {
+                    val pose = try {
+                        gesturePoseDetector.process(InputImage.fromBitmap(bitmap, 0)).await()
+                    } catch (error: Throwable) {
+                        Log.w("GESTURE_CAPTURE", "Palm analysis failed", error)
+                        null
+                    } finally {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
+
+                    if (
+                        pose != null &&
+                        gestureRecognizer.observe(pose) &&
+                        !gestureCaptureInProgress &&
+                        !nightAssistInProgress &&
+                        !boomerangInProgress
+                    ) {
+                        gestureCaptureInProgress = true
+                        val started = takePhotoWithCameraX(
+                            useFrontScreenFlash = shouldUseFrontScreenFlash(),
+                            onCaptureFinished = { gestureCaptureInProgress = false }
+                        )
+                        if (!started) gestureCaptureInProgress = false
+                    }
+                }
+                delay(220L)
+            }
+        } finally {
+            gestureRecognizer.reset()
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             runCatching { videoRecorder.stop(onRecordingStateChanged = ::updateVideoRecordingState) }
             runCatching { faceAnalysisExecutor.shutdownNow() }
             runCatching { faceDetector.close() }
+            runCatching { gesturePoseDetector.close() }
             runCatching { shutterSound.release() }
             if (WebRtcSessionManager.isSessionOwner(cameraSide = true, owner = roomCode)) {
                 runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }

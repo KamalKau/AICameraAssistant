@@ -68,6 +68,33 @@ class ScreenStatePresentersTest {
     }
 
     @Test
+    fun cameraToolRail_exposesAppliedGestureCaptureOnlyWhenSupported() {
+        val state = buildCameraToolRailUiState(
+            flashSupported = true,
+            flashMode = "off",
+            lensFacing = "back",
+            aspectRatioMode = "full",
+            sceneDetectionEnabled = false,
+            gridEnabled = false,
+            nightModeEnabled = false,
+            videoHdrSupported = false,
+            videoHdrEnabled = false,
+            videoQuality = VideoQualityOption.default.firebaseValue,
+            videoQualitySupportedValues = emptyList(),
+            videoQualityChangeEnabled = true,
+            cameraMode = "photo",
+            toolbarExpanded = true,
+            boomerangSelected = false,
+            exposureSupported = true,
+            gestureCaptureEnabled = true,
+            gestureCaptureSupported = true
+        )
+
+        assertTrue(state.gestureCaptureEnabled)
+        assertTrue(state.gestureCaptureSupported)
+    }
+
+    @Test
     fun hostStatusShowsApprovalPromptBeforeConnected() {
         val state = buildHostTopOverlayUiState(
             roomCode = "ABCDE",

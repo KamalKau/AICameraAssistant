@@ -252,6 +252,10 @@ class FirebaseRoomRepository {
         updateRoomSafely(roomCode, "nightModeEnabled", nightModeEnabled)
     }
 
+    suspend fun updateGestureCaptureEnabled(roomCode: String, enabled: Boolean) {
+        updateBooleanIfChanged(roomCode, "gestureCaptureEnabled", enabled)
+    }
+
     suspend fun updateVideoHdrSupported(roomCode: String, videoHdrSupported: Boolean) {
         updateRoomSafely(roomCode, "videoHdrSupported", videoHdrSupported)
     }
@@ -478,6 +482,7 @@ class FirebaseRoomRepository {
             "flashSupported" to false,
             "gridEnabled" to false,
             "nightModeEnabled" to false,
+            "gestureCaptureEnabled" to false,
             "videoHdrSupported" to false,
             "videoHdrEnabled" to false,
             "videoQuality" to VideoQualityOption.default.firebaseValue,
@@ -920,6 +925,14 @@ class FirebaseRoomRepository {
         awaitClose { listener.remove() }
     }
 
+    fun getGestureCaptureEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("gestureCaptureEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
     fun getVideoHdrSupported(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
@@ -1214,6 +1227,14 @@ class FirebaseRoomRepository {
         val snapshot = docRef.get().await()
         if (!snapshot.exists()) return
         if (snapshot.getString(field) == value) return
+        updateRoomSafely(roomCode, field, value)
+    }
+
+    private suspend fun updateBooleanIfChanged(roomCode: String, field: String, value: Boolean) {
+        val docRef = db.collection("rooms").document(roomCode)
+        val snapshot = docRef.get().await()
+        if (!snapshot.exists()) return
+        if (snapshot.getBoolean(field) == value) return
         updateRoomSafely(roomCode, field, value)
     }
 

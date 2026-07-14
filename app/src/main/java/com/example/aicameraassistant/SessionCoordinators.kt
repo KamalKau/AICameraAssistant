@@ -157,6 +157,12 @@ class HostSessionCoordinator(
         }
     }
 
+    fun updateGestureCaptureEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("gesture capture update") {
+            repository.updateGestureCaptureEnabled(roomCode, !currentEnabled)
+        }
+    }
+
     fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
         roomWrites.launch("scene detection update") {
             repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
@@ -302,6 +308,12 @@ class ControllerSessionCoordinator(
     fun updateNightModeEnabled(currentEnabled: Boolean) {
         roomWrites.launch("night mode update") {
             sendCommand("night_mode", "nightModeEnabled" to !currentEnabled)
+        }
+    }
+
+    fun updateGestureCaptureEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("gesture capture update") {
+            repository.updateGestureCaptureEnabled(roomCode, !currentEnabled)
         }
     }
 
