@@ -172,6 +172,8 @@ fun WaitingForApprovalScreen(
     val firebaseFaceBox = remoteUiState.faceBox
     val firebaseFaceBoxes = remoteUiState.faceBoxes
     val firebaseFaceDetectionTimestamp = remoteUiState.faceDetectionTimestamp
+    val firebaseFaceDetectionSessionId = remoteUiState.faceDetectionSessionId
+    val firebaseFaceOverlayEventId = remoteUiState.faceOverlayEventId
     val firebaseSceneDetection = remoteUiState.sceneDetection
     val firebaseSceneDetectionEnabled = remoteUiState.sceneDetectionEnabled
     val firebaseFlashSupported = remoteUiState.flashSupported
@@ -273,13 +275,28 @@ fun WaitingForApprovalScreen(
             remoteFrameHeight > 0 &&
             cameraPreviewIsLandscape != remoteFrameIsLandscape
 
-    LaunchedEffect(firebaseFaceDetected, firebaseFaceDetectionTimestamp) {
+    LaunchedEffect(firebaseFaceDetected, firebaseFaceBoxes, firebaseFaceBox) {
         if (firebaseFaceDetected && (firebaseFaceBoxes.any { it.isValid() } || firebaseFaceBox.isValid())) {
             remoteFaceBoxBounds = firebaseFaceBoxes.ifEmpty { listOf(firebaseFaceBox) }
+        } else {
+            remoteFaceBoxBounds = emptyList()
+            remoteFaceBoxVisible = false
+        }
+    }
+
+    LaunchedEffect(firebaseFaceOverlayEventId, firebaseFaceDetectionSessionId, firebaseRtcSessionId) {
+        val belongsToCurrentSession = firebaseFaceDetectionSessionId.isBlank() ||
+            firebaseFaceDetectionSessionId == firebaseRtcSessionId
+        val isFresh = System.currentTimeMillis() - firebaseFaceDetectionTimestamp < 1_200L
+        val latestBounds = firebaseFaceBoxes.ifEmpty { listOf(firebaseFaceBox).filter { it.isValid() } }
+        if (firebaseFaceOverlayEventId > 0L && belongsToCurrentSession && isFresh &&
+            firebaseFaceDetected && latestBounds.isNotEmpty()) {
+            remoteFaceBoxBounds = latestBounds
             remoteFaceBoxVisible = true
+            delay(1_250L)
+            remoteFaceBoxVisible = false
         } else {
             remoteFaceBoxVisible = false
-            remoteFaceBoxBounds = emptyList()
         }
     }
 

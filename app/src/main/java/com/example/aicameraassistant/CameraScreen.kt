@@ -327,6 +327,8 @@ fun CameraScreen(
     var lastPortraitFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
     var photoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var photoFaceBoxVisible by remember { mutableStateOf(false) }
+    var faceDetectionState by remember { mutableStateOf(FaceDetectionState.NO_FACE) }
+    var faceOverlayState by remember { mutableStateOf(FaceOverlayState.HIDDEN) }
     var lastPhotoFaceBoxMotionMs by remember { mutableLongStateOf(0L) }
     var pendingPhotoFaceBounds by remember { mutableStateOf(emptyList<PortraitFaceBounds>()) }
     var consecutivePhotoFaceHits by remember { mutableIntStateOf(0) }
@@ -365,8 +367,14 @@ fun CameraScreen(
     val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val faceBoundsMapper = remember { FaceBoundsMapper() }
     val stableFaceTracker = remember { StableFaceTracker() }
-    val faceOverlayPublisher = remember(roomCode, repository, scope) {
-        FaceOverlayPublisher(repository = repository, roomCode = roomCode, scope = scope)
+    val faceOverlayEventController = remember { FaceOverlayEventController() }
+    val faceOverlayPublisher = remember(roomCode, repository, scope, firebaseRtcSessionId) {
+        FaceOverlayPublisher(
+            repository = repository,
+            roomCode = roomCode,
+            scope = scope,
+            sessionIdProvider = { firebaseRtcSessionId.orEmpty() }
+        )
     }
     val previewBitmapFaceDetector = remember(faceDetector, resolvedWidth, resolvedHeight) {
         PreviewBitmapFaceDetector(
@@ -761,6 +769,23 @@ fun CameraScreen(
             focusSucceeded = null
             focusLocked = lockFocus
             focusUiToken++
+            val previewWidth = previewView.width.toDouble().coerceAtLeast(1.0)
+            val previewHeight = previewView.height.toDouble().coerceAtLeast(1.0)
+            val normalizedX = tapOffset.x / previewWidth
+            val normalizedY = tapOffset.y / previewHeight
+            if (photoFaceBounds.any { face ->
+                    normalizedX in face.left..face.right && normalizedY in face.top..face.bottom
+                }) {
+                photoFaceBoxVisible = true
+                faceOverlayState = FaceOverlayState.APPEARING
+                lastPhotoFaceBoxMotionMs = System.currentTimeMillis()
+                faceOverlayPublisher.publish(
+                    detected = true,
+                    bounds = photoFaceBounds,
+                    showOverlay = true,
+                    force = true
+                )
+            }
         }
 
         val currentCamera = camera ?: return
@@ -1088,8 +1113,11 @@ fun CameraScreen(
 
     fun clearPhotoFaceDetection() {
         stableFaceTracker.reset()
+        faceOverlayEventController.forceNextDetection()
         photoFaceBounds = emptyList()
         photoFaceBoxVisible = false
+        faceDetectionState = FaceDetectionState.NO_FACE
+        faceOverlayState = FaceOverlayState.HIDDEN
         lastPhotoFaceBoxMotionMs = 0L
         pendingPhotoFaceBounds = emptyList()
         consecutivePhotoFaceHits = 0
@@ -1113,7 +1141,11 @@ fun CameraScreen(
         }
     }
 
-    fun acceptPhotoFaceCandidate(bounds: List<PortraitFaceBounds>) {
+    fun acceptPhotoFaceCandidate(
+        bounds: List<PortraitFaceBounds>,
+        overlayEvent: FaceOverlayEvent,
+        hasLiveDetection: Boolean
+    ) {
         val plausibleBounds = bounds.filter { it.isPlausiblePhotoFace() }
         if (plausibleBounds.isEmpty()) {
             registerPhotoFaceMiss()
@@ -1121,7 +1153,7 @@ fun CameraScreen(
         }
 
         consecutivePhotoFaceMisses = 0
-        lastPhotoFaceSeenMs = System.currentTimeMillis()
+        if (hasLiveDetection) lastPhotoFaceSeenMs = System.currentTimeMillis()
         consecutivePhotoFaceHits =
             if (plausibleBounds.isStableCandidateAfter(pendingPhotoFaceBounds)) {
                 consecutivePhotoFaceHits + 1
@@ -1130,20 +1162,20 @@ fun CameraScreen(
             }
         pendingPhotoFaceBounds = plausibleBounds
 
-        if (consecutivePhotoFaceHits >= 1) {
-            val shouldShowBox =
-                photoFaceBounds.isEmpty() || plausibleBounds.haveMovedSignificantlyFrom(photoFaceBounds)
-            photoFaceBounds = plausibleBounds
-            if (shouldShowBox) {
-                val pulseTimestamp = System.currentTimeMillis()
-                photoFaceBoxVisible = true
-                lastPhotoFaceBoxMotionMs = pulseTimestamp
-            }
-            if (shouldShowBox || photoFaceBoxVisible) {
-                faceOverlayPublisher.publish(detected = true, bounds = plausibleBounds, force = shouldShowBox)
-            }
-            plausibleBounds.firstOrNull()?.let { applyPhotoFaceMetering(it) }
+        photoFaceBounds = plausibleBounds
+        if (overlayEvent.show) {
+            val pulseTimestamp = System.currentTimeMillis()
+            photoFaceBoxVisible = true
+            faceOverlayState = FaceOverlayState.APPEARING
+            lastPhotoFaceBoxMotionMs = pulseTimestamp
         }
+        faceOverlayPublisher.publish(
+            detected = true,
+            bounds = plausibleBounds,
+            showOverlay = overlayEvent.show,
+            force = overlayEvent.show
+        )
+        plausibleBounds.firstOrNull()?.let { applyPhotoFaceMetering(it) }
     }
 
     suspend fun detectPreviewBitmapFace(): List<NormalizedFaceBounds> {
@@ -1153,6 +1185,11 @@ fun CameraScreen(
 
     fun handleTrackedPreviewFaces(result: StableFaceTrackingResult) {
         val bounds = result.bounds
+        val overlayEvent = faceOverlayEventController.update(
+            faces = bounds,
+            hasLiveDetection = result.hasLiveDetection
+        )
+        faceDetectionState = overlayEvent.detectionState
         if (bounds.isEmpty()) {
             if (isPortraitMode) {
                 publishPortraitSubjectState(
@@ -1184,13 +1221,18 @@ fun CameraScreen(
             } else {
                 "Portrait ready"
             }
-            faceOverlayPublisher.publish(detected = true, bounds = bounds, force = false)
+            faceOverlayPublisher.publish(
+                detected = true,
+                bounds = bounds,
+                showOverlay = overlayEvent.show,
+                force = overlayEvent.show
+            )
             publishPortraitSubjectState(
                 status = status,
                 bounds = primaryBounds
             )
         } else {
-            acceptPhotoFaceCandidate(bounds)
+            acceptPhotoFaceCandidate(bounds, overlayEvent, result.hasLiveDetection)
         }
     }
 
@@ -1223,12 +1265,17 @@ fun CameraScreen(
         }
     )
 
-    LaunchedEffect(lastPhotoFaceBoxMotionMs, photoFaceBoxVisible, focusLocked) {
-        if (!photoFaceBoxVisible || lastPhotoFaceBoxMotionMs == 0L || focusLocked) return@LaunchedEffect
-        delay(950L)
-        if (System.currentTimeMillis() - lastPhotoFaceBoxMotionMs >= 900L) {
+    LaunchedEffect(lastPhotoFaceBoxMotionMs) {
+        if (!photoFaceBoxVisible || lastPhotoFaceBoxMotionMs == 0L) return@LaunchedEffect
+        faceOverlayState = FaceOverlayState.APPEARING
+        delay(130L)
+        faceOverlayState = FaceOverlayState.VISIBLE
+        delay(1_120L)
+        if (System.currentTimeMillis() - lastPhotoFaceBoxMotionMs >= 1_200L) {
+            faceOverlayState = FaceOverlayState.FADING
             photoFaceBoxVisible = false
-            publishFaceDetectionOverlay(detected = false)
+            delay(300L)
+            faceOverlayState = FaceOverlayState.HIDDEN
         }
     }
 
@@ -2252,7 +2299,7 @@ fun CameraScreen(
                         faceAnalysisExecutor,
                         MlKitFaceDetectionAnalyzer(
                             detector = faceDetector,
-                            minProcessIntervalMs = if (firebaseCameraMode == "video") 260L else 220L,
+                            minProcessIntervalMs = if (firebaseCameraMode == "video") 125L else 85L,
                             sceneAnalyzer = if (firebaseSceneDetectionEnabled) sceneAnalyzer else null,
                             onSceneResult = { result ->
                                 mainExecutor.execute {
@@ -3212,12 +3259,12 @@ fun CameraScreen(
             }
         }
 
-        if (!isPortraitMode && photoFaceBounds.isNotEmpty()) {
+        if (!isPortraitMode && faceDetectionState != FaceDetectionState.NO_FACE && photoFaceBounds.isNotEmpty()) {
             val previewRect =
                 previewContentRect ?: Rect(0f, 0f, boxMaxWidthPx, boxMaxHeightPx)
             FaceDetectionFocusBoxes(
                 bounds = photoFaceBounds.map { it.toNormalizedFaceBounds() },
-                visible = photoFaceBoxVisible,
+                visible = photoFaceBoxVisible && faceOverlayState != FaceOverlayState.HIDDEN,
                 locked = focusLocked,
                 modifier = Modifier
                     .align(Alignment.TopStart)

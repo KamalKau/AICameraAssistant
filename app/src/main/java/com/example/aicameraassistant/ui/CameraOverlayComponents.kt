@@ -118,7 +118,7 @@ fun FaceDetectionFocusBoxes(
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (visible && bounds.any { it.isValid() }) 1f else 0f,
-        animationSpec = tween(durationMillis = if (visible) 140 else 220),
+        animationSpec = tween(durationMillis = if (visible) 130 else 300),
         label = "face_detection_box_alpha"
     )
     if (alpha <= 0.01f) return

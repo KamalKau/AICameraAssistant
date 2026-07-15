@@ -139,6 +139,8 @@ class CameraScreenViewModel : ViewModel() {
                     faceBox = faceOverlay.faceBox,
                     faceBoxes = faceOverlay.faceBoxes,
                     faceDetectionTimestamp = faceOverlay.timestamp,
+                    faceDetectionSessionId = faceOverlay.sessionId,
+                    faceOverlayEventId = faceOverlay.overlayEventId,
                     sceneDetection = values[13] as? SceneDetectionState ?: SceneDetectionState(),
                     sceneDetectionEnabled = values[14] as? Boolean ?: false,
                     gridEnabled = values[15] as? Boolean ?: false,

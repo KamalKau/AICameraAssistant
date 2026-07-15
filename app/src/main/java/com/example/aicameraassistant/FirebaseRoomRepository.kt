@@ -186,7 +186,9 @@ class FirebaseRoomRepository {
         faceDetected: Boolean,
         faceBox: NormalizedFaceBounds,
         faceBoxes: List<NormalizedFaceBounds>,
-        timestamp: Long
+        timestamp: Long,
+        sessionId: String = "",
+        overlayEventId: Long = 0L
     ) {
         val safeBox = mapOf(
             "left" to faceBox.left.coerceIn(0.0, 1.0),
@@ -201,7 +203,10 @@ class FirebaseRoomRepository {
                     "left" to box.left.coerceIn(0.0, 1.0),
                     "top" to box.top.coerceIn(0.0, 1.0),
                     "right" to box.right.coerceIn(0.0, 1.0),
-                    "bottom" to box.bottom.coerceIn(0.0, 1.0)
+                    "bottom" to box.bottom.coerceIn(0.0, 1.0),
+                    "trackingId" to box.trackingId,
+                    "confidence" to box.confidence.coerceIn(0.0, 1.0),
+                    "isPrimary" to box.isPrimary
                 )
             }
         updateRoomSafely(
@@ -210,7 +215,9 @@ class FirebaseRoomRepository {
                 "faceBox" to safeBox,
                 "faceBoxes" to safeBoxes,
                 "faceDetected" to faceDetected,
-                "faceDetectionTimestamp" to timestamp
+                "faceDetectionTimestamp" to timestamp,
+                "faceDetectionSessionId" to sessionId,
+                "faceOverlayEventId" to overlayEventId
             )
         )
     }
@@ -849,7 +856,10 @@ class FirebaseRoomRepository {
                             left = (faceBox["left"] as? Number)?.toDouble() ?: 0.0,
                             top = (faceBox["top"] as? Number)?.toDouble() ?: 0.0,
                             right = (faceBox["right"] as? Number)?.toDouble() ?: 0.0,
-                            bottom = (faceBox["bottom"] as? Number)?.toDouble() ?: 0.0
+                            bottom = (faceBox["bottom"] as? Number)?.toDouble() ?: 0.0,
+                            trackingId = (faceBox["trackingId"] as? Number)?.toLong() ?: -1L,
+                            confidence = (faceBox["confidence"] as? Number)?.toDouble() ?: 1.0,
+                            isPrimary = faceBox["isPrimary"] as? Boolean ?: false
                         )
                     }
                     .orEmpty()
@@ -863,7 +873,9 @@ class FirebaseRoomRepository {
                             bottom = (box?.get("bottom") as? Number)?.toDouble() ?: 0.0
                         ),
                         faceBoxes = boxes,
-                        timestamp = snapshot?.getLong("faceDetectionTimestamp") ?: 0L
+                        timestamp = snapshot?.getLong("faceDetectionTimestamp") ?: 0L,
+                        sessionId = snapshot?.getString("faceDetectionSessionId").orEmpty(),
+                        overlayEventId = snapshot?.getLong("faceOverlayEventId") ?: 0L
                     )
                 )
             }

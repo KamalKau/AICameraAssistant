@@ -13,7 +13,10 @@ data class PortraitFaceBounds(
     val left: Double = 0.0,
     val top: Double = 0.0,
     val right: Double = 0.0,
-    val bottom: Double = 0.0
+    val bottom: Double = 0.0,
+    val trackingId: Long = -1L,
+    val confidence: Double = 1.0,
+    val isPrimary: Boolean = false
 ) {
     fun isValid(): Boolean =
         right > left && bottom > top
@@ -49,7 +52,7 @@ data class PortraitFaceBounds(
     }
 
     fun toNormalizedFaceBounds(): NormalizedFaceBounds =
-        NormalizedFaceBounds(left = left, top = top, right = right, bottom = bottom)
+        NormalizedFaceBounds(left, top, right, bottom, trackingId, confidence, isPrimary)
 
     fun isStableCandidateAfter(other: PortraitFaceBounds): Boolean {
         if (!isValid() || !other.isValid()) return false
@@ -72,18 +75,94 @@ data class StableFaceTrackingResult(
     val hasLiveDetection: Boolean = false
 )
 
+enum class FaceDetectionState { NO_FACE, TRACKING_FACE, FACE_LOST }
+
+enum class FaceOverlayState { HIDDEN, APPEARING, VISIBLE, FADING }
+
+data class FaceOverlayEvent(
+    val show: Boolean = false,
+    val detectionState: FaceDetectionState = FaceDetectionState.NO_FACE,
+    val eventId: Long = 0L
+)
+
+/**
+ * Decides when the existing box may be shown. It never controls or pauses analysis.
+ * Coordinate and primary-face updates continue regardless of [FaceOverlayEvent.show].
+ */
+class FaceOverlayEventController(
+    private val lostReacquisitionMs: Long = 650L
+) {
+    private var knownTrackIds = emptySet<Long>()
+    private var primaryTrackId: Long? = null
+    private var lastFocusBounds = PortraitFaceBounds()
+    private var lastLiveDetectionMs = 0L
+    private var hadMeaningfulLoss = false
+    private var nextEventId = 1L
+
+    fun update(
+        faces: List<PortraitFaceBounds>,
+        hasLiveDetection: Boolean,
+        nowMs: Long = System.currentTimeMillis()
+    ): FaceOverlayEvent {
+        if (!hasLiveDetection) {
+            if (lastLiveDetectionMs == 0L) {
+                return FaceOverlayEvent(detectionState = FaceDetectionState.NO_FACE)
+            }
+            if (nowMs - lastLiveDetectionMs >= lostReacquisitionMs) hadMeaningfulLoss = true
+            return FaceOverlayEvent(detectionState = FaceDetectionState.FACE_LOST)
+        }
+
+        val validFaces = faces.filter { it.isValid() }
+        if (validFaces.isEmpty()) return FaceOverlayEvent(detectionState = FaceDetectionState.NO_FACE)
+
+        val currentIds = validFaces.map { it.trackingId }.filter { it >= 0 }.toSet()
+        val currentPrimary = validFaces.firstOrNull { it.isPrimary } ?: validFaces.first()
+        val newFaceEntered = knownTrackIds.isNotEmpty() && currentIds.any { it !in knownTrackIds }
+        val firstAcquisition = knownTrackIds.isEmpty()
+        val primaryChanged = primaryTrackId != null && currentPrimary.trackingId != primaryTrackId
+        val focusReacquisition = lastFocusBounds.isValid() &&
+            currentPrimary.hasMovedSignificantlyFrom(lastFocusBounds)
+        val shouldShow = firstAcquisition || newFaceEntered || primaryChanged ||
+            hadMeaningfulLoss || focusReacquisition
+
+        lastLiveDetectionMs = nowMs
+        knownTrackIds = currentIds
+        primaryTrackId = currentPrimary.trackingId
+        if (shouldShow) {
+            lastFocusBounds = currentPrimary
+            hadMeaningfulLoss = false
+        }
+        return FaceOverlayEvent(
+            show = shouldShow,
+            detectionState = FaceDetectionState.TRACKING_FACE,
+            eventId = if (shouldShow) nextEventId++ else 0L
+        )
+    }
+
+    fun forceNextDetection() {
+        knownTrackIds = emptySet()
+        primaryTrackId = null
+        lastFocusBounds = PortraitFaceBounds()
+        lastLiveDetectionMs = 0L
+        hadMeaningfulLoss = false
+    }
+}
+
 class StableFaceTracker(
     private val maxFaces: Int = 5,
-    private val holdDurationMs: Long = 650L
+    private val holdDurationMs: Long = 650L,
+    private val acquisitionHits: Int = 2
 ) {
     private data class Track(
         val id: Long,
         var bounds: PortraitFaceBounds,
-        var lastSeenMs: Long
+        var lastSeenMs: Long,
+        var hits: Int = 1
     )
 
     private val tracks = mutableListOf<Track>()
     private var nextTrackId = 1L
+    private var primaryTrackId: Long? = null
 
     fun update(
         detections: List<PortraitFaceBounds>,
@@ -104,17 +183,24 @@ class StableFaceTracker(
 
         val matchedTrackIds = mutableSetOf<Long>()
         plausibleDetections.forEach { detection ->
-            val match = tracks
+            val detectorIdMatch = detection.trackingId.takeIf { it >= 0 }?.let { detectorId ->
+                tracks.firstOrNull { it.bounds.trackingId == detectorId && it.id !in matchedTrackIds }
+            }
+            val match = detectorIdMatch ?: tracks
                 .filterNot { it.id in matchedTrackIds }
                 .minByOrNull { it.bounds.trackingDistanceTo(detection) }
                 ?.takeIf { it.bounds.trackingDistanceTo(detection) < 0.34 }
 
             if (match == null) {
+                val newTrackId = nextTrackId++
                 tracks += Track(
-                    id = nextTrackId++,
-                    bounds = detection,
+                    id = newTrackId,
+                    bounds = detection.copy(
+                        trackingId = detection.trackingId.takeIf { it >= 0 } ?: newTrackId
+                    ),
                     lastSeenMs = nowMs
                 )
+                matchedTrackIds += newTrackId
             } else {
                 val distance = match.bounds.trackingDistanceTo(detection)
                 val smoothing = when {
@@ -124,6 +210,7 @@ class StableFaceTracker(
                 }
                 match.bounds = match.bounds.interpolateTo(detection, smoothing)
                 match.lastSeenMs = nowMs
+                match.hits += 1
                 matchedTrackIds += match.id
             }
         }
@@ -137,6 +224,7 @@ class StableFaceTracker(
 
     fun reset() {
         tracks.clear()
+        primaryTrackId = null
     }
 
     private fun pruneExpired(nowMs: Long) {
@@ -152,10 +240,18 @@ class StableFaceTracker(
     }
 
     private fun sortedVisibleTracks(): List<PortraitFaceBounds> =
-        tracks
-            .map { it.bounds }
+        tracks.filter { it.hits >= acquisitionHits }
+            .let { visible ->
+                val existingPrimary = visible.firstOrNull { it.id == primaryTrackId }
+                val primary = existingPrimary ?: visible.maxWithOrNull(
+                    compareBy<Track> { it.bounds.area }
+                        .thenBy { -kotlin.math.abs(it.bounds.centerX - 0.5) - kotlin.math.abs(it.bounds.centerY - 0.5) }
+                )
+                primaryTrackId = primary?.id
+                visible.sortedWith(compareByDescending<Track> { it.id == primaryTrackId }.thenByDescending { it.bounds.area })
+            }
+            .map { it.bounds.copy(isPrimary = it.id == primaryTrackId) }
             .filter { it.isValid() }
-            .sortedByDescending { it.area }
 }
 
 private fun PortraitFaceBounds.interpolateTo(
@@ -168,7 +264,10 @@ private fun PortraitFaceBounds.interpolateTo(
         left = lerp(left, target.left).coerceIn(0.0, 1.0),
         top = lerp(top, target.top).coerceIn(0.0, 1.0),
         right = lerp(right, target.right).coerceIn(0.0, 1.0),
-        bottom = lerp(bottom, target.bottom).coerceIn(0.0, 1.0)
+        bottom = lerp(bottom, target.bottom).coerceIn(0.0, 1.0),
+        trackingId = if (target.trackingId >= 0) target.trackingId else trackingId,
+        confidence = lerp(confidence, target.confidence),
+        isPrimary = isPrimary
     )
 }
 
@@ -199,7 +298,10 @@ class FaceBoundsMapper {
                 left = (1.0 - right).coerceIn(0.0, 1.0),
                 top = bounds.top.coerceIn(0.0, 1.0),
                 right = (1.0 - left).coerceIn(0.0, 1.0),
-                bottom = bounds.bottom.coerceIn(0.0, 1.0)
+                bottom = bounds.bottom.coerceIn(0.0, 1.0),
+                trackingId = bounds.trackingId,
+                confidence = bounds.confidence,
+                isPrimary = bounds.isPrimary
             )
         } else {
             mapPreviewBounds(bounds)
@@ -211,7 +313,10 @@ class FaceBoundsMapper {
             left = bounds.left.coerceIn(0.0, 1.0),
             top = bounds.top.coerceIn(0.0, 1.0),
             right = bounds.right.coerceIn(0.0, 1.0),
-            bottom = bounds.bottom.coerceIn(0.0, 1.0)
+            bottom = bounds.bottom.coerceIn(0.0, 1.0),
+            trackingId = bounds.trackingId,
+            confidence = bounds.confidence,
+            isPrimary = bounds.isPrimary
         )
 
     fun mapPreviewBounds(bounds: List<NormalizedFaceBounds>): List<PortraitFaceBounds> =
@@ -273,15 +378,18 @@ class PreviewBitmapFaceDetector(
 class FaceOverlayPublisher(
     private val repository: FirebaseRoomRepository,
     private val roomCode: String,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val sessionIdProvider: () -> String = { "" }
 ) {
     private var lastPublishMs = 0L
     private var lastDetected = false
     private var lastBounds = emptyList<PortraitFaceBounds>()
+    private var overlayEventId = 0L
 
     fun publish(
         detected: Boolean,
         bounds: List<PortraitFaceBounds> = emptyList(),
+        showOverlay: Boolean = false,
         force: Boolean = false
     ) {
         val now = System.currentTimeMillis()
@@ -293,14 +401,19 @@ class FaceOverlayPublisher(
         lastPublishMs = now
         lastDetected = detected
         lastBounds = if (detected) bounds else emptyList()
+        if (showOverlay) overlayEventId += 1L
         val primaryFace = bounds.firstOrNull() ?: PortraitFaceBounds()
+        val publishedOverlayEventId = overlayEventId
+        val publishedSessionId = sessionIdProvider()
         scope.launch {
             repository.updateFaceDetectionOverlay(
                 roomCode = roomCode,
                 faceDetected = detected,
                 faceBox = if (detected) primaryFace.toNormalizedFaceBounds() else NormalizedFaceBounds(),
                 faceBoxes = if (detected) bounds.map { it.toNormalizedFaceBounds() } else emptyList(),
-                timestamp = now
+                timestamp = now,
+                sessionId = publishedSessionId,
+                overlayEventId = publishedOverlayEventId
             )
         }
     }
@@ -308,11 +421,13 @@ class FaceOverlayPublisher(
     fun publish(
         detected: Boolean,
         bounds: PortraitFaceBounds = PortraitFaceBounds(),
+        showOverlay: Boolean = false,
         force: Boolean = false
     ) {
         publish(
             detected = detected,
             bounds = if (detected && bounds.isValid()) listOf(bounds) else emptyList(),
+            showOverlay = showOverlay,
             force = force
         )
     }

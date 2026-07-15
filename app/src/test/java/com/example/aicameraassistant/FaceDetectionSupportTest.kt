@@ -85,6 +85,13 @@ class FaceDetectionSupportTest {
             ),
             nowMs = 1_000L
         )
+        tracker.update(
+            detections = listOf(
+                PortraitFaceBounds(left = 0.10, top = 0.10, right = 0.25, bottom = 0.32),
+                PortraitFaceBounds(left = 0.45, top = 0.18, right = 0.78, bottom = 0.68)
+            ),
+            nowMs = 1_050L
+        )
         val second = tracker.update(
             detections = listOf(
                 PortraitFaceBounds(left = 0.47, top = 0.19, right = 0.80, bottom = 0.69),
@@ -106,6 +113,10 @@ class FaceDetectionSupportTest {
             detections = listOf(PortraitFaceBounds(left = 0.20, top = 0.20, right = 0.44, bottom = 0.52)),
             nowMs = 1_000L
         )
+        tracker.update(
+            detections = listOf(PortraitFaceBounds(left = 0.20, top = 0.20, right = 0.44, bottom = 0.52)),
+            nowMs = 1_050L
+        )
 
         val held = tracker.update(emptyList(), nowMs = 1_400L)
         val expired = tracker.update(emptyList(), nowMs = 1_800L)
@@ -113,6 +124,50 @@ class FaceDetectionSupportTest {
         assertFalse(held.hasLiveDetection)
         assertEquals(1, held.bounds.size)
         assertTrue(expired.bounds.isEmpty())
+    }
+
+    @Test
+    fun confidencePolicy_keepsProfilesButRejectsWeakTinyEdgeCandidates() {
+        val policy = FaceConfidencePolicy(minimumConfidence = 0.58)
+        val profile = policy.estimate(yawDegrees = 65f, visibleArea = 0.08, touchesFrameEdge = false)
+        val weakEdge = policy.estimate(yawDegrees = 85f, visibleArea = 0.001, touchesFrameEdge = true)
+
+        assertTrue(policy.accepts(profile))
+        assertFalse(policy.accepts(weakEdge))
+    }
+
+    @Test
+    fun overlayController_showsOnceForSameTrackedFaceAndIgnoresSmallMovement() {
+        val controller = FaceOverlayEventController()
+        val first = PortraitFaceBounds(
+            left = 0.20, top = 0.20, right = 0.42, bottom = 0.52,
+            trackingId = 7L, isPrimary = true
+        )
+        val smallMove = first.copy(left = 0.21, right = 0.43)
+
+        assertTrue(controller.update(listOf(first), true, 1_000L).show)
+        assertFalse(controller.update(listOf(smallMove), true, 1_100L).show)
+        assertFalse(controller.update(listOf(smallMove), true, 1_300L).show)
+    }
+
+    @Test
+    fun overlayController_reshowsForNewFacePrimaryChangeAndMeaningfulReacquisition() {
+        val controller = FaceOverlayEventController(lostReacquisitionMs = 650L)
+        val primary = PortraitFaceBounds(
+            left = 0.15, top = 0.15, right = 0.40, bottom = 0.50,
+            trackingId = 1L, isPrimary = true
+        )
+        val newcomer = PortraitFaceBounds(
+            left = 0.55, top = 0.16, right = 0.82, bottom = 0.54,
+            trackingId = 2L
+        )
+
+        controller.update(listOf(primary), true, 1_000L)
+        assertTrue(controller.update(listOf(primary, newcomer), true, 1_100L).show)
+        assertTrue(controller.update(listOf(newcomer.copy(isPrimary = true), primary.copy(isPrimary = false)), true, 1_200L).show)
+        assertFalse(controller.update(listOf(newcomer.copy(isPrimary = true)), false, 1_500L).show)
+        assertFalse(controller.update(emptyList(), false, 1_900L).show)
+        assertTrue(controller.update(listOf(newcomer.copy(isPrimary = true)), true, 2_000L).show)
     }
 
 }

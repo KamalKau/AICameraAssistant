@@ -325,7 +325,7 @@ private class ControllerFaceDetectionOverlayView(context: Context) : View(contex
         if (overlayAlpha == targetAlpha) return
         alphaAnimator?.cancel()
         alphaAnimator = ValueAnimator.ofFloat(overlayAlpha, targetAlpha).apply {
-            duration = if (targetAlpha > overlayAlpha) 120L else 220L
+            duration = if (targetAlpha > overlayAlpha) 130L else 300L
             addUpdateListener { animator ->
                 overlayAlpha = animator.animatedValue as Float
                 invalidate()

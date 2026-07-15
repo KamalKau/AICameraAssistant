@@ -181,6 +181,8 @@ class ControllerScreenViewModel : ViewModel() {
                     faceBox = faceOverlay.faceBox,
                     faceBoxes = faceOverlay.faceBoxes,
                     faceDetectionTimestamp = faceOverlay.timestamp,
+                    faceDetectionSessionId = faceOverlay.sessionId,
+                    faceOverlayEventId = faceOverlay.overlayEventId,
                     sceneDetection = values[15] as? SceneDetectionState ?: SceneDetectionState(),
                     sceneDetectionEnabled = values[16] as? Boolean ?: false,
                     flashSupported = values[17] as? Boolean ?: false,
