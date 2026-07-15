@@ -263,6 +263,21 @@ class FirebaseRoomRepository {
         updateBooleanIfChanged(roomCode, "gestureCaptureEnabled", enabled)
     }
 
+    suspend fun updateSmartFramingEnabled(roomCode: String, enabled: Boolean) {
+        updateBooleanIfChanged(roomCode, "smartFramingEnabled", enabled)
+    }
+
+    suspend fun updateSmartFramingState(roomCode: String, state: SmartFramingState) {
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "smartFramingGuidance" to state.guidance.take(32),
+                "smartFramingTimestamp" to state.timestamp,
+                "smartFramingSessionId" to state.sessionId
+            )
+        )
+    }
+
     suspend fun updateVideoHdrSupported(roomCode: String, videoHdrSupported: Boolean) {
         updateRoomSafely(roomCode, "videoHdrSupported", videoHdrSupported)
     }
@@ -490,6 +505,10 @@ class FirebaseRoomRepository {
             "gridEnabled" to false,
             "nightModeEnabled" to false,
             "gestureCaptureEnabled" to false,
+            "smartFramingEnabled" to false,
+            "smartFramingGuidance" to "",
+            "smartFramingTimestamp" to 0L,
+            "smartFramingSessionId" to "",
             "videoHdrSupported" to false,
             "videoHdrEnabled" to false,
             "videoQuality" to VideoQualityOption.default.firebaseValue,
@@ -941,6 +960,28 @@ class FirebaseRoomRepository {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
                 trySend(snapshot?.getBoolean("gestureCaptureEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun observeSmartFramingEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.getBoolean("smartFramingEnabled") ?: false)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    fun observeSmartFramingState(roomCode: String): Flow<SmartFramingState> = callbackFlow {
+        val listener = db.collection("rooms").document(roomCode)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(
+                    SmartFramingState(
+                        guidance = snapshot?.getString("smartFramingGuidance").orEmpty(),
+                        timestamp = snapshot?.getLong("smartFramingTimestamp") ?: 0L,
+                        sessionId = snapshot?.getString("smartFramingSessionId").orEmpty()
+                    )
+                )
             }
         awaitClose { listener.remove() }
     }

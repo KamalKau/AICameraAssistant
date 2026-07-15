@@ -113,7 +113,9 @@ class CameraScreenViewModel : ViewModel() {
                 repository.getOfferSdp(roomCode),
                 repository.getRtcSessionId(roomCode),
                 repository.getSessionVersion(roomCode),
-                repository.getGestureCaptureEnabled(roomCode)
+                repository.getGestureCaptureEnabled(roomCode),
+                repository.observeSmartFramingEnabled(roomCode),
+                repository.observeSmartFramingState(roomCode)
             ) { values: Array<Any?> ->
                 val portraitSubject = values[11] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[12] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
@@ -163,7 +165,9 @@ class CameraScreenViewModel : ViewModel() {
                     offerSdp = values[29] as String?,
                     rtcSessionId = values[30] as String?,
                     sessionVersion = values[31] as? Long ?: 0L,
-                    gestureCaptureEnabled = values[32] as? Boolean ?: false
+                    gestureCaptureEnabled = values[32] as? Boolean ?: false,
+                    smartFramingEnabled = values[33] as? Boolean ?: false,
+                    smartFraming = values[34] as? SmartFramingState ?: SmartFramingState()
                 )
             }.collect { state ->
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {

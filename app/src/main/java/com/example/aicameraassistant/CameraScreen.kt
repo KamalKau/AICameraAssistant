@@ -181,6 +181,8 @@ fun CameraScreen(
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseGestureCaptureEnabled = remoteUiState.gestureCaptureEnabled
+    val firebaseSmartFramingEnabled = remoteUiState.smartFramingEnabled
+    val firebaseSmartFraming = remoteUiState.smartFraming
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseVideoQuality = remoteUiState.videoQuality
@@ -338,6 +340,8 @@ fun CameraScreen(
     var lastMeteredPhotoFaceBounds by remember { mutableStateOf(PortraitFaceBounds()) }
     var lastScenePublishMs by remember { mutableLongStateOf(0L) }
     var lastSceneKey by remember { mutableStateOf("auto") }
+    var lastSmartFramingPublishMs by remember { mutableLongStateOf(0L) }
+    var lastSmartFramingGuidance by remember { mutableStateOf("") }
     var lastNightAutoAppliedMs by remember { mutableLongStateOf(0L) }
     var cameraAnalysisActive by remember { mutableStateOf(false) }
     var gestureCaptureAnalysisActive by remember { mutableStateOf(false) }
@@ -364,6 +368,7 @@ fun CameraScreen(
     val gestureRecognizer = remember { GestureCaptureRecognizer() }
     var gestureCaptureInProgress by remember { mutableStateOf(false) }
     val sceneAnalyzer = remember { SceneDetectionAnalyzer() }
+    val smartFramingEvaluator = remember { SmartFramingEvaluator() }
     val faceAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val faceBoundsMapper = remember { FaceBoundsMapper() }
     val stableFaceTracker = remember { StableFaceTracker() }
@@ -577,7 +582,9 @@ fun CameraScreen(
         exposureSupported = exposureUiState.supported,
         gestureCaptureEnabled = firebaseGestureCaptureEnabled,
         gestureCaptureSupported = firebaseCameraMode == "photo" ||
-            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready"),
+        smartFramingEnabled = firebaseSmartFramingEnabled,
+        smartFramingSupported = firebaseCameraMode == "photo" || firebaseCameraMode == "video"
     )
     fun resetExposureToNeutral() {
         if (!exposureUiState.supported) return
@@ -703,6 +710,9 @@ fun CameraScreen(
         },
         onGestureCaptureClick = {
             hostCoordinator.updateGestureCaptureEnabled(firebaseGestureCaptureEnabled)
+        },
+        onSmartFramingClick = {
+            hostCoordinator.updateSmartFramingEnabled(firebaseSmartFramingEnabled)
         },
         onVideoHdrClick = {
             hostCoordinator.updateVideoHdrEnabled(firebaseVideoHdrEnabled, firebaseVideoHdrSupported)
@@ -1072,6 +1082,21 @@ fun CameraScreen(
         }
     }
 
+    fun publishSmartFraming(bounds: List<PortraitFaceBounds>) {
+        if (!firebaseSmartFramingEnabled || firebaseCameraMode == "portrait") return
+        val guidance = smartFramingEvaluator.evaluate(bounds)
+        val now = System.currentTimeMillis()
+        if (guidance == lastSmartFramingGuidance && now - lastSmartFramingPublishMs < 1_000L) return
+        lastSmartFramingGuidance = guidance
+        lastSmartFramingPublishMs = now
+        launchRoomWrite("smart framing guidance") {
+            repository.updateSmartFramingState(
+                roomCode,
+                SmartFramingState(guidance, now, firebaseRtcSessionId.orEmpty())
+            )
+        }
+    }
+
     fun applyPhotoFaceMetering(bounds: PortraitFaceBounds) {
         if (focusLocked) return
         if (focusPoint != null) return
@@ -1190,6 +1215,7 @@ fun CameraScreen(
             hasLiveDetection = result.hasLiveDetection
         )
         faceDetectionState = overlayEvent.detectionState
+        publishSmartFraming(bounds)
         if (bounds.isEmpty()) {
             if (isPortraitMode) {
                 publishPortraitSubjectState(
@@ -1276,6 +1302,17 @@ fun CameraScreen(
             photoFaceBoxVisible = false
             delay(300L)
             faceOverlayState = FaceOverlayState.HIDDEN
+        }
+    }
+
+    LaunchedEffect(firebaseSmartFramingEnabled, firebaseCameraMode, roomCode, firebaseRtcSessionId) {
+        if (!firebaseSmartFramingEnabled || firebaseCameraMode == "portrait") {
+            lastSmartFramingGuidance = ""
+            lastSmartFramingPublishMs = 0L
+            repository.updateSmartFramingState(
+                roomCode,
+                SmartFramingState(sessionId = firebaseRtcSessionId.orEmpty())
+            )
         }
     }
 
@@ -3360,7 +3397,11 @@ fun CameraScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
             ) {
-                if (firebaseSceneDetectionEnabled) {
+                val smartFramingIsCurrent = firebaseSmartFraming.sessionId.isBlank() ||
+                    firebaseSmartFraming.sessionId == firebaseRtcSessionId
+                if (firebaseSmartFramingEnabled && firebaseCameraMode != "portrait" && smartFramingIsCurrent) {
+                    SceneDetectionChip(state = firebaseSmartFraming.toSceneDetectionState())
+                } else if (firebaseSceneDetectionEnabled) {
                     SceneDetectionChip(state = firebaseSceneDetection)
                 }
             }

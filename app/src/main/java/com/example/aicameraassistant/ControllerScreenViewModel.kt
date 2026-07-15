@@ -153,7 +153,9 @@ class ControllerScreenViewModel : ViewModel() {
                 repository.getPreviewHeight(roomCode),
                 repository.getFocusRequestId(roomCode),
                 repository.getFocusLockEnabled(roomCode),
-                repository.getGestureCaptureEnabled(roomCode)
+                repository.getGestureCaptureEnabled(roomCode),
+                repository.observeSmartFramingEnabled(roomCode),
+                repository.observeSmartFramingState(roomCode)
             ) { values: Array<Any?> ->
                 val portraitSubject = values[13] as? PortraitSubjectState ?: PortraitSubjectState()
                 val faceOverlay = values[14] as? FaceDetectionOverlayState ?: FaceDetectionOverlayState()
@@ -204,7 +206,9 @@ class ControllerScreenViewModel : ViewModel() {
                     previewHeight = values[33] as? Int ?: 0,
                     focusRequestId = values[34] as? Long ?: 0L,
                     focusLockEnabled = values[35] as? Boolean ?: false,
-                    gestureCaptureEnabled = values[36] as? Boolean ?: false
+                    gestureCaptureEnabled = values[36] as? Boolean ?: false,
+                    smartFramingEnabled = values[37] as? Boolean ?: false,
+                    smartFraming = values[38] as? SmartFramingState ?: SmartFramingState()
                 )
             }.collect { state ->
                 if (boundRoomCode != roomCode) {

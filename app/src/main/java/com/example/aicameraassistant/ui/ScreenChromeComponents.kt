@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.BackHand
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
@@ -479,6 +480,15 @@ fun CameraToolRail(
                     showLabel = true,
                     selected = state.gestureCaptureEnabled,
                     onClick = actions.onGestureCaptureClick
+                )
+            }
+            if (state.smartFramingSupported) {
+                CameraToolButton(
+                    icon = Icons.Default.CropFree,
+                    label = if (state.smartFramingEnabled) "Smart Framing On" else "Smart Framing",
+                    showLabel = true,
+                    selected = state.smartFramingEnabled,
+                    onClick = actions.onSmartFramingClick
                 )
             }
         }

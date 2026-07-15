@@ -136,7 +136,9 @@ fun buildCameraToolRailUiState(
     boomerangSelected: Boolean,
     exposureSupported: Boolean,
     gestureCaptureEnabled: Boolean = false,
-    gestureCaptureSupported: Boolean = false
+    gestureCaptureSupported: Boolean = false,
+    smartFramingEnabled: Boolean = false,
+    smartFramingSupported: Boolean = true
 ): CameraToolRailUiState =
     CameraToolRailUiState(
         flashIcon = when {
@@ -159,6 +161,8 @@ fun buildCameraToolRailUiState(
         nightModeEnabled = nightModeEnabled,
         gestureCaptureEnabled = gestureCaptureEnabled,
         gestureCaptureSupported = gestureCaptureSupported,
+        smartFramingEnabled = smartFramingEnabled,
+        smartFramingSupported = smartFramingSupported,
         videoHdrSupported = videoHdrSupported,
         videoHdrEnabled = videoHdrEnabled,
         videoQuality = VideoQualityOption.fromFirebaseValue(videoQuality),

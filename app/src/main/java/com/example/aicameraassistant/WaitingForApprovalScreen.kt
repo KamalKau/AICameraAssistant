@@ -180,6 +180,8 @@ fun WaitingForApprovalScreen(
     val firebaseGridEnabled = remoteUiState.gridEnabled
     val firebaseNightModeEnabled = remoteUiState.nightModeEnabled
     val firebaseGestureCaptureEnabled = remoteUiState.gestureCaptureEnabled
+    val firebaseSmartFramingEnabled = remoteUiState.smartFramingEnabled
+    val firebaseSmartFraming = remoteUiState.smartFraming
     val firebaseVideoHdrSupported = remoteUiState.videoHdrSupported
     val firebaseVideoHdrEnabled = remoteUiState.videoHdrEnabled
     val firebaseVideoQuality = remoteUiState.videoQuality
@@ -405,7 +407,9 @@ fun WaitingForApprovalScreen(
         exposureSupported = exposureUiState.supported,
         gestureCaptureEnabled = firebaseGestureCaptureEnabled,
         gestureCaptureSupported = firebaseCameraMode == "photo" ||
-            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready")
+            (firebaseCameraMode == "portrait" && remoteUiState.portraitStatus == "Portrait ready"),
+        smartFramingEnabled = firebaseSmartFramingEnabled,
+        smartFramingSupported = firebaseCameraMode == "photo" || firebaseCameraMode == "video"
     )
     fun resetControllerExposureToNeutral() {
         if (!exposureUiState.supported) return
@@ -493,6 +497,9 @@ fun WaitingForApprovalScreen(
         },
         onGestureCaptureClick = {
             controllerCoordinator.updateGestureCaptureEnabled(firebaseGestureCaptureEnabled)
+        },
+        onSmartFramingClick = {
+            controllerCoordinator.updateSmartFramingEnabled(firebaseSmartFramingEnabled)
         },
         onVideoHdrClick = {
             controllerCoordinator.updateVideoHdrEnabled(
@@ -1734,7 +1741,11 @@ fun WaitingForApprovalScreen(
                         isPaused = videoRecordingPaused
                     )
                 }
-                if (firebaseSceneDetectionEnabled) {
+                val smartFramingIsCurrent = firebaseSmartFraming.sessionId.isBlank() ||
+                    firebaseSmartFraming.sessionId == firebaseRtcSessionId
+                if (firebaseSmartFramingEnabled && firebaseCameraMode != "portrait" && smartFramingIsCurrent) {
+                    SceneDetectionChip(state = firebaseSmartFraming.toSceneDetectionState())
+                } else if (firebaseSceneDetectionEnabled) {
                     SceneDetectionChip(state = firebaseSceneDetection)
                 }
             }

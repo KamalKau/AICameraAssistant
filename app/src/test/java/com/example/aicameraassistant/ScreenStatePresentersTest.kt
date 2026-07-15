@@ -8,6 +8,31 @@ import org.junit.Test
 
 class ScreenStatePresentersTest {
     @Test
+    fun cameraToolRail_exposesSmartFramingOnlyOutsidePortraitMode() {
+        val photo = buildCameraToolRailUiState(
+            flashSupported = true, flashMode = "off", lensFacing = "back",
+            aspectRatioMode = "full", sceneDetectionEnabled = false, gridEnabled = false,
+            nightModeEnabled = false, videoHdrSupported = false, videoHdrEnabled = false,
+            videoQuality = "fhd", videoQualitySupportedValues = listOf("fhd"),
+            videoQualityChangeEnabled = true, cameraMode = "photo", toolbarExpanded = true,
+            boomerangSelected = false, exposureSupported = true,
+            smartFramingEnabled = true, smartFramingSupported = true
+        )
+        val portrait = buildCameraToolRailUiState(
+            flashSupported = true, flashMode = "off", lensFacing = "back",
+            aspectRatioMode = "full", sceneDetectionEnabled = false, gridEnabled = false,
+            nightModeEnabled = false, videoHdrSupported = false, videoHdrEnabled = false,
+            videoQuality = "fhd", videoQualitySupportedValues = listOf("fhd"),
+            videoQualityChangeEnabled = true, cameraMode = "portrait", toolbarExpanded = true,
+            boomerangSelected = false, exposureSupported = true,
+            smartFramingEnabled = true, smartFramingSupported = false
+        )
+
+        assertTrue(photo.smartFramingSupported)
+        assertTrue(photo.smartFramingEnabled)
+        assertFalse(portrait.smartFramingSupported)
+    }
+    @Test
     fun cameraToolRail_defaultsSceneDetectionOffAndMarksUnsupportedFlash() {
         val state = buildCameraToolRailUiState(
             flashSupported = false,

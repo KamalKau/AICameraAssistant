@@ -163,6 +163,12 @@ class HostSessionCoordinator(
         }
     }
 
+    fun updateSmartFramingEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("smart framing update") {
+            repository.updateSmartFramingEnabled(roomCode, !currentEnabled)
+        }
+    }
+
     fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
         roomWrites.launch("scene detection update") {
             repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
@@ -314,6 +320,12 @@ class ControllerSessionCoordinator(
     fun updateGestureCaptureEnabled(currentEnabled: Boolean) {
         roomWrites.launch("gesture capture update") {
             repository.updateGestureCaptureEnabled(roomCode, !currentEnabled)
+        }
+    }
+
+    fun updateSmartFramingEnabled(currentEnabled: Boolean) {
+        roomWrites.launch("smart framing update") {
+            repository.updateSmartFramingEnabled(roomCode, !currentEnabled)
         }
     }
 
