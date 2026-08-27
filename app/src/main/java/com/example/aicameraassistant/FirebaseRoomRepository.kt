@@ -226,25 +226,45 @@ class FirebaseRoomRepository {
         roomCode: String,
         state: SceneDetectionState
     ) {
-        val safeKey = when (state.key) {
-            "food", "night", "face", "text", "landscape" -> state.key
-            else -> "auto"
-        }
-        updateRoomSafely(
-            roomCode,
-            mapOf(
-                "sceneDetectionKey" to safeKey,
-                "sceneDetectionLabel" to state.label.take(24),
-                "sceneDetectionSuggestion" to state.suggestion.take(80),
-                "sceneDetectionConfidence" to state.confidence.coerceIn(0.0, 1.0),
-                "sceneDetectionTimestamp" to state.timestamp,
-                "sceneDetectionAutoAdjustment" to state.autoAdjustment.take(48)
-            )
+        updateDetectedScene(
+            roomCode = roomCode,
+            scene = state.key,
+            confidence = state.confidence,
+            timestamp = state.timestamp,
+            sessionId = state.sessionId,
+            suggestion = state.suggestion,
+            autoAdjustment = state.autoAdjustment
         )
     }
 
     suspend fun updateSceneDetectionEnabled(roomCode: String, sceneDetectionEnabled: Boolean) {
-        updateRoomSafely(roomCode, "sceneDetectionEnabled", sceneDetectionEnabled)
+        updateAiSceneDetectionEnabled(roomCode, sceneDetectionEnabled)
+    }
+
+    suspend fun updateAiSceneDetectionEnabled(roomCode: String, enabled: Boolean) {
+        updateBooleanIfChanged(roomCode, "aiSceneDetectionEnabled", enabled)
+    }
+
+    suspend fun updateDetectedScene(
+        roomCode: String,
+        scene: String,
+        confidence: Double,
+        timestamp: Long,
+        sessionId: String,
+        suggestion: String = "",
+        autoAdjustment: String = ""
+    ) {
+        updateRoomSafely(
+            roomCode,
+            mapOf(
+                "detectedScene" to scene,
+                "detectedSceneConfidence" to confidence.coerceIn(0.0, 1.0),
+                "detectedSceneUpdatedAt" to timestamp,
+                "detectedSceneSessionId" to sessionId,
+                "detectedSceneSuggestion" to suggestion.take(80),
+                "detectedSceneAutoAdjustment" to autoAdjustment.take(80)
+            )
+        )
     }
 
     suspend fun updateFlashSupported(roomCode: String, flashSupported: Boolean) {
@@ -494,7 +514,13 @@ class FirebaseRoomRepository {
             "sceneDetectionConfidence" to 0.0,
             "sceneDetectionTimestamp" to 0L,
             "sceneDetectionAutoAdjustment" to "",
-            "sceneDetectionEnabled" to false,
+            "aiSceneDetectionEnabled" to false,
+            "detectedScene" to "unknown",
+            "detectedSceneConfidence" to 0.0,
+            "detectedSceneUpdatedAt" to 0L,
+            "detectedSceneSessionId" to "",
+            "detectedSceneSuggestion" to "Scene detection ready",
+            "detectedSceneAutoAdjustment" to "",
             "lensFacing" to "back",
             "zoomLevel" to 1.0,
             "minZoom" to 1.0,
@@ -904,33 +930,42 @@ class FirebaseRoomRepository {
     fun getSceneDetectionState(roomCode: String): Flow<SceneDetectionState> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                val key = when (snapshot?.getString("sceneDetectionKey")) {
-                    "food", "night", "face", "text", "landscape" -> snapshot.getString("sceneDetectionKey")
-                    else -> "auto"
-                } ?: "auto"
+                val key = snapshot?.getString("detectedScene")
+                    ?: snapshot?.getString("sceneDetectionKey")
+                    ?: "unknown"
                 trySend(
                     SceneDetectionState(
                         key = key,
-                        label = snapshot?.getString("sceneDetectionLabel") ?: sceneLabelForKey(key),
-                        suggestion = snapshot?.getString("sceneDetectionSuggestion")
+                        label = sceneLabelForKey(key),
+                        suggestion = snapshot?.getString("detectedSceneSuggestion")
+                            ?: snapshot?.getString("sceneDetectionSuggestion")
                             ?: "Scene detection ready",
-                        confidence = (snapshot?.getDouble("sceneDetectionConfidence") ?: 0.0)
+                        confidence = (snapshot?.getDouble("detectedSceneConfidence")
+                            ?: snapshot?.getDouble("sceneDetectionConfidence") ?: 0.0)
                             .coerceIn(0.0, 1.0),
-                        timestamp = snapshot?.getLong("sceneDetectionTimestamp") ?: 0L,
-                        autoAdjustment = snapshot?.getString("sceneDetectionAutoAdjustment") ?: ""
+                        timestamp = snapshot?.getLong("detectedSceneUpdatedAt")
+                            ?: snapshot?.getLong("sceneDetectionTimestamp") ?: 0L,
+                        autoAdjustment = snapshot?.getString("detectedSceneAutoAdjustment")
+                            ?: snapshot?.getString("sceneDetectionAutoAdjustment") ?: "",
+                        sessionId = snapshot?.getString("detectedSceneSessionId").orEmpty()
                     )
                 )
             }
         awaitClose { listener.remove() }
     }
 
+    fun getDetectedScene(roomCode: String): Flow<SceneDetectionState> = getSceneDetectionState(roomCode)
+
     fun getSceneDetectionEnabled(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)
             .addSnapshotListener { snapshot, _ ->
-                trySend(snapshot?.getBoolean("sceneDetectionEnabled") ?: false)
+                trySend(snapshot?.getBoolean("aiSceneDetectionEnabled")
+                    ?: snapshot?.getBoolean("sceneDetectionEnabled") ?: false)
             }
         awaitClose { listener.remove() }
     }
+
+    fun getAiSceneDetectionEnabled(roomCode: String): Flow<Boolean> = getSceneDetectionEnabled(roomCode)
 
     fun getFlashSupported(roomCode: String): Flow<Boolean> = callbackFlow {
         val listener = db.collection("rooms").document(roomCode)

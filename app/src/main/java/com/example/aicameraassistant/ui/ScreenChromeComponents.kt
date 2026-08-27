@@ -54,6 +54,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -421,12 +423,11 @@ fun CameraToolRail(
             showLabel = labelsExpanded,
             onClick = actions.onAspectRatioClick
         )
-        CameraToolButton(
-            icon = Icons.Default.AutoAwesome,
-            label = if (state.sceneDetectionEnabled) "AI On" else "AI",
+        AiModeToolButton(
+            sceneDetectionEnabled = state.sceneDetectionEnabled,
+            sceneDetectionSupported = state.sceneDetectionSupported,
             showLabel = labelsExpanded,
-            selected = state.sceneDetectionEnabled,
-            onClick = actions.onSceneDetectionClick
+            onSceneDetectionClick = actions.onSceneDetectionClick
         )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -772,6 +773,61 @@ fun ManualExposureSlider(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 1.dp)
         )
+    }
+}
+
+@Composable
+private fun AiModeToolButton(
+    sceneDetectionEnabled: Boolean,
+    sceneDetectionSupported: Boolean,
+    showLabel: Boolean,
+    onSceneDetectionClick: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        CameraToolButton(
+            icon = Icons.Default.AutoAwesome,
+            label = if (sceneDetectionEnabled) "AI On" else "AI",
+            showLabel = showLabel,
+            selected = sceneDetectionEnabled,
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .width(218.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xF51A2027))
+        ) {
+            Text(
+                text = "AI MODE",
+                color = Color.White.copy(alpha = 0.46f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp,
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 5.dp)
+            )
+            DropdownMenuItem(
+                enabled = sceneDetectionSupported,
+                modifier = Modifier.semantics { contentDescription = "AI Scene Detection" },
+                text = {
+                    Text(
+                        text = "AI Scene Detection",
+                        color = if (sceneDetectionEnabled) Color(0xFF68D8FF) else Color.White.copy(alpha = 0.92f),
+                        fontSize = 14.sp,
+                        fontWeight = if (sceneDetectionEnabled) FontWeight.ExtraBold else FontWeight.SemiBold
+                    )
+                },
+                trailingIcon = {
+                    if (sceneDetectionEnabled) Icon(Icons.Default.Check, contentDescription = null)
+                },
+                onClick = {
+                    onSceneDetectionClick()
+                    expanded = false
+                }
+            )
+        }
     }
 }
 

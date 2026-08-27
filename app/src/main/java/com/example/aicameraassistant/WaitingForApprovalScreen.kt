@@ -394,6 +394,7 @@ fun WaitingForApprovalScreen(
         lensFacing = firebaseLensFacing,
         aspectRatioMode = firebaseAspectRatioMode,
         sceneDetectionEnabled = firebaseSceneDetectionEnabled,
+        sceneDetectionSupported = firebaseCameraMode == "photo" || firebaseCameraMode == "video",
         gridEnabled = firebaseGridEnabled,
         nightModeEnabled = firebaseNightModeEnabled,
         videoHdrSupported = firebaseVideoHdrSupported,
@@ -1745,7 +1746,11 @@ fun WaitingForApprovalScreen(
                     firebaseSmartFraming.sessionId == firebaseRtcSessionId
                 if (firebaseSmartFramingEnabled && firebaseCameraMode != "portrait" && smartFramingIsCurrent) {
                     SceneDetectionChip(state = firebaseSmartFraming.toSceneDetectionState())
-                } else if (firebaseSceneDetectionEnabled) {
+                } else if (
+                    firebaseSceneDetectionEnabled &&
+                    (firebaseSceneDetection.sessionId.isBlank() ||
+                        firebaseSceneDetection.sessionId == firebaseRtcSessionId)
+                ) {
                     SceneDetectionChip(state = firebaseSceneDetection)
                 }
             }

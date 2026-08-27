@@ -3,6 +3,7 @@ package com.example.aicameraassistant
 import androidx.camera.core.ImageProxy
 import kotlin.math.abs
 import kotlin.math.max
+import java.util.concurrent.atomic.AtomicLong
 
 data class SceneDetectionResult(
     val key: String,
@@ -22,11 +23,77 @@ data class SceneDetectionResult(
         )
 }
 
-class SceneDetectionAnalyzer {
-    fun detect(imageProxy: ImageProxy): SceneDetectionResult {
+val configurableSceneCategories: Set<String> = linkedSetOf(
+    "person", "group", "landscape", "food", "pet", "document", "sunset", "night",
+    "indoor", "outdoor", "macro", "backlit", "snow_beach", "unknown"
+)
+
+class SceneAnalysisThrottle(private val intervalMs: Long) {
+    private val lastRunMs = AtomicLong(0L)
+
+    fun tryAcquire(nowMs: Long): Boolean {
+        while (true) {
+            val previous = lastRunMs.get()
+            if (nowMs - previous < intervalMs) return false
+            if (lastRunMs.compareAndSet(previous, nowMs)) return true
+        }
+    }
+}
+
+class StableSceneTracker(
+    private val confirmationMs: Long = 650L,
+    private val unknownDelayMs: Long = 1_500L,
+    private val minimumConfidence: Double = 0.46
+) {
+    private var current: SceneDetectionResult? = null
+    private var candidate: SceneDetectionResult? = null
+    private var candidateStartedMs = 0L
+
+    fun update(result: SceneDetectionResult, nowMs: Long = result.timestamp): SceneDetectionResult? {
+        val normalized = result.takeIf {
+            it.key in configurableSceneCategories && it.confidence >= minimumConfidence
+        } ?: sceneDetectionResult("unknown", result.confidence, nowMs)
+        val stable = current
+        if (stable?.key == normalized.key) {
+            candidate = null
+            return stable.copy(
+                confidence = stable.confidence * 0.65 + normalized.confidence * 0.35,
+                timestamp = nowMs
+            ).also { current = it }
+        }
+        if (candidate?.key != normalized.key) {
+            candidate = normalized
+            candidateStartedMs = nowMs
+            return stable
+        }
+        val requiredMs = if (normalized.key == "unknown") unknownDelayMs else confirmationMs
+        if (nowMs - candidateStartedMs < requiredMs) return stable
+        return normalized.copy(timestamp = nowMs).also {
+            current = it
+            candidate = null
+        }
+    }
+
+    fun reset() {
+        current = null
+        candidate = null
+        candidateStartedMs = 0L
+    }
+}
+
+interface OnDeviceSceneClassifier {
+    val modelVersion: String
+    fun detect(imageProxy: ImageProxy): SceneDetectionResult
+}
+
+/** Replaceable on-device classifier; this built-in v1 uses sampled YUV features without bitmaps. */
+class SceneDetectionAnalyzer(
+    override val modelVersion: String = "builtin-yuv-scenes-v1"
+) : OnDeviceSceneClassifier {
+    override fun detect(imageProxy: ImageProxy): SceneDetectionResult {
         val planes = imageProxy.planes
         if (planes.isEmpty() || imageProxy.width <= 0 || imageProxy.height <= 0) {
-            return sceneDetectionResult("auto", 0.0)
+            return sceneDetectionResult("unknown", 0.0)
         }
 
         val yPlane = planes[0]
@@ -89,7 +156,7 @@ class SceneDetectionAnalyzer {
             y += stepY
         }
 
-        if (samples == 0) return sceneDetectionResult("auto", 0.0)
+        if (samples == 0) return sceneDetectionResult("unknown", 0.0)
 
         val averageLuma = luminanceSum / samples
         val shadowLuma = histogramPercentile(luminanceHistogram, samples, 0.25)
@@ -112,10 +179,16 @@ class SceneDetectionAnalyzer {
                         .coerceIn(0.48, 0.94)
                 )
             }
-            textRatio > 0.34 && edgeRatio > 0.26 -> sceneDetectionResult("text", textRatio.coerceIn(0.48, 0.9))
+            highlightLuma - shadowLuma > 190 && clippedHighlights > 0.12 ->
+                sceneDetectionResult("backlit", (clippedHighlights + 0.55).coerceIn(0.5, 0.92))
+            textRatio > 0.34 && edgeRatio > 0.26 -> sceneDetectionResult("document", textRatio.coerceIn(0.48, 0.9))
+            warmRatio > 0.28 && skyBlue > samples * 0.08 -> sceneDetectionResult("sunset", warmRatio.coerceIn(0.5, 0.9))
             warmRatio > 0.22 && averageLuma > 62.0 -> sceneDetectionResult("food", warmRatio.coerceIn(0.46, 0.88))
             landscapeRatio > 0.34 && averageLuma > 70.0 -> sceneDetectionResult("landscape", landscapeRatio.coerceIn(0.46, 0.88))
-            else -> sceneDetectionResult("auto", 0.32)
+            skyBlue > samples * 0.18 && averageLuma > 100 -> sceneDetectionResult("outdoor", 0.58)
+            edgeRatio > 0.38 -> sceneDetectionResult("macro", edgeRatio.coerceIn(0.48, 0.82))
+            averageLuma in 62.0..150.0 -> sceneDetectionResult("indoor", 0.5)
+            else -> sceneDetectionResult("unknown", 0.32)
         }
     }
 
@@ -166,22 +239,34 @@ fun sceneLabelForKey(key: String): String =
     when (key) {
         "food" -> "Food"
         "night" -> "Night"
-        "face" -> "Face"
-        "text" -> "Text"
+        "person" -> "Portrait / Person"
+        "group" -> "Group"
+        "pet" -> "Pet"
+        "document" -> "Document"
+        "sunset" -> "Sunset"
+        "indoor" -> "Indoor"
+        "outdoor" -> "Outdoor"
+        "macro" -> "Macro / Close-up"
+        "backlit" -> "Backlit"
+        "snow_beach" -> "Snow / Beach"
         "landscape" -> "Landscape"
-        else -> "Auto"
+        else -> "Unknown / General"
     }
 
-fun sceneDetectionResult(key: String, confidence: Double): SceneDetectionResult {
-    val safeKey = when (key) {
-        "food", "night", "face", "text", "landscape" -> key
-        else -> "auto"
-    }
+fun sceneDetectionResult(
+    key: String,
+    confidence: Double,
+    timestamp: Long = System.currentTimeMillis()
+): SceneDetectionResult {
+    val safeKey = key.takeIf { it in configurableSceneCategories } ?: "unknown"
     val suggestion = when (safeKey) {
         "food" -> "Boosting warm detail for food"
         "night" -> "Night mode suggested for low light"
-        "face" -> "Focus and exposure adjusted for faces"
-        "text" -> "Hold steady for sharper text"
+        "person" -> "Prioritize face focus and exposure"
+        "group" -> "Keep everyone inside the frame"
+        "document" -> "Document mode recommended"
+        "backlit" -> "HDR recommended for strong backlight"
+        "macro" -> "Check close-focus distance"
         "landscape" -> "Grid helps keep the horizon level"
         else -> "Scene detection ready"
     }
@@ -189,6 +274,7 @@ fun sceneDetectionResult(key: String, confidence: Double): SceneDetectionResult 
         key = safeKey,
         label = sceneLabelForKey(safeKey),
         suggestion = suggestion,
-        confidence = confidence.coerceIn(0.0, 1.0)
+        confidence = confidence.coerceIn(0.0, 1.0),
+        timestamp = timestamp
     )
 }

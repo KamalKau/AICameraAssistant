@@ -31,6 +31,7 @@ data class CameraToolRailUiState(
     val lensLabel: String,
     val aspectRatioLabel: String,
     val sceneDetectionEnabled: Boolean,
+    val sceneDetectionSupported: Boolean,
     val gridEnabled: Boolean,
     val nightModeEnabled: Boolean,
     val gestureCaptureEnabled: Boolean,

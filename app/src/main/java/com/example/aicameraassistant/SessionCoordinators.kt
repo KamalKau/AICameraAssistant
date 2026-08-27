@@ -171,7 +171,7 @@ class HostSessionCoordinator(
 
     fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
         roomWrites.launch("scene detection update") {
-            repository.updateSceneDetectionEnabled(roomCode, !currentEnabled)
+            repository.updateAiSceneDetectionEnabled(roomCode, !currentEnabled)
         }
     }
 
@@ -331,7 +331,7 @@ class ControllerSessionCoordinator(
 
     fun updateSceneDetectionEnabled(currentEnabled: Boolean) {
         roomWrites.launch("scene detection update") {
-            sendCommand("smart_framing", "sceneDetectionEnabled" to !currentEnabled)
+            repository.updateAiSceneDetectionEnabled(roomCode, !currentEnabled)
         }
     }
 

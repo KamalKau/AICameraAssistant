@@ -51,12 +51,14 @@ class MlKitFaceDetectionAnalyzer(
     private val detector: FaceDetector,
     private val minProcessIntervalMs: Long = 800L,
     private val sceneAnalyzer: SceneDetectionAnalyzer? = null,
+    private val shouldAnalyzeScene: () -> Boolean = { false },
     private val onSceneResult: (SceneDetectionResult) -> Unit = {},
     private val confidencePolicy: FaceConfidencePolicy = FaceConfidencePolicy(),
     private val onFaceResult: (List<NormalizedFaceBounds>) -> Unit
 ) : ImageAnalysis.Analyzer {
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessStartedMs = 0L
+    private var lastSceneProcessMs = 0L
 
     override fun analyze(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
@@ -79,8 +81,9 @@ class MlKitFaceDetectionAnalyzer(
         }
 
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-        sceneAnalyzer?.let { analyzer ->
+        sceneAnalyzer?.takeIf { shouldAnalyzeScene() && now - lastSceneProcessMs >= 300L }?.let { analyzer ->
             runCatching {
+                lastSceneProcessMs = now
                 onSceneResult(analyzer.detect(imageProxy))
             }.onFailure {
                 Log.w("SCENE_DETECTION", "Scene detection failed", it)

@@ -75,7 +75,8 @@ data class SceneDetectionState(
     val suggestion: String = "Scene detection ready",
     val confidence: Double = 0.0,
     val timestamp: Long = 0L,
-    val autoAdjustment: String = ""
+    val autoAdjustment: String = "",
+    val sessionId: String = ""
 )
 
 data class ControllerRemoteUiState(
