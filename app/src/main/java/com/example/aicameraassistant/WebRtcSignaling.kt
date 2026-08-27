@@ -1,7 +1,6 @@
 package com.example.aicameraassistant
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,7 +17,7 @@ fun createSharedAnswer(
     onRemoteDescriptionSet: () -> Unit,
     reusePeerConnection: Boolean = false
 ): Boolean {
-    Log.d("SESSION_TRACE", "createAnswer room=$roomCode rtc=$rtcSessionId reuse=$reusePeerConnection")
+    AppLogger.debug(LogCategory.WEBRTC, "SESSION_TRACE", "createAnswer room=$roomCode rtc=$rtcSessionId reuse=$reusePeerConnection")
     WebRtcSessionManager.initialize(context)
 
     val pc = WebRtcSessionManager.createCameraPeerConnection(
@@ -29,7 +28,7 @@ fun createSharedAnswer(
                     !WebRtcSessionManager.isRemoteIceSessionActive(true, rtcSessionId)
                 ) return@launch
                 runCatching { repository.addCameraIceCandidate(roomCode, candidate, rtcSessionId) }
-                    .onFailure { Log.w("WEBRTC_LOG", "Unable to publish camera ICE candidate", it) }
+                    .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Unable to publish camera ICE candidate", it) }
             }
         },
         reuseExisting = reusePeerConnection
@@ -70,7 +69,7 @@ fun createSharedAnswer(
                                                                 )
                                                             )
                                                         }.onFailure {
-                                                            Log.w("WEBRTC_LOG", "Unable to save WebRTC answer", it)
+                                                            AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Unable to save WebRTC answer", it)
                                                         }
                                                     }
                                                 }
@@ -103,7 +102,7 @@ fun createSharedOffer(
     onRemoteTrackReady: (VideoTrack) -> Unit,
     iceRestart: Boolean = false
 ): Boolean {
-    Log.d(
+    AppLogger.debug(LogCategory.WEBRTC,
         "SESSION_TRACE",
         "Creating offer room=$roomCode generation=$sessionGeneration rtc=$rtcSessionId restart=$iceRestart"
     )
@@ -118,7 +117,7 @@ fun createSharedOffer(
                     return@launch
                 }
                 runCatching { repository.addControllerIceCandidate(roomCode, candidate, rtcSessionId) }
-                    .onFailure { Log.w("WEBRTC_LOG", "Unable to publish controller ICE candidate", it) }
+                    .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Unable to publish controller ICE candidate", it) }
             }
         },
         onRemoteTrack = { videoTrack ->
@@ -156,7 +155,7 @@ fun createSharedOffer(
                                                 signalingGeneration = signalingGeneration
                                             )
                                         }.onFailure {
-                                            Log.w("WEBRTC_LOG", "Unable to save WebRTC offer", it)
+                                            AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Unable to save WebRTC offer", it)
                                         }
                                     }
                                 }

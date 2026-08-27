@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import android.util.Log
 
 class CameraScreenViewModel : ViewModel() {
     private val _remoteUiState = MutableStateFlow(CameraRemoteUiState())
@@ -63,7 +62,7 @@ class CameraScreenViewModel : ViewModel() {
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
-        Log.d("SESSION_TRACE", "camera bind room=$roomCode previous=$boundRoomCode")
+        AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "camera bind room=$roomCode previous=$boundRoomCode")
         if (roomCode.isBlank()) {
             bindJob?.cancel()
             bindJob = null
@@ -171,7 +170,7 @@ class CameraScreenViewModel : ViewModel() {
                 )
             }.collect { state ->
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {
-                    Log.d("SESSION_TRACE", "camera room=$roomCode status=${state.roomStatus}")
+                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "camera room=$roomCode status=${state.roomStatus}")
                 }
                 _remoteUiState.value = state
             }

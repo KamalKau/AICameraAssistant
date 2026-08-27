@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import org.webrtc.VideoTrack
 import kotlinx.coroutines.launch
-import android.util.Log
 
 class ControllerScreenViewModel : ViewModel() {
     private val _remoteUiState = MutableStateFlow(ControllerRemoteUiState())
@@ -92,7 +91,7 @@ class ControllerScreenViewModel : ViewModel() {
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
-        Log.d("SESSION_TRACE", "controller bind room=$roomCode previous=$boundRoomCode")
+        AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "controller bind room=$roomCode previous=$boundRoomCode")
         if (roomCode.isBlank()) {
             bindJob?.cancel()
             bindJob = null
@@ -212,11 +211,11 @@ class ControllerScreenViewModel : ViewModel() {
                 )
             }.collect { state ->
                 if (boundRoomCode != roomCode) {
-                    Log.d("SESSION_TRACE", "Ignoring stale Firebase callback room=$roomCode active=$boundRoomCode")
+                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "Ignoring stale Firebase callback room=$roomCode active=$boundRoomCode")
                     return@collect
                 }
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {
-                    Log.d("SESSION_TRACE", "controller room=$roomCode status=${state.roomStatus}")
+                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "controller room=$roomCode status=${state.roomStatus}")
                 }
                 _remoteUiState.value = state
             }

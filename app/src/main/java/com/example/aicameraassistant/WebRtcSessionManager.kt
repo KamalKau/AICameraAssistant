@@ -2,7 +2,6 @@ package com.example.aicameraassistant
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import android.view.Surface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -152,7 +151,7 @@ object WebRtcSessionManager {
         if (now - (diagnosticLogTimes[key] ?: 0L) < 5_000L) return
         diagnosticLogTimes[key] = now
         val value = diagnostics.value
-        Log.d(
+        AppLogger.debug(LogCategory.WEBRTC,
             "WEBRTC_DIAGNOSTIC",
             "role=$role room=$roomCode session=$sessionId generation=$signalingGeneration " +
                 "connection=${value.connectionState} ice=${value.iceState} " +
@@ -169,7 +168,7 @@ object WebRtcSessionManager {
     fun initialize(context: Context) {
         if (initialized && _factory != null) return
 
-        Log.d("WEBRTC_LOG", "Initializing WebRtcSessionManager...")
+        AppLogger.info(LogCategory.WEBRTC, "WEBRTC_INITIALIZING")
         try {
             val appContext = context.applicationContext
 
@@ -194,9 +193,9 @@ object WebRtcSessionManager {
                 .createPeerConnectionFactory()
 
             initialized = true
-            Log.d("WEBRTC_LOG", "PeerConnectionFactory initialized successfully")
+            AppLogger.info(LogCategory.WEBRTC, "WEBRTC_INITIALIZED")
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Critical failure during WebRTC initialization", t)
+            AppLogger.error(LogCategory.WEBRTC, "PeerConnectionFactory initialization failed", t)
         }
     }
 
@@ -292,6 +291,7 @@ object WebRtcSessionManager {
 
             localVideoTrack = f.createVideoTrack("LOCAL_VIDEO", vSource)
             localAudioTrack = f.createAudioTrack("LOCAL_AUDIO", aSource)
+            AppLogger.info(LogCategory.WEBRTC, "LOCAL_VIDEO_TRACK_CREATED")
 
             captureWidth = safeWidth
             captureHeight = safeHeight
@@ -300,7 +300,7 @@ object WebRtcSessionManager {
             val surface = Surface(helper.surfaceTexture)
             cachedSurface = surface
 
-            Log.d(
+            AppLogger.debug(LogCategory.WEBRTC,
                 "WEBRTC_LOG",
                 "WebRTC source started with size: ${captureWidth}x${captureHeight}, rotation=$safeRotation"
             )
@@ -308,14 +308,14 @@ object WebRtcSessionManager {
             attachLocalTracksToCameraPeer()
             surface
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to start camera source", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to start camera source", t)
             null
         }
     }
 
     @Synchronized
     fun stopLocalCamera() {
-        Log.d("WEBRTC_LOG", "Stopping local camera...")
+        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Stopping local camera...")
         try {
             val helper = surfaceTextureHelper
             val surface = cachedSurface
@@ -342,7 +342,7 @@ object WebRtcSessionManager {
             captureHeight = 0
             captureRotationDegrees = 0
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Error during cleanup", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Error during cleanup", t)
         }
     }
 
@@ -376,10 +376,10 @@ object WebRtcSessionManager {
             imageFrameSourceActive = true
             attachLocalTracksToCameraPeer()
             startStatsMonitoring()
-            Log.d("WEBRTC_LOG", "Image WebRTC source started with size: ${captureWidth}x${captureHeight}")
+            AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Image WebRTC source started with size: ${captureWidth}x${captureHeight}")
             vSource
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to start image frame source", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to start image frame source", t)
             null
         }
     }
@@ -403,10 +403,10 @@ object WebRtcSessionManager {
             var sender = pc.senders.find { it.track()?.id() == video.id() }
             if (sender == null) {
                 sender = pc.addTrack(video, listOf("STREAM"))
-                Log.d("WEBRTC_LOG", "Video track attached to peer connection")
+                AppLogger.info(LogCategory.WEBRTC, "LOCAL_TRACK_ATTACHED")
             } else if (sender.track() !== video) {
                 sender.setTrack(video, false)
-                Log.d("WEBRTC_LOG", "Video track replaced on peer connection")
+                AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Video track replaced on peer connection")
             }
 
             val params = sender.parameters
@@ -420,7 +420,7 @@ object WebRtcSessionManager {
             }
             sender.parameters = params
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to attach tracks", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to attach tracks", t)
         }
     }
 
@@ -455,11 +455,11 @@ object WebRtcSessionManager {
                     }
                     override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {
                         if (generation != cameraPeerGeneration) return
-                        Log.d("WEBRTC_LOG", "Camera ICE state: $s")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Camera ICE state: $s")
                         handleIceConnectionChange(ConnectionSide.CAMERA, s)
                     }
                     override fun onIceConnectionReceivingChange(b: Boolean) {
-                        Log.d("WEBRTC_LOG", "Camera ICE receiving change: $b")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Camera ICE receiving change: $b")
                         handleIceReceivingChange(ConnectionSide.CAMERA, b)
                     }
                     override fun onTrack(transceiver: RtpTransceiver) {}
@@ -475,9 +475,10 @@ object WebRtcSessionManager {
                     override fun onAddTrack(r: RtpReceiver?, ms: Array<out MediaStream>?) {}
                 }
             )
+            if (cameraPeerConnection != null) AppLogger.info(LogCategory.WEBRTC, "CAMERA_PEER_CREATED")
             attachLocalTracksToCameraPeer()
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Failed to create camera peer connection", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to create camera peer connection", t)
         }
         return cameraPeerConnection
     }
@@ -492,7 +493,7 @@ object WebRtcSessionManager {
     ): PeerConnection? {
         val f = factory ?: return null
         if (!isControllerSessionActive(roomCode, sessionGeneration)) {
-            Log.w(
+            AppLogger.warning(LogCategory.WEBRTC,
                 "SESSION_TRACE",
                 "Ignoring peer creation room=$roomCode generation=$sessionGeneration active=$activeControllerSession"
             )
@@ -507,7 +508,7 @@ object WebRtcSessionManager {
                     return existing
                 }
             } else if (controllerPeerConnection != null) {
-                Log.d(
+                AppLogger.debug(LogCategory.WEBRTC,
                     "SESSION_TRACE",
                     "Ignoring reuse because active peer=$controllerPeerOwner " +
                         "requestedRoom=$roomCode requestedGeneration=$sessionGeneration"
@@ -536,6 +537,7 @@ object WebRtcSessionManager {
                         val track = transceiver.receiver.track()
                         if (track is VideoTrack) {
                             remoteVideoTrack = track
+                            AppLogger.info(LogCategory.WEBRTC, "REMOTE_VIDEO_TRACK_RECEIVED")
                             controllerRemoteTrackHandler(track)
                         }
                     }
@@ -545,7 +547,7 @@ object WebRtcSessionManager {
                             generation != controllerPeerGeneration ||
                             !isControllerSessionActive(roomCode, sessionGeneration)
                         ) return
-                        Log.d("WEBRTC_LOG", "Controller ICE state: $s")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ICE state: $s")
                         handleIceConnectionChange(ConnectionSide.CONTROLLER, s)
                     }
 
@@ -554,7 +556,7 @@ object WebRtcSessionManager {
                         updateDiagnostics(signalingState = s?.name ?: "UNKNOWN")
                     }
                     override fun onIceConnectionReceivingChange(b: Boolean) {
-                        Log.d("WEBRTC_LOG", "Controller ICE Receiving Change: $b")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ICE Receiving Change: $b")
                         handleIceReceivingChange(ConnectionSide.CONTROLLER, b)
                     }
                     override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
@@ -574,10 +576,11 @@ object WebRtcSessionManager {
             )
             if (controllerPeerConnection != null) {
                 controllerPeerOwner = ControllerSession(roomCode, sessionGeneration)
+                AppLogger.info(LogCategory.WEBRTC, "CONTROLLER_PEER_CREATED")
             }
         } catch (t: Throwable) {
             controllerPeerOwner = null
-            Log.e("WEBRTC_LOG", "Failed to create controller peer connection", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to create controller peer connection", t)
         }
 
         return controllerPeerConnection
@@ -596,7 +599,7 @@ object WebRtcSessionManager {
         controllerRtcSessionId = null
         controllerRemoteCandidateKeys.clear()
         remoteVideoTrack = null
-        Log.d("SESSION_TRACE", "Beginning controller room=$roomCode generation=$generation")
+        AppLogger.debug(LogCategory.WEBRTC, "SESSION_TRACE", "Beginning controller room=$roomCode generation=$generation")
         return generation
     }
 
@@ -609,7 +612,7 @@ object WebRtcSessionManager {
         val active = activeControllerSession
         if (active != ControllerSession(roomCode, sessionGeneration)) {
             val activeDescription = active?.let { "room=${it.roomCode} generation=${it.generation}" } ?: "none"
-            Log.d(
+            AppLogger.debug(LogCategory.WEBRTC,
                 "SESSION_TRACE",
                 "Ignoring cleanup because active=$activeDescription " +
                     "cleanupRoom=$roomCode cleanupGeneration=$sessionGeneration"
@@ -632,7 +635,7 @@ object WebRtcSessionManager {
     private fun disposeControllerPeerLocked(owner: ControllerSession) {
         if (controllerPeerOwner != null && controllerPeerOwner != owner) {
             val activeOwner = controllerPeerOwner
-            Log.d(
+            AppLogger.debug(LogCategory.WEBRTC,
                 "SESSION_TRACE",
                 "Ignoring cleanup because active room=${activeOwner?.roomCode} " +
                     "generation=${activeOwner?.generation} cleanupRoom=${owner.roomCode} " +
@@ -640,7 +643,7 @@ object WebRtcSessionManager {
             )
             return
         }
-        Log.d("SESSION_TRACE", "Disposing room=${owner.roomCode} generation=${owner.generation}")
+        AppLogger.debug(LogCategory.WEBRTC, "SESSION_TRACE", "Disposing room=${owner.roomCode} generation=${owner.generation}")
         cancelConnectionJobs(ConnectionSide.CONTROLLER)
         val connection = controllerPeerConnection
         controllerPeerConnection = null
@@ -657,7 +660,7 @@ object WebRtcSessionManager {
     fun claimSession(cameraSide: Boolean, owner: String) {
         if (owner.isBlank()) return
         if (cameraSide) cameraSessionOwner = owner else controllerSessionOwner = owner
-        Log.d("SESSION_TRACE", "claim side=${if (cameraSide) "camera" else "controller"} room=$owner")
+        AppLogger.debug(LogCategory.WEBRTC, "SESSION_TRACE", "claim side=${if (cameraSide) "camera" else "controller"} room=$owner")
     }
 
     @Synchronized
@@ -668,7 +671,7 @@ object WebRtcSessionManager {
     @Synchronized
     fun clearConnectionsIfOwned(cameraSide: Boolean, owner: String): Boolean {
         if (!isSessionOwner(cameraSide, owner)) {
-            Log.d(
+            AppLogger.debug(LogCategory.WEBRTC,
                 "SESSION_TRACE",
                 "ignore stale cleanup side=${if (cameraSide) "camera" else "controller"} room=$owner"
             )
@@ -717,7 +720,7 @@ object WebRtcSessionManager {
     fun sessionDescriptionObserver(
         onCreateSuccess: (SessionDescription) -> Unit = {},
         onSetSuccess: () -> Unit = {},
-        onFailure: (String) -> Unit = { Log.e("WEBRTC_LOG", "SDP Error: $it") }
+        onFailure: (String) -> Unit = { AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "SDP Error: $it") }
     ) = object : SdpObserver {
         override fun onCreateSuccess(desc: SessionDescription) = onCreateSuccess(desc)
         override fun onSetSuccess() = onSetSuccess()
@@ -727,6 +730,7 @@ object WebRtcSessionManager {
 
     @Synchronized
     fun clearConnections() {
+        AppLogger.info(LogCategory.SESSION, "SESSION_CLEANUP_STARTED")
         try {
             val cameraHadActiveSession =
                 cameraPeerConnection != null ||
@@ -760,21 +764,23 @@ object WebRtcSessionManager {
                 ConnectionSide.CONTROLLER,
                 if (controllerHadActiveSession) AppConnectionState.DISCONNECTED else AppConnectionState.IDLE
             )
+            AppLogger.info(LogCategory.WEBRTC, "WEBRTC_CONNECTION_CLEARED")
+            AppLogger.info(LogCategory.SESSION, "SESSION_CLEANUP_COMPLETED")
         } catch (t: Throwable) {
-            Log.e("WEBRTC_LOG", "Error clearing connections", t)
+            AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Error clearing connections", t)
         }
     }
 
     private fun disposePeerConnection(peerConnection: PeerConnection?) {
         if (peerConnection == null) return
         runCatching { peerConnection.close() }
-            .onFailure { Log.w("WEBRTC_LOG", "Peer connection close failed", it) }
+            .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Peer connection close failed", it) }
         connectionScope.launch {
             // Native WebRTC may still deliver a final observer callback immediately after close().
             // Let that callback drain before freeing the native peer.
             delay(300L)
             runCatching { peerConnection.dispose() }
-                .onFailure { Log.w("WEBRTC_LOG", "Peer connection dispose failed", it) }
+                .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Peer connection dispose failed", it) }
         }
     }
 
@@ -782,6 +788,14 @@ object WebRtcSessionManager {
         side: ConnectionSide,
         state: PeerConnection.IceConnectionState?
     ) {
+        state?.let { iceState ->
+            val event = "ICE_${iceState.name}"
+            if (iceState == PeerConnection.IceConnectionState.FAILED) {
+                AppLogger.error(LogCategory.WEBRTC, event)
+            } else {
+                AppLogger.info(LogCategory.WEBRTC, event)
+            }
+        }
         updateDiagnostics(iceState = state?.name ?: "UNKNOWN")
         val health = getConnectionHealth(side)
         val currentState = getConnectionStateFlow(side).value
@@ -923,7 +937,7 @@ object WebRtcSessionManager {
                 }
             }
             sender.parameters = params
-        }.onFailure { Log.w("WEBRTC_STATS", "Unable to adapt sender profile", it) }
+        }.onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_STATS", "Unable to adapt sender profile", it) }
     }
 
     @Synchronized
@@ -954,7 +968,7 @@ object WebRtcSessionManager {
             }
             sender.parameters = params
             previewQuality = desired
-        }.onFailure { Log.w("WEBRTC_STATS", "Unable to update preview quality", it) }
+        }.onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_STATS", "Unable to update preview quality", it) }
     }
 
     private fun updateDiagnostics(
@@ -970,7 +984,7 @@ object WebRtcSessionManager {
             reconnectAttempts = reconnectAttempts
         )
         if (BuildConfig.DEBUG) {
-            Log.d("WEBRTC_STATS", _diagnostics.value.toString())
+            AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_STATS", _diagnostics.value.toString())
         }
     }
 

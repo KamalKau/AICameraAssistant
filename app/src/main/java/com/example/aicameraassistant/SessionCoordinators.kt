@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -33,7 +32,7 @@ private class RoomWriteDispatcher(
     fun launch(operation: String, block: suspend () -> Unit) {
         scope.launch {
             runCatching { writeMutex.withLock { block() } }
-                .onFailure { Log.w(tag, "Room write failed during $operation", it) }
+                .onFailure { AppLogger.warning(LogCategory.SESSION, tag, "Room write failed during $operation", it) }
         }
     }
 }
@@ -100,7 +99,7 @@ class HostSessionCoordinator(
         remoteEndScope.launch {
             runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    Log.e("SESSION_END", "Failed to end host session remotely", it)
+                    AppLogger.error(LogCategory.SESSION, "SESSION_END", "Failed to end host session remotely", it)
                 }
             }
 
@@ -261,7 +260,7 @@ class ControllerSessionCoordinator(
         remoteEndScope.launch {
             runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    Log.e("SESSION_END", "Failed to end controller session remotely", it)
+                    AppLogger.error(LogCategory.SESSION, "SESSION_END", "Failed to end controller session remotely", it)
                 }
             }
 
@@ -405,7 +404,7 @@ class ControllerSessionCoordinator(
             setShutterFlashAlpha = setShutterFlashAlpha
         )
         roomWrites.launch("capture request") {
-            Log.d("AICameraAssistant", "Sending capture request type=$requestType id=$nextRequestId")
+            AppLogger.debug(LogCategory.SESSION, "AICameraAssistant", "Sending capture request type=$requestType id=$nextRequestId")
             repository.sendCaptureRequest(roomCode, nextRequestId, requestType)
         }
     }

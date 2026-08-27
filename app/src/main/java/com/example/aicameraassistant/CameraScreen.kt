@@ -7,7 +7,6 @@ import android.media.ExifInterface
 import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.MediaStore
-import android.util.Log
 import android.util.Size
 import android.view.OrientationEventListener
 import android.widget.Toast
@@ -215,7 +214,7 @@ fun CameraScreen(
                         ?.toLongOrNull() ?: 0L,
                     instanceId = cameraInstanceId
                 )
-            }.onFailure { Log.w("SESSION_HEARTBEAT", "Camera heartbeat failed room=$roomCode") }
+            }.onFailure { AppLogger.warning(LogCategory.CAMERA, "SESSION_HEARTBEAT", "Camera heartbeat failed room=$roomCode") }
             delay(15_000L)
         }
     }
@@ -434,7 +433,7 @@ fun CameraScreen(
         val shouldAnalyze = firebaseGestureCaptureEnabled && modeSupported && camera != null
         if (gestureCaptureAnalysisActive != shouldAnalyze) {
             gestureCaptureAnalysisActive = shouldAnalyze
-            Log.d(
+            AppLogger.debug(LogCategory.CAMERA,
                 "GESTURE_CAPTURE",
                 "analysisActive=$shouldAnalyze mode=$firebaseCameraMode " +
                     "portraitStatus=${remoteUiState.portraitStatus}"
@@ -451,7 +450,7 @@ fun CameraScreen(
                     repository.updateVideoHdrEnabled(roomCode, false)
                 }
             }.onFailure {
-                Log.w("HDR_EXTENSION", "Unable to publish HDR support room=$roomCode lens=$lensFacing", it)
+                AppLogger.warning(LogCategory.CAMERA, "HDR_EXTENSION", "Unable to publish HDR support room=$roomCode lens=$lensFacing", it)
             }
         }
     }
@@ -492,7 +491,7 @@ fun CameraScreen(
     fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
         scope.launch {
             runCatching { block() }
-                .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
+                .onFailure { AppLogger.warning(LogCategory.CAMERA, "AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
     fun applyExposureCompensation(targetIndex: Int, source: String) {
@@ -505,14 +504,14 @@ fun CameraScreen(
                     .onSuccess { appliedIndex ->
                         if (camera === activeCamera) {
                             exposureIndex = appliedIndex
-                            Log.d(
+                            AppLogger.debug(LogCategory.CAMERA,
                                 "CAMERA_EXPOSURE",
                                 "Applied exposure index=$appliedIndex requested=$clampedIndex source=$source"
                             )
                         }
                     }
                     .onFailure { error ->
-                        Log.w(
+                        AppLogger.warning(LogCategory.CAMERA,
                             "CAMERA_EXPOSURE",
                             "Exposure request failed index=$clampedIndex source=$source",
                             error
@@ -675,13 +674,13 @@ fun CameraScreen(
             }
         },
         onLensClick = {
+            AppLogger.info(LogCategory.CAMERA, "Camera switch requested")
             resetExposureToNeutral()
             val nextFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
                 "front"
             } else {
                 "back"
             }
-            Log.i("CAMERA_BIND", "Applying local lens switch to $nextFacing")
             pendingLocalLensFacing = nextFacing
             lensFacing = if (nextFacing == "front") {
                 CameraSelector.LENS_FACING_FRONT
@@ -691,7 +690,7 @@ fun CameraScreen(
             scope.launch {
                 runCatching { repository.updateLensFacing(roomCode, nextFacing) }
                     .onFailure { error ->
-                        Log.w("CAMERA_BIND", "Lens synchronization failed", error)
+                        AppLogger.warning(LogCategory.CAMERA, "CAMERA_BIND", "Lens synchronization failed", error)
                         if (pendingLocalLensFacing == nextFacing) {
                             pendingLocalLensFacing = null
                             lensFacing = if (firebaseLensFacing == "front") {
@@ -728,13 +727,13 @@ fun CameraScreen(
                 option.firebaseValue in supportedVideoQualitiesForLens &&
                 option.firebaseValue != appliedVideoQuality
             ) {
-                Log.i("VideoQuality", "Applying local selection ${option.firebaseValue}")
+                AppLogger.info(LogCategory.CAMERA, "VideoQuality", "Applying local selection ${option.firebaseValue}")
                 pendingLocalVideoQuality = option.firebaseValue
                 appliedVideoQuality = option.firebaseValue
                 scope.launch {
                     runCatching { repository.updateVideoQuality(roomCode, option.firebaseValue) }
                         .onFailure { error ->
-                            Log.w("VideoQuality", "Local video quality update failed", error)
+                            AppLogger.warning(LogCategory.CAMERA, "VideoQuality", "Local video quality update failed", error)
                             if (pendingLocalVideoQuality == option.firebaseValue) {
                                 pendingLocalVideoQuality = null
                             }
@@ -827,7 +826,7 @@ fun CameraScreen(
                             }
                         }
                         .onFailure {
-                            Log.w("CAMERA_FOCUS", "Tap to focus result failed", it)
+                            AppLogger.warning(LogCategory.CAMERA, "CAMERA_FOCUS", "Tap to focus result failed", it)
                             if (showFocusUi) {
                                 focusSucceeded = false
                             }
@@ -836,7 +835,7 @@ fun CameraScreen(
                 ContextCompat.getMainExecutor(context)
             )
         }.onFailure {
-            Log.w("CAMERA_FOCUS", "Tap to focus request failed", it)
+            AppLogger.warning(LogCategory.CAMERA, "CAMERA_FOCUS", "Tap to focus request failed", it)
             if (showFocusUi) {
                 focusSucceeded = false
             }
@@ -995,7 +994,7 @@ fun CameraScreen(
                             candidate = candidate
                         )
                     }
-                        .onFailure { Log.w("WEBRTC_LOG", "Camera ignored late ICE candidate", it) }
+                        .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Camera ignored late ICE candidate", it) }
                 } else {
                     pendingCandidates.add(candidate)
                 }
@@ -1025,7 +1024,7 @@ fun CameraScreen(
                 lastAcknowledgedCommandSequence = sequence
                 scope.launch(Dispatchers.IO) {
                     runCatching { repository.acknowledgeReliableCommand(roomCode, id, sequence) }
-                        .onFailure { Log.w("REMOTE_COMMAND", "Unable to acknowledge command $id", it) }
+                        .onFailure { AppLogger.warning(LogCategory.CAMERA, "REMOTE_COMMAND", "Unable to acknowledge command $id", it) }
                 }
             }
             onDispose { registration.remove() }
@@ -1140,7 +1139,7 @@ fun CameraScreen(
         runCatching {
             currentCamera.cameraControl.startFocusAndMetering(action)
         }.onFailure {
-            Log.w("PHOTO_FACE", "Face metering request failed", it)
+            AppLogger.warning(LogCategory.CAMERA, "PHOTO_FACE", "Face metering request failed", it)
         }
     }
 
@@ -1381,7 +1380,7 @@ fun CameraScreen(
                                     candidate = candidate
                                 )
                             }
-                                .onFailure { Log.w("WEBRTC_LOG", "Camera ignored buffered ICE candidate", it) }
+                                .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Camera ignored buffered ICE candidate", it) }
                         }
                         pendingCandidates.clear()
                     }
@@ -1495,13 +1494,13 @@ fun CameraScreen(
                         ExifInterface.TAG_ORIENTATION,
                         ExifInterface.ORIENTATION_UNDEFINED
                     )
-                    Log.d(
+                    AppLogger.debug(LogCategory.CAMERA,
                         "AICameraAssistant",
                         "Saved photo EXIF orientation=$orientation targetRotation=${surfaceRotationLabel(expectedRotation)} uri=$uri"
                     )
                 }
             }.onFailure {
-                Log.w("AICameraAssistant", "Unable to verify saved photo EXIF orientation", it)
+                AppLogger.warning(LogCategory.CAMERA, "AICameraAssistant", "Unable to verify saved photo EXIF orientation", it)
             }
         }
     }
@@ -1523,7 +1522,7 @@ fun CameraScreen(
         forcedCaptureFlashMode: Int? = null
     ): Boolean {
         val currentCapture = imageCapture ?: run {
-            Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
+            AppLogger.error(LogCategory.CAMERA, "AICameraAssistant", "ImageCapture is not initialized yet")
             return false
         }
 
@@ -1562,19 +1561,20 @@ fun CameraScreen(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onCaptureStarted() {
+                    AppLogger.info(LogCategory.CAPTURE, "Capture started")
                     if (playShutterSound) {
                         playShutterClick()
                     }
                 }
 
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Log.d("AICameraAssistant", "Photo saved: ${output.savedUri}")
+                    AppLogger.info(LogCategory.CAPTURE, "Capture successful")
                     verifySavedPhotoOrientation(output.savedUri, captureRotation)
                     onCaptureFinished()
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    Log.e("AICameraAssistant", "Photo capture failed", exception)
+                    AppLogger.error(LogCategory.CAPTURE, "Capture failed", exception)
                     onCaptureFinished()
                 }
             }
@@ -1607,6 +1607,7 @@ fun CameraScreen(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureStarted() {
+                    AppLogger.info(LogCategory.CAPTURE, "Capture started")
                     if (playShutterSound) {
                         playShutterClick()
                     }
@@ -1616,7 +1617,7 @@ fun CameraScreen(
                         val buffer = image.planes.first().buffer
                         ByteArray(buffer.remaining()).also { buffer.get(it) }
                     }.onFailure {
-                        Log.e("AICameraAssistant", "Night Assist image read failed", it)
+                        AppLogger.error(LogCategory.CAMERA, "AICameraAssistant", "Night Assist image read failed", it)
                     }.getOrNull()
                     image.close()
                     if (continuation.isActive) {
@@ -1625,7 +1626,7 @@ fun CameraScreen(
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    Log.e("AICameraAssistant", "Night Assist capture failed", exception)
+                    AppLogger.error(LogCategory.CAMERA, "AICameraAssistant", "Night Assist capture failed", exception)
                     if (continuation.isActive) {
                         continuation.resume(null)
                     }
@@ -1728,7 +1729,7 @@ fun CameraScreen(
                 output.write(bytes)
             } ?: return@withContext false
         }.onFailure {
-            Log.e("AICameraAssistant", "Night Assist save failed", it)
+            AppLogger.error(LogCategory.CAMERA, "AICameraAssistant", "Night Assist save failed", it)
         }.isSuccess.also { saved ->
             if (saved) {
                 verifySavedPhotoOrientation(uri, displayRotation)
@@ -1738,7 +1739,7 @@ fun CameraScreen(
 
     suspend fun captureNightAssistPhoto(motionDetected: Boolean): Boolean {
         val currentCapture = imageCapture ?: run {
-            Log.e("AICameraAssistant", "ImageCapture is not initialized yet")
+            AppLogger.error(LogCategory.CAMERA, "AICameraAssistant", "ImageCapture is not initialized yet")
             return false
         }
         val currentCamera = camera
@@ -1760,7 +1761,7 @@ fun CameraScreen(
                         val future = currentCamera.cameraControl.setExposureCompensationIndex(boostedExposure)
                         withContext(Dispatchers.IO) { future.get() }
                     }.onFailure {
-                        Log.w("CAMERA_EXPOSURE", "Night Assist exposure boost failed", it)
+                        AppLogger.warning(LogCategory.CAMERA, "CAMERA_EXPOSURE", "Night Assist exposure boost failed", it)
                     }
                 }
             }
@@ -1862,8 +1863,8 @@ fun CameraScreen(
     }
 
     suspend fun handleCaptureRequest(requestId: Long, requestType: String) {
-        Log.d("AICameraAssistant", "CAPTURE_REQUEST")
-        Log.d("AICameraAssistant", "Handling capture request type=$requestType id=$requestId")
+        AppLogger.debug(LogCategory.CAMERA, "AICameraAssistant", "CAPTURE_REQUEST")
+        AppLogger.debug(LogCategory.CAMERA, "AICameraAssistant", "Handling capture request type=$requestType id=$requestId")
 
         if (requestType.startsWith("video")) {
             val handled = handleVideoRequest(requestType) {
@@ -1904,7 +1905,7 @@ fun CameraScreen(
                 )
             } else {
                 Toast.makeText(context, "Boomerang failed", Toast.LENGTH_SHORT).show()
-                Log.w("AICameraAssistant", "Boomerang request failed")
+                AppLogger.warning(LogCategory.CAMERA, "AICameraAssistant", "Boomerang request failed")
             }
             return
         }
@@ -1933,7 +1934,7 @@ fun CameraScreen(
             val motionDetected = motionScore >= 9.0
             val previousBrightness = activity?.window?.attributes?.screenBrightness
             selfieLightVisible = true
-            Log.d(
+            AppLogger.debug(LogCategory.CAMERA,
                 "NIGHT_FALLBACK",
                 "Front Night fallback motionScore=$motionScore motionDetected=$motionDetected"
             )
@@ -1965,6 +1966,7 @@ fun CameraScreen(
         if (useLedTorchFlash) {
             flashAlpha = 0.85f
             runCatching { camera?.cameraControl?.enableTorch(true) }
+            AppLogger.info(LogCategory.CAMERA, "Torch enabled")
             delay(400)
             playShutterClick()
         } else if (useFrontScreenFlash) {
@@ -2002,6 +2004,7 @@ fun CameraScreen(
             onCaptureFinished = {
                 if (useLedTorchFlash) {
                     runCatching { camera?.cameraControl?.enableTorch(false) }
+                    AppLogger.info(LogCategory.CAMERA, "Torch disabled")
                     flashAlpha = 0f
                 }
             }
@@ -2060,7 +2063,7 @@ fun CameraScreen(
         val provider = runCatching {
             withContext(Dispatchers.IO) { ProcessCameraProvider.getInstance(context).get() }
         }.onFailure {
-            Log.w("NIGHT_EXTENSION", "Camera provider unavailable for Night capability query", it)
+            AppLogger.warning(LogCategory.CAMERA, "NIGHT_EXTENSION", "Camera provider unavailable for Night capability query", it)
         }.getOrNull() ?: return@LaunchedEffect
 
         val manager = runCatching {
@@ -2068,7 +2071,7 @@ fun CameraScreen(
                 ExtensionsManager.getInstanceAsync(context, provider).get()
             }
         }.onFailure {
-            Log.w("NIGHT_EXTENSION", "CameraX Extensions initialization failed", it)
+            AppLogger.warning(LogCategory.CAMERA, "NIGHT_EXTENSION", "CameraX Extensions initialization failed", it)
         }.getOrNull() ?: return@LaunchedEffect
 
         extensionsManager = manager
@@ -2080,7 +2083,7 @@ fun CameraScreen(
             runCatching {
                 manager.isExtensionAvailable(selector, ExtensionMode.NIGHT)
             }.onFailure {
-                Log.w("NIGHT_EXTENSION", "Night capability query failed for lens=$facing", it)
+                AppLogger.warning(LogCategory.CAMERA, "NIGHT_EXTENSION", "Night capability query failed for lens=$facing", it)
             }.getOrDefault(false)
         }
         hdrExtensionSupportByLens = listOf(
@@ -2091,11 +2094,11 @@ fun CameraScreen(
             runCatching {
                 manager.isExtensionAvailable(selector, ExtensionMode.HDR)
             }.onFailure {
-                Log.w("HDR_EXTENSION", "HDR capability query failed for lens=$facing", it)
+                AppLogger.warning(LogCategory.CAMERA, "HDR_EXTENSION", "HDR capability query failed for lens=$facing", it)
             }.getOrDefault(false)
         }
-        Log.i("NIGHT_EXTENSION", "Night support by lens=$nightExtensionSupportByLens")
-        Log.i("HDR_EXTENSION", "HDR support by lens=$hdrExtensionSupportByLens")
+        AppLogger.info(LogCategory.CAMERA, "NIGHT_EXTENSION", "Night support by lens=$nightExtensionSupportByLens")
+        AppLogger.info(LogCategory.CAMERA, "HDR_EXTENSION", "HDR support by lens=$hdrExtensionSupportByLens")
     }
 
     LaunchedEffect(
@@ -2181,7 +2184,7 @@ fun CameraScreen(
             runCatching {
                 nightManager.getExtensionEnabledCameraSelector(cameraSelector, requestedExtensionMode)
             }.onFailure {
-                Log.w("CAMERA_EXTENSION", "Unable to create extension selector mode=$requestedExtensionMode", it)
+                AppLogger.warning(LogCategory.CAMERA, "CAMERA_EXTENSION", "Unable to create extension selector mode=$requestedExtensionMode", it)
             }.getOrNull()
         } else {
             null
@@ -2200,6 +2203,10 @@ fun CameraScreen(
 
             camera = firstCamera
             imageCapture = newImageCapture
+            AppLogger.info(
+                LogCategory.CAMERA,
+                if (lensFacing == CameraSelector.LENS_FACING_FRONT) "Front camera bound" else "Rear camera bound"
+            )
             publishExposureState(firstCamera)
 
             val supportedDynamicRanges = Recorder.getVideoCapabilities(firstCamera.cameraInfo)
@@ -2218,7 +2225,7 @@ fun CameraScreen(
                 shouldRestartRecordingAfterBind &&
                 resolvedVideoQuality.firebaseValue != appliedVideoQuality
             ) {
-                Log.i(
+                AppLogger.info(LogCategory.CAMERA,
                     "VideoQuality",
                     "Lens switch requires ${appliedVideoQuality} -> " +
                         resolvedVideoQuality.firebaseValue
@@ -2229,7 +2236,7 @@ fun CameraScreen(
                 }
                 return@LaunchedEffect
             }
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "VideoQuality",
                 "Binding lens=$lensFacing requested=$appliedVideoQuality " +
                     "resolved=${resolvedVideoQuality.firebaseValue} supported=$supportedVideoQualities"
@@ -2320,11 +2327,11 @@ fun CameraScreen(
             resolvedWidth = displayedWidth
             resolvedHeight = displayedHeight
 
-            Log.d(
+            AppLogger.debug(LogCategory.CAMERA,
                 "CAMERA_SIZE",
                 "CameraX raw=${rawSize.width}x${rawSize.height}, rotation=$rotationDegrees, displayed=${resolvedWidth}x${resolvedHeight}"
             )
-            Log.w(
+            AppLogger.warning(LogCategory.CAMERA,
                 "PREVIEW_MATCH",
                 "camera_publish room=$roomCode raw=${rawSize.width}x${rawSize.height} rotation=$rotationDegrees published=${resolvedWidth}x${resolvedHeight}"
             )
@@ -2448,7 +2455,7 @@ fun CameraScreen(
                                                     currentSceneResultHandler(result)
                                                 }
                                             }.onFailure {
-                                                Log.w("SCENE_DETECTION", "Video scene detection failed", it)
+                                                AppLogger.warning(LogCategory.CAMERA, "SCENE_DETECTION", "Video scene detection failed", it)
                                             }
                                         }
                                         streamAnalyzer.analyze(imageProxy)
@@ -2512,7 +2519,7 @@ fun CameraScreen(
                     cameraProvider.bindToLifecycle(lifecycleOwner, selector, sessionConfig)
                 } catch (extensionError: Exception) {
                     if (!bindWithNightExtension) throw extensionError
-                    Log.w(
+                    AppLogger.warning(LogCategory.CAMERA,
                         "CAMERA_EXTENSION",
                         "OEM extension bind failed mode=$requestedExtensionMode; retrying standard pipeline",
                         extensionError
@@ -2536,7 +2543,7 @@ fun CameraScreen(
                     cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
                 }
             } catch (bindWithAnalysisError: Exception) {
-                Log.w(
+                AppLogger.warning(LogCategory.CAMERA,
                     "FACE_DETECTION",
                     "Camera bind with face analysis failed; retrying without analysis",
                     bindWithAnalysisError
@@ -2565,7 +2572,7 @@ fun CameraScreen(
                             videoStreamAnalysis != null &&
                             finalUseCases.remove(videoStreamAnalysis)
                     if (removedStreamingPreview) {
-                        Log.w(
+                        AppLogger.warning(LogCategory.CAMERA,
                             "CAMERA_BIND",
                             "Camera bind with streaming preview and video failed; retrying without streaming preview",
                             bindWithStreamingVideoError
@@ -2575,7 +2582,7 @@ fun CameraScreen(
                         WebRtcSessionManager.stopLocalCamera()
                     }
                     if (removedVideoStreamAnalysis) {
-                        Log.w(
+                        AppLogger.warning(LogCategory.CAMERA,
                             "CAMERA_BIND",
                             "Camera bind with video analysis stream failed; retrying without controller stream",
                             bindWithStreamingVideoError
@@ -2590,7 +2597,7 @@ fun CameraScreen(
                         }
                     } catch (bindWithVideoError: Exception) {
                         if (enableVideoHdrForBind && finalUseCases.contains(activeVideoCapture)) {
-                            Log.w(
+                            AppLogger.warning(LogCategory.CAMERA,
                                 "CAMERA_BIND",
                                 "Camera bind with HDR video failed; retrying SDR video",
                                 bindWithVideoError
@@ -2606,7 +2613,7 @@ fun CameraScreen(
                                     cameraAnalysisActive = finalUseCases.contains(faceAnalysis)
                                 }
                             } catch (bindWithSdrVideoError: Exception) {
-                                Log.w(
+                                AppLogger.warning(LogCategory.CAMERA,
                                     "CAMERA_BIND",
                                     "Camera bind with SDR video capture failed; retrying without video",
                                     bindWithSdrVideoError
@@ -2618,7 +2625,7 @@ fun CameraScreen(
                                 }
                             }
                         } else {
-                            Log.w(
+                            AppLogger.warning(LogCategory.CAMERA,
                                 "CAMERA_BIND",
                                 "Camera bind with video capture failed; retrying without video",
                                 bindWithVideoError
@@ -2638,11 +2645,11 @@ fun CameraScreen(
                 && requestedExtensionMode == ExtensionMode.NIGHT
             hdrExtensionActive = bindWithNightExtension
                 && requestedExtensionMode == ExtensionMode.HDR
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "NIGHT_EXTENSION",
                 "Night extension active=$nightExtensionActive lens=$lensFacing"
             )
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "HDR_EXTENSION",
                 "HDR extension active=$hdrExtensionActive lens=$lensFacing " +
                     "flash=$firebaseFlashMode portrait=$isPortraitMode night=$firebaseNightModeEnabled"
@@ -2653,7 +2660,7 @@ fun CameraScreen(
             boundAnalysisUseCases = finalUseCases.filterIsInstance<ImageAnalysis>()
             val selectedBindFailed = firebaseCameraMode == "video" && videoCapture == null
             val boundVideoQualities = if (selectedBindFailed) {
-                Log.w(
+                AppLogger.warning(LogCategory.CAMERA,
                     "VideoQuality",
                     "Rejecting ${resolvedVideoQuality.firebaseValue}: VideoCapture failed full use-case bind"
                 )
@@ -2675,7 +2682,7 @@ fun CameraScreen(
                 resolveVideoQuality(resolvedVideoQuality.firebaseValue, boundVideoQualities)
                     ?.takeIf { it.firebaseValue != appliedVideoQuality }
                     ?.let { fallback ->
-                        Log.w(
+                        AppLogger.warning(LogCategory.CAMERA,
                             "VideoQuality",
                             "Falling back from ${resolvedVideoQuality.firebaseValue} " +
                                 "to ${fallback.firebaseValue}"
@@ -2724,7 +2731,7 @@ fun CameraScreen(
             if (shouldRestartRecordingAfterBind) {
                 updateVideoRecordingState(VideoRecordingState.Idle)
             }
-            Log.e("CAMERA_BIND", "Camera bind failed", e)
+            AppLogger.error(LogCategory.CAMERA, "CAMERA_BIND", "Camera bind failed", e)
         }
     }
 
@@ -2738,9 +2745,10 @@ fun CameraScreen(
         zoomFuture.addListener(
             {
                 runCatching { zoomFuture.get() }
+                    .onSuccess { AppLogger.info(LogCategory.CAMERA, "Zoom changed") }
                     .onFailure { error ->
                         if (camera === currentCamera) {
-                            Log.w(
+                            AppLogger.warning(LogCategory.CAMERA,
                                 "CAMERA_ZOOM",
                                 "Zoom apply failed mode=$firebaseCameraMode lens=$lensFacing " +
                                     "requested=$firebaseZoomLevel clamped=$clampedZoom",
@@ -2848,7 +2856,7 @@ fun CameraScreen(
                         )
                     )
                 }.onFailure {
-                    Log.w("AICameraAssistant", "Room write failed during night auto adjustment", it)
+                    AppLogger.warning(LogCategory.CAMERA, "AICameraAssistant", "Room write failed during night auto adjustment", it)
                 }
             }
         }
@@ -2872,6 +2880,8 @@ fun CameraScreen(
         if (firebaseFocusRequestId <= 0L || firebaseFocusRequestId == lastAppliedRemoteFocusRequestId) {
             return@LaunchedEffect
         }
+        AppLogger.info(LogCategory.CAMERA, "Camera provider ready")
+        AppLogger.info(LogCategory.CAMERA, "Camera binding started")
         val focusX = firebaseFocusPointX ?: return@LaunchedEffect
         val focusY = firebaseFocusPointY ?: return@LaunchedEffect
         lastAppliedRemoteFocusRequestId = firebaseFocusRequestId
@@ -2903,7 +2913,7 @@ fun CameraScreen(
                     val pose = try {
                         gesturePoseDetector.process(InputImage.fromBitmap(bitmap, 0)).await()
                     } catch (error: Throwable) {
-                        Log.w("GESTURE_CAPTURE", "Palm analysis failed", error)
+                        AppLogger.warning(LogCategory.CAMERA, "GESTURE_CAPTURE", "Palm analysis failed", error)
                         null
                     } finally {
                         if (!bitmap.isRecycled) bitmap.recycle()
@@ -2949,6 +2959,7 @@ fun CameraScreen(
                     )
                 }
             }
+            AppLogger.info(LogCategory.CAMERA, "Camera released")
         }
     }
 

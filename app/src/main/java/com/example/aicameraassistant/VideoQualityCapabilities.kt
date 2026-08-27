@@ -5,7 +5,6 @@ import android.hardware.camera2.CameraCharacteristics
 import android.media.CamcorderProfile
 import android.media.MediaCodecList
 import android.os.Build
-import android.util.Log
 import android.util.Range
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -65,7 +64,7 @@ internal object VideoQualityCapabilities {
                     emptyList()
                 }
             }.getOrDefault(emptyList())
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "VideoQualityCaps",
                 "cameraId=$cameraId physicalCaps 8K=${eightK in privateSizes} " +
                     "max8K=${eightK in maximumPrivateSizes} " +
@@ -79,7 +78,7 @@ internal object VideoQualityCapabilities {
         val quality = option.cameraXQuality() ?: run {
             val adapterSupported = EightKCapabilityAdapter.isConfigurable(cameraInfo)
             val encoderSupported = hasEncoderFor(option.expectedResolution(), option.frameRate)
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "VideoQualityCaps",
                 "${option.firebaseValue} adapter=$adapterSupported encoder=$encoderSupported"
             )
@@ -87,22 +86,22 @@ internal object VideoQualityCapabilities {
         }
         val capabilities = Recorder.getVideoCapabilities(cameraInfo)
         if (!capabilities.isQualitySupported(quality, DynamicRange.SDR)) {
-            Log.i("VideoQualityCaps", "${option.firebaseValue} CameraX quality unsupported")
+            AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "${option.firebaseValue} CameraX quality unsupported")
             return false
         }
 
         val resolution = QualitySelector.getResolution(cameraInfo, quality) ?: run {
-            Log.i("VideoQualityCaps", "${option.firebaseValue} has no CameraX resolution")
+            AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "${option.firebaseValue} has no CameraX resolution")
             return false
         }
         if (resolution != option.expectedResolution()) {
-            Log.i("VideoQualityCaps", "${option.firebaseValue} resolved unexpected size=$resolution")
+            AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "${option.firebaseValue} resolved unexpected size=$resolution")
             return false
         }
         val recordingProfileSupported = hasExactRecordingProfile(cameraInfo, option)
         val cameraXSessionSupported = supportsCameraXSessionFrameRate(cameraInfo, option)
         if (!recordingProfileSupported && !cameraXSessionSupported) {
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "VideoQualityCaps",
                 "${option.firebaseValue} rejected profile=false sessionFps=false global=${cameraInfo.supportedFrameRateRanges}"
             )
@@ -116,11 +115,11 @@ internal object VideoQualityCapabilities {
         }.getOrNull() ?: return false
         val privateSizes = streamMap.getOutputSizes(ImageFormat.PRIVATE)?.toSet().orEmpty()
         if (resolution !in privateSizes) {
-            Log.i("VideoQualityCaps", "${option.firebaseValue} PRIVATE size missing")
+            AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "${option.firebaseValue} PRIVATE size missing")
             return false
         }
         val encoderSupported = hasEncoderFor(resolution, option.frameRate)
-        Log.i(
+        AppLogger.info(LogCategory.CAMERA,
             "VideoQualityCaps",
             "${option.firebaseValue} accepted=$encoderSupported profile=$recordingProfileSupported sessionFps=$cameraXSessionSupported"
         )
@@ -140,12 +139,12 @@ internal object VideoQualityCapabilities {
             .setFrameRateRange(Range(option.frameRate, option.frameRate))
             .build()
         val ranges = cameraInfo.getSupportedFrameRateRanges(sessionConfig)
-        Log.i("VideoQualityCaps", "${option.firebaseValue} CameraX session ranges=$ranges")
+        AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "${option.firebaseValue} CameraX session ranges=$ranges")
         ranges.any { range ->
             range.lower <= option.frameRate && option.frameRate <= range.upper
         }
     }.onFailure {
-        Log.w("VideoQuality", "Unable to query CameraX session FPS for ${option.firebaseValue}", it)
+        AppLogger.warning(LogCategory.CAMERA, "VideoQuality", "Unable to query CameraX session FPS for ${option.firebaseValue}", it)
     }.getOrDefault(false)
 
     fun eightKEncodingBitRate(cameraInfo: CameraInfo): Int? =
@@ -170,7 +169,7 @@ internal object VideoQualityCapabilities {
         val profiles = runCatching { CamcorderProfile.getAll(cameraId, profileQuality) }
             .getOrNull() ?: return false
         if (option == VideoQualityOption.Uhd60 || option == VideoQualityOption.Uhd8K30) {
-            Log.i(
+            AppLogger.info(LogCategory.CAMERA,
                 "VideoQualityCaps",
                 "${option.firebaseValue} OEM profiles=" + profiles.videoProfiles.joinToString { profile ->
                     "${profile.width}x${profile.height}@${profile.frameRate}"
@@ -197,7 +196,7 @@ internal object VideoQualityCapabilities {
                 }.getOrDefault(false)
             }
     }.onFailure {
-        Log.w("VideoQuality", "Unable to verify video encoder capability", it)
+        AppLogger.warning(LogCategory.CAMERA, "VideoQuality", "Unable to verify video encoder capability", it)
     }.getOrDefault(false)
 
 }
@@ -206,7 +205,7 @@ internal object VideoQualityCapabilities {
 private object EightKCapabilityAdapter {
     fun isConfigurable(cameraInfo: CameraInfo): Boolean {
         val profiles = profile(cameraInfo) ?: return false
-        Log.i(
+        AppLogger.info(LogCategory.CAMERA,
             "VideoQualityCaps",
             "EIGHT_K_30 OEM profiles=" + profiles.videoProfiles.joinToString { item ->
                 "${item.width}x${item.height}@${item.frameRate}"
@@ -235,7 +234,7 @@ private object EightKCapabilityAdapter {
             streamMap.getOutputSizes(ImageFormat.PRIVATE).orEmpty().toList() +
                 maximumResolutionMap?.getOutputSizes(ImageFormat.PRIVATE).orEmpty().toList()
         val hasPrivate8K = Size(7680, 4320) in availablePrivateSizes
-        Log.i("VideoQualityCaps", "EIGHT_K_30 private8K=$hasPrivate8K")
+        AppLogger.info(LogCategory.CAMERA, "VideoQualityCaps", "EIGHT_K_30 private8K=$hasPrivate8K")
         if (!hasPrivate8K) return false
 
         return canConfigureTrue8KWithCurrentRecorder()

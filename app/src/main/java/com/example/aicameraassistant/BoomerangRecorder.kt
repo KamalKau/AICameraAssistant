@@ -9,7 +9,6 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import androidx.camera.view.PreviewView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,7 +37,7 @@ class BoomerangRecorder(
                 saveVideoToGallery(outputFile)
             }
         }.onFailure {
-            Log.e("AICameraAssistant", "Boomerang capture failed", it)
+            AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "Boomerang capture failed", it)
         }.also {
             frames.forEach { frame -> frame.recycle() }
             outputFile.delete()

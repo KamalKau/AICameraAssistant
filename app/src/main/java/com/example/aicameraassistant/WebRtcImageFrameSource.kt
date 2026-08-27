@@ -1,7 +1,6 @@
 package com.example.aicameraassistant
 
 import android.content.Context
-import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import org.webrtc.VideoFrame
@@ -67,7 +66,7 @@ class WebRtcImageFrameSource(
                 source.capturerObserver.onFrameCaptured(frame)
                 true
             } catch (t: Throwable) {
-                Log.e("WEBRTC_LOG", "Failed to push image frame", t)
+                AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to push image frame", t)
                 false
             } finally {
                 frame.release()

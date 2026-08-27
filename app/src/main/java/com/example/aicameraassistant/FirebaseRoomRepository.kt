@@ -1,6 +1,5 @@
 package com.example.aicameraassistant
 
-import android.util.Log
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -14,26 +13,27 @@ import org.webrtc.IceCandidate
 import java.security.MessageDigest
 import java.util.UUID
 
-class FirebaseRoomRepository {
+class FirebaseRoomRepository : RoomRepository {
     private val db = FirebaseFirestore.getInstance()
     private val localInstanceId = UUID.randomUUID().toString()
 
-    suspend fun createRoom(roomCode: String) {
-        Log.d("SESSION_TRACE", "createRoom start room=$roomCode")
+    override suspend fun createRoom(roomCode: String) {
+        AppLogger.debug(LogCategory.FIREBASE, "SESSION_TRACE", "createRoom start room=$roomCode")
         val docRef = db.collection("rooms").document(roomCode)
         clearIceCandidates(roomCode)
         clearCollection(docRef.collection("commands"))
         docRef.set(defaultRoomData(roomCode)).await()
-        Log.d("SESSION_TRACE", "createRoom committed room=$roomCode")
+        AppLogger.info(LogCategory.FIREBASE, "Room created")
+        AppLogger.info(LogCategory.SESSION, "SESSION_STARTED")
     }
 
-    suspend fun sendConnectionRequest(roomCode: String): Boolean {
-        Log.d("SESSION_TRACE", "connectionRequest start room=$roomCode")
+    override suspend fun sendConnectionRequest(roomCode: String): Boolean {
+        AppLogger.debug(LogCategory.FIREBASE, "SESSION_TRACE", "connectionRequest start room=$roomCode")
         val docRef = db.collection("rooms").document(roomCode)
         val snapshot = withTimeout(ROOM_LOOKUP_TIMEOUT_MS) { docRef.get().await() }
 
         if (!snapshot.exists()) {
-            Log.w("SESSION_TRACE", "connectionRequest missing room=$roomCode")
+            AppLogger.warning(LogCategory.FIREBASE, "SESSION_TRACE", "connectionRequest missing room=$roomCode")
             return false
         }
         val lastActivityAt = snapshot.getLong("lastActivityAt")
@@ -63,12 +63,12 @@ class FirebaseRoomRepository {
             )
         )
 
-        Log.d("SESSION_TRACE", "connectionRequest committed room=$roomCode")
+        AppLogger.info(LogCategory.FIREBASE, "Connection request sent")
 
         return true
     }
 
-    suspend fun updateApproval(roomCode: String, approved: Boolean) {
+    override suspend fun updateApproval(roomCode: String, approved: Boolean) {
         updateRoomSafely(
             roomCode,
             mapOf(
@@ -77,15 +77,18 @@ class FirebaseRoomRepository {
                 "status" to if (approved) "connected" else "denied"
             )
         )
-        Log.d("SESSION_TRACE", "approval committed room=$roomCode approved=$approved")
+        AppLogger.info(LogCategory.FIREBASE, if (approved) "Connection approved" else "Connection denied")
+        AppLogger.info(LogCategory.SESSION, if (approved) "SESSION_CONNECTED" else "SESSION_DISCONNECTED")
     }
 
-    suspend fun updateLensFacing(roomCode: String, lensFacing: String) {
+    override suspend fun updateLensFacing(roomCode: String, lensFacing: String) {
         updateRoomSafely(roomCode, "lensFacing", lensFacing)
+        AppLogger.info(LogCategory.FIREBASE, "Lens-facing command updated")
     }
 
-    suspend fun updateZoomLevel(roomCode: String, zoomLevel: Double) {
+    override suspend fun updateZoomLevel(roomCode: String, zoomLevel: Double) {
         updateRoomSafely(roomCode, "zoomLevel", zoomLevel)
+        AppLogger.info(LogCategory.FIREBASE, "Zoom command updated")
     }
 
     suspend fun updateZoomRange(roomCode: String, minZoom: Double, maxZoom: Double) {
@@ -98,8 +101,9 @@ class FirebaseRoomRepository {
         )
     }
 
-    suspend fun updateFlashMode(roomCode: String, flashMode: String) {
+    override suspend fun updateFlashMode(roomCode: String, flashMode: String) {
         updateRoomSafely(roomCode, "flashMode", flashMode)
+        AppLogger.info(LogCategory.FIREBASE, "Flash command updated")
     }
 
     suspend fun updateCameraMode(roomCode: String, mode: String) {
@@ -396,7 +400,7 @@ class FirebaseRoomRepository {
         updateRoomSafely(roomCode, "exposureIndex", exposureIndex.toLong())
     }
 
-    suspend fun resetCaptureRequest(roomCode: String) {
+    override suspend fun resetCaptureRequest(roomCode: String) {
         updateRoomSafely(
             roomCode,
             mapOf(
@@ -404,12 +408,13 @@ class FirebaseRoomRepository {
                 "captureRequestType" to "photo"
             )
         )
+        AppLogger.info(LogCategory.FIREBASE, "Capture request reset")
     }
 
-    suspend fun sendCaptureRequest(
+    override suspend fun sendCaptureRequest(
         roomCode: String,
         requestId: Long,
-        requestType: String = "photo"
+        requestType: String
     ) {
         sendReliableCommand(
             roomCode = roomCode,
@@ -428,6 +433,7 @@ class FirebaseRoomRepository {
         rtcSessionId: String,
         signalingGeneration: Long
     ) {
+        AppLogger.info(LogCategory.FIREBASE, "Capture request received")
         updateRoomSafely(
             roomCode,
             mapOf(
@@ -440,7 +446,7 @@ class FirebaseRoomRepository {
                 "lastActivityAt" to System.currentTimeMillis()
             )
         )
-        Log.d("SESSION_TRACE", "offer committed room=$roomCode rtc=$rtcSessionId")
+        AppLogger.info(LogCategory.FIREBASE, "Offer saved")
     }
 
     suspend fun saveAnswer(
@@ -459,7 +465,7 @@ class FirebaseRoomRepository {
                 "lastActivityAt" to System.currentTimeMillis()
             )
         )
-        Log.d("SESSION_TRACE", "answer committed room=$roomCode rtc=$rtcSessionId")
+        AppLogger.info(LogCategory.FIREBASE, "Answer saved")
     }
 
     suspend fun endSession(roomCode: String, expectedSessionVersion: Long? = null) {
@@ -700,7 +706,10 @@ class FirebaseRoomRepository {
                 }.await()
                 return commandId
             } catch (throwable: Throwable) {
-                if (attempt == 2) throw throwable
+                if (attempt == 2) {
+                    AppLogger.error(LogCategory.FIREBASE, "Firestore room update failed", throwable)
+                    throw throwable
+                }
                 delay(250L shl attempt)
             }
         }
@@ -1260,7 +1269,11 @@ class FirebaseRoomRepository {
         return db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesController")
-            .addSnapshotListener { snapshots, _ ->
+            .addSnapshotListener { snapshots, error ->
+                if (error != null) {
+                    AppLogger.error(LogCategory.FIREBASE, "Controller ICE listener failed", error)
+                    return@addSnapshotListener
+                }
                 snapshots?.documentChanges?.forEach { change ->
                     if (change.type == DocumentChange.Type.ADDED) {
                         val data = change.document
@@ -1270,6 +1283,7 @@ class FirebaseRoomRepository {
                         val candidateSessionId = data.getString("rtcSessionId")
                         if (candidateSessionId != rtcSessionId) return@forEach
 
+                        AppLogger.info(LogCategory.FIREBASE, "Controller ICE candidate received")
                         onCandidate(IceCandidate(sdpMid, sdpMLineIndex, candidate))
                     }
                 }
@@ -1285,7 +1299,11 @@ class FirebaseRoomRepository {
         return db.collection("rooms")
             .document(roomCode)
             .collection("iceCandidatesCamera")
-            .addSnapshotListener { snapshots, _ ->
+            .addSnapshotListener { snapshots, error ->
+                if (error != null) {
+                    AppLogger.error(LogCategory.FIREBASE, "Camera ICE listener failed", error)
+                    return@addSnapshotListener
+                }
                 snapshots?.documentChanges?.forEach { change ->
                     if (change.type == DocumentChange.Type.ADDED) {
                         val data = change.document
@@ -1295,6 +1313,7 @@ class FirebaseRoomRepository {
                         val candidateSessionId = data.getString("rtcSessionId")
                         if (candidateSessionId != rtcSessionId) return@forEach
 
+                        AppLogger.info(LogCategory.FIREBASE, "Camera ICE candidate received")
                         onCandidate(IceCandidate(sdpMid, sdpMLineIndex, candidate))
                     }
                 }
@@ -1353,7 +1372,7 @@ class FirebaseRoomRepository {
                 return
             } catch (throwable: Throwable) {
                 if (FirestoreRoomUpdateFailureClassifier.isMissingRoomUpdate(throwable)) {
-                    Log.w("FirebaseRoomRepository", "Ignoring update for missing room $roomCode")
+                    AppLogger.warning(LogCategory.FIREBASE, "Ignoring update for missing room")
                     return
                 }
                 if (attempt == 2) throw throwable

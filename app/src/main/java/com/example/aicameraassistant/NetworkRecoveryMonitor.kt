@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.util.Log
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -93,8 +92,8 @@ object NetworkRecoveryMonitor {
             lastSignature = signature
             _networkAvailable.value = validated
             if (changed) _events.tryEmit(System.currentTimeMillis())
-            if (BuildConfig.DEBUG && Log.isLoggable("NETWORK_RECOVERY", Log.DEBUG)) {
-                Log.d("NETWORK_RECOVERY", "$reason validated=$validated transport=$transports")
+            if (BuildConfig.DEBUG) {
+                AppLogger.debug(LogCategory.NETWORK, "NETWORK_RECOVERY", "$reason validated=$validated transport=$transports")
             }
         }
     }

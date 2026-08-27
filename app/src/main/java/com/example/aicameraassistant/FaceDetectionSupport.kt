@@ -1,7 +1,6 @@
 package com.example.aicameraassistant
 
 import android.graphics.Bitmap
-import android.util.Log
 import androidx.compose.ui.geometry.Rect
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetector
@@ -365,7 +364,7 @@ class PreviewBitmapFaceDetector(
                     )
                 }
         } catch (t: Throwable) {
-            Log.w("FACE_DETECTION", "Preview bitmap face detection failed", t)
+            AppLogger.warning(LogCategory.CAMERA, "FACE_DETECTION", "Preview bitmap face detection failed", t)
             emptyList()
         } finally {
             if (!bitmap.isRecycled) {

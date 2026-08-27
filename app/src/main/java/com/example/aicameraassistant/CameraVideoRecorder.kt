@@ -9,7 +9,6 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.provider.MediaStore
-import android.util.Log
 import android.widget.Toast
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.PendingRecording
@@ -70,13 +69,13 @@ class CameraVideoRecorder(private val context: Context) {
         }
 
         if (mergeInProgress) {
-            Log.w("AICameraAssistant", "Video save is still in progress")
+            AppLogger.warning(LogCategory.CAPTURE, "AICameraAssistant", "Video save is still in progress")
             Toast.makeText(context, "Saving previous video...", Toast.LENGTH_SHORT).show()
             return false
         }
 
         val capture = videoCapture ?: run {
-            Log.e("AICameraAssistant", "VideoCapture is not initialized yet")
+            AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "VideoCapture is not initialized yet")
             Toast.makeText(context, "Video is not ready yet", Toast.LENGTH_SHORT).show()
             return false
         }
@@ -136,7 +135,7 @@ class CameraVideoRecorder(private val context: Context) {
                     pendingSegmentCount = (pendingSegmentCount - 1).coerceAtLeast(0)
                     if (event.hasError()) {
                         segment.failed = true
-                        Log.e("AICameraAssistant", "Video segment failed: ${event.error}")
+                        AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "Video segment failed: ${event.error}")
                         if (isCurrentRecording && !finalStopRequested) {
                             activeRecording = null
                             recordingState = VideoRecordingState.Idle
@@ -144,7 +143,7 @@ class CameraVideoRecorder(private val context: Context) {
                             Toast.makeText(context, "Couldn't record video. Please try again.", Toast.LENGTH_SHORT).show()
                         }
                     } else {
-                        Log.d("AICameraAssistant", "Video segment saved: ${event.outputResults.outputUri}")
+                        AppLogger.debug(LogCategory.CAPTURE, "Video segment saved")
                     }
 
                     if (isCurrentRecording) {
@@ -244,7 +243,7 @@ class CameraVideoRecorder(private val context: Context) {
                 file = File.createTempFile("segment_${order}_", ".mp4", segmentDir)
             )
         }.onFailure {
-            Log.e("AICameraAssistant", "Unable to create video segment file", it)
+            AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "Unable to create video segment file", it)
         }.getOrNull()
     }
 
@@ -299,14 +298,14 @@ class CameraVideoRecorder(private val context: Context) {
             )
             saveFileToGallery(outputFile)
         }.onFailure {
-            Log.e("AICameraAssistant", "Unable to merge video segments", it)
+            AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "Unable to merge video segments", it)
         }.also {
             outputFile.delete()
         }.getOrDefault(false)
 
         if (merged) return true
 
-        Log.w("AICameraAssistant", "Merged video save failed; saving segments as fallback")
+        AppLogger.warning(LogCategory.CAPTURE, "AICameraAssistant", "Merged video save failed; saving segments as fallback")
         return segmentsToMerge
             .map { saveFileToGallery(it.file) }
             .any { it }
@@ -322,7 +321,7 @@ class CameraVideoRecorder(private val context: Context) {
         try {
             readOutputRotationDegrees(inputFiles)?.let { rotationDegrees ->
                 muxer.setOrientationHint(rotationDegrees)
-                Log.d("AICameraAssistant", "Merged video rotation hint=$rotationDegrees")
+                AppLogger.debug(LogCategory.CAPTURE, "AICameraAssistant", "Merged video rotation hint=$rotationDegrees")
             }
             muxer.start()
             muxerStarted = true
@@ -375,7 +374,7 @@ class CameraVideoRecorder(private val context: Context) {
                     retriever.release()
                 }
             }.onFailure {
-                Log.w("AICameraAssistant", "Unable to read video rotation metadata", it)
+                AppLogger.warning(LogCategory.CAPTURE, "AICameraAssistant", "Unable to read video rotation metadata", it)
             }.getOrNull()
         }
 
@@ -479,7 +478,7 @@ class CameraVideoRecorder(private val context: Context) {
         outputStream.use { output ->
             file.inputStream().use { input -> input.copyTo(output) }
         }
-        Log.d(
+        AppLogger.debug(LogCategory.CAPTURE,
             "AICameraAssistant",
             "Saved video rotation=${rotationDegrees ?: "unknown"} uri=$uri"
         )

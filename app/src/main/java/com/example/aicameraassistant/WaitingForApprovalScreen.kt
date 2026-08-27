@@ -7,7 +7,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -385,7 +384,7 @@ fun WaitingForApprovalScreen(
     fun launchRoomWrite(operation: String, block: suspend () -> Unit) {
         scope.launch {
             runCatching { block() }
-                .onFailure { Log.w("AICameraAssistant", "Room write failed during $operation", it) }
+                .onFailure { AppLogger.warning(LogCategory.SESSION, "AICameraAssistant", "Room write failed during $operation", it) }
         }
     }
     val controllerToolRailUiState = buildCameraToolRailUiState(
@@ -611,7 +610,7 @@ fun WaitingForApprovalScreen(
                     instanceId = controllerInstanceId
                 )
             }.onFailure {
-                Log.w("SESSION_HEARTBEAT", "Controller heartbeat failed room=$roomCode")
+                AppLogger.warning(LogCategory.SESSION, "SESSION_HEARTBEAT", "Controller heartbeat failed room=$roomCode")
             }
             delay(15_000L)
         }
@@ -804,16 +803,16 @@ fun WaitingForApprovalScreen(
                     ) return@launch
                     val pc = WebRtcSessionManager.controllerPeerConnection
                     if (isRemoteDescriptionSet && pc != null) {
-                        Log.d("WEBRTC_LOG", "Controller applying camera candidate immediately")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller applying camera candidate immediately")
                         runCatching {
                             WebRtcSessionManager.addRemoteIceCandidate(
                                 cameraSide = false,
                                 candidate = candidate
                             )
                         }
-                            .onFailure { Log.w("WEBRTC_LOG", "Controller ignored late ICE candidate", it) }
+                            .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ignored late ICE candidate", it) }
                     } else {
-                        Log.d("WEBRTC_LOG", "Controller buffering camera candidate")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller buffering camera candidate")
                         pendingCandidates.add(candidate)
                     }
                 }
@@ -860,7 +859,7 @@ fun WaitingForApprovalScreen(
     }
 
     LaunchedEffect(roomCode, roomStatus, recoverySignal) {
-        Log.d(
+        AppLogger.debug(LogCategory.SESSION,
             "SESSION_TRACE",
             "offerEffect room=$roomCode status=$roomStatus connection=$connectionState " +
                 "created=$offerCreated rtc=$currentOfferSessionId ending=$isEndingSession"
@@ -935,7 +934,7 @@ fun WaitingForApprovalScreen(
                     repository.clearIceCandidatesForSession(roomCode, previousRtcSessionId)
                 }
             }.onFailure {
-                Log.w("WEBRTC_LOG", "Unable to clear ICE candidates before creating offer", it)
+                AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Unable to clear ICE candidates before creating offer", it)
             }
             // runCatching also catches CancellationException. Never let an outgoing screen
             // continue signaling after Compose has cancelled this session's effect.
@@ -968,7 +967,7 @@ fun WaitingForApprovalScreen(
                                 sessionGeneration
                             )
                         ) return@launch
-                        Log.d("WEBRTC_LOG", "Controller received remote track")
+                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller received remote track")
                         remoteTrack = track
                         previewContainerRef?.attachRemoteTrack(track) {
                             if (
@@ -1041,7 +1040,7 @@ fun WaitingForApprovalScreen(
         if (!iceRestartInFlight) return@LaunchedEffect
         delay(10_000L)
         if (connectionState != AppConnectionState.CONNECTED && iceRestartInFlight) {
-            Log.w("WEBRTC_LOG", "ICE restart timed out; recreating the peer connection")
+            AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "ICE restart timed out; recreating the peer connection")
             iceRestartInFlight = false
             releaseControllerPreview()
             pendingCandidates.clear()
@@ -1071,7 +1070,7 @@ fun WaitingForApprovalScreen(
 
         if (!waitingForFirstFrame || previewRetryCount >= 3) return@LaunchedEffect
 
-        Log.w(
+        AppLogger.warning(LogCategory.SESSION,
             "WEBRTC_LOG",
             "Controller preview has no first frame; retrying WebRTC offer ${previewRetryCount + 1}/3"
         )
@@ -1094,13 +1093,13 @@ fun WaitingForApprovalScreen(
         }
         val answer = firebaseAnswer ?: return@LaunchedEffect
         if (firebaseRtcSessionId == null || firebaseRtcSessionId != currentOfferSessionId) {
-            Log.d("WEBRTC_LOG", "Controller ignoring stale answer for session=$firebaseRtcSessionId")
+            AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ignoring stale answer for session=$firebaseRtcSessionId")
             return@LaunchedEffect
         }
         val pc = WebRtcSessionManager.controllerPeerConnection ?: return@LaunchedEffect
 
         if (pc.remoteDescription == null) {
-            Log.d("WEBRTC_LOG", "Controller setting remote description (Answer)")
+            AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller setting remote description (Answer)")
             runCatching {
                 pc.setRemoteDescription(
                     WebRtcSessionManager.sessionDescriptionObserver(
@@ -1114,7 +1113,7 @@ fun WaitingForApprovalScreen(
                                         sessionGeneration
                                     )
                                 ) return@launch
-                                Log.d(
+                                AppLogger.debug(LogCategory.SESSION,
                                     "WEBRTC_LOG",
                                     "Controller remote description set, applying ${pendingCandidates.size} candidates"
                                 )
@@ -1126,7 +1125,7 @@ fun WaitingForApprovalScreen(
                                             candidate = candidate
                                         )
                                     }
-                                        .onFailure { Log.w("WEBRTC_LOG", "Controller ignored buffered ICE candidate", it) }
+                                        .onFailure { AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ignored buffered ICE candidate", it) }
                                 }
                                 pendingCandidates.clear()
                             }
@@ -1135,7 +1134,7 @@ fun WaitingForApprovalScreen(
                     SessionDescription(SessionDescription.Type.ANSWER, answer)
                 )
             }.onFailure {
-                Log.w("WEBRTC_LOG", "Controller ignored late remote description", it)
+                AppLogger.warning(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller ignored late remote description", it)
             }
         }
     }
@@ -1147,7 +1146,7 @@ fun WaitingForApprovalScreen(
             WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)
         ) {
             WebRtcSessionManager.remoteVideoTrack?.let { existingTrack ->
-                Log.d("WEBRTC_LOG", "Controller reusing existing remote track")
+                AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller reusing existing remote track")
                 remoteTrack = existingTrack
             }
         }
@@ -1163,7 +1162,7 @@ fun WaitingForApprovalScreen(
         ) {
             return@LaunchedEffect
         } else {
-            Log.d("WEBRTC_LOG", "Controller rendering remote track")
+            AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller rendering remote track")
             container.attachRemoteTrack(track) {
                 if (WebRtcSessionManager.isControllerSessionActive(roomCode, sessionGeneration)) {
                     lastFrameTimestampMs = SystemClock.elapsedRealtime()
@@ -1205,7 +1204,7 @@ fun WaitingForApprovalScreen(
         delay(45_000L)
         if (roomStatus == "request_received" && !isEndingSession) {
             runCatching { repository.updateApproval(roomCode, false) }
-                .onFailure { Log.w("SESSION_TIMEOUT", "Unable to expire approval wait", it) }
+                .onFailure { AppLogger.warning(LogCategory.SESSION, "SESSION_TIMEOUT", "Unable to expire approval wait", it) }
         }
     }
 
@@ -1386,7 +1385,7 @@ fun WaitingForApprovalScreen(
                                 WebRtcSessionManager.eglBase.eglBaseContext,
                                 object : RendererCommon.RendererEvents {
                                     override fun onFirstFrameRendered() {
-                                        Log.d("WEBRTC_LOG", "Controller first remote frame rendered")
+                                        AppLogger.debug(LogCategory.WEBRTC, "WEBRTC_LOG", "Controller first remote frame rendered")
                                         lastFrameTimestampMs = SystemClock.elapsedRealtime()
                                         previewRetryCount = 0
                                     }
