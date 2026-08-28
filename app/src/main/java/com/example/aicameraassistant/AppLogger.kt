@@ -48,19 +48,17 @@ object AppLogger {
     fun warning(category: LogCategory, message: String) =
         emit(LogEvent(category, LogLevel.WARNING, message))
 
+    fun warning(category: LogCategory, message: String, throwable: Throwable?) =
+        emit(LogEvent(category, LogLevel.WARNING, message, throwable))
+
+    fun warning(category: LogCategory, throwable: Throwable) =
+        warning(category, "Operation failed", throwable)
+
     fun error(category: LogCategory, message: String, throwable: Throwable? = null) =
         emit(LogEvent(category, LogLevel.ERROR, message, throwable))
 
-    // These overloads keep migrations from legacy Android Log calls mechanical. The
-    // former tag is deliberately discarded: category tags are the single filter key.
-    fun debug(category: LogCategory, legacyTag: String, message: String) = debug(category, message)
-    fun info(category: LogCategory, legacyTag: String, message: String) = info(category, message)
-    fun warning(category: LogCategory, legacyTag: String, message: String) = warning(category, message)
-    fun warning(category: LogCategory, legacyTag: String, message: String, throwable: Throwable?) =
-        emit(LogEvent(category, LogLevel.WARNING, message, throwable))
-    fun error(category: LogCategory, legacyTag: String, message: String) = error(category, message)
-    fun error(category: LogCategory, legacyTag: String, message: String, throwable: Throwable?) =
-        error(category, message, throwable)
+    fun error(category: LogCategory, throwable: Throwable) =
+        error(category, "Operation failed", throwable)
 
     private fun emit(event: LogEvent) {
         if (event.level == LogLevel.DEBUG && !debugBuildProvider()) return
@@ -84,15 +82,20 @@ object AppLogger {
         override fun log(event: LogEvent) {
             val tag = "$TAG_PREFIX-${event.category.name}"
             val message = "[$TAG_PREFIX][${event.category.name}] ${event.message}"
+            val throwable = event.throwable?.toSafeLogThrowable()
             when (event.level) {
                 LogLevel.DEBUG -> Log.d(tag, message)
                 LogLevel.INFO -> Log.i(tag, message)
-                LogLevel.WARNING -> Log.w(tag, message, event.throwable)
-                LogLevel.ERROR -> Log.e(tag, message, event.throwable)
+                LogLevel.WARNING -> Log.w(tag, message, throwable)
+                LogLevel.ERROR -> Log.e(tag, message, throwable)
             }
         }
     }
 }
+
+private fun Throwable.toSafeLogThrowable(): Throwable = RuntimeException(
+    "${this::class.java.simpleName}: ${SensitiveLogSanitizer.sanitize(message.orEmpty())}"
+).also { safe -> safe.stackTrace = stackTrace }
 
 internal object SensitiveLogSanitizer {
     private val sensitiveAssignments = Regex(

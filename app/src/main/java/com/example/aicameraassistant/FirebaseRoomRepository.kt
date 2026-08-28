@@ -18,7 +18,7 @@ class FirebaseRoomRepository : RoomRepository {
     private val localInstanceId = UUID.randomUUID().toString()
 
     override suspend fun createRoom(roomCode: String) {
-        AppLogger.debug(LogCategory.FIREBASE, "SESSION_TRACE", "createRoom start room=$roomCode")
+        AppLogger.debug(LogCategory.FIREBASE, "Room creation started")
         val docRef = db.collection("rooms").document(roomCode)
         clearIceCandidates(roomCode)
         clearCollection(docRef.collection("commands"))
@@ -28,12 +28,12 @@ class FirebaseRoomRepository : RoomRepository {
     }
 
     override suspend fun sendConnectionRequest(roomCode: String): Boolean {
-        AppLogger.debug(LogCategory.FIREBASE, "SESSION_TRACE", "connectionRequest start room=$roomCode")
+        AppLogger.debug(LogCategory.FIREBASE, "Connection request started")
         val docRef = db.collection("rooms").document(roomCode)
         val snapshot = withTimeout(ROOM_LOOKUP_TIMEOUT_MS) { docRef.get().await() }
 
         if (!snapshot.exists()) {
-            AppLogger.warning(LogCategory.FIREBASE, "SESSION_TRACE", "connectionRequest missing room=$roomCode")
+            AppLogger.warning(LogCategory.FIREBASE, "Connection request room not found")
             return false
         }
         val lastActivityAt = snapshot.getLong("lastActivityAt")
@@ -707,7 +707,7 @@ class FirebaseRoomRepository : RoomRepository {
                 return commandId
             } catch (throwable: Throwable) {
                 if (attempt == 2) {
-                    AppLogger.error(LogCategory.FIREBASE, "Firestore room update failed", throwable)
+                    AppLogger.error(LogCategory.FIREBASE, "Firebase command update failed", throwable)
                     throw throwable
                 }
                 delay(250L shl attempt)

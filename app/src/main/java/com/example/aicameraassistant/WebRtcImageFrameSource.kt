@@ -66,7 +66,7 @@ class WebRtcImageFrameSource(
                 source.capturerObserver.onFrameCaptured(frame)
                 true
             } catch (t: Throwable) {
-                AppLogger.error(LogCategory.WEBRTC, "WEBRTC_LOG", "Failed to push image frame", t)
+                AppLogger.error(LogCategory.WEBRTC, t)
                 false
             } finally {
                 frame.release()

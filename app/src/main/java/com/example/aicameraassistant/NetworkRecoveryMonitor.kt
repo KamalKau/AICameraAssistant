@@ -93,7 +93,7 @@ object NetworkRecoveryMonitor {
             _networkAvailable.value = validated
             if (changed) _events.tryEmit(System.currentTimeMillis())
             if (BuildConfig.DEBUG) {
-                AppLogger.debug(LogCategory.NETWORK, "NETWORK_RECOVERY", "$reason validated=$validated transport=$transports")
+                AppLogger.debug(LogCategory.NETWORK, "$reason validated=$validated transport=$transports")
             }
         }
     }

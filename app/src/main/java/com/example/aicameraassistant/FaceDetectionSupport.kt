@@ -364,7 +364,7 @@ class PreviewBitmapFaceDetector(
                     )
                 }
         } catch (t: Throwable) {
-            AppLogger.warning(LogCategory.CAMERA, "FACE_DETECTION", "Preview bitmap face detection failed", t)
+            AppLogger.warning(LogCategory.CAMERA, t)
             emptyList()
         } finally {
             if (!bitmap.isRecycled) {

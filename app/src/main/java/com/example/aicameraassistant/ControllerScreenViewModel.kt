@@ -91,7 +91,7 @@ class ControllerScreenViewModel : ViewModel() {
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
-        AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "controller bind room=$roomCode previous=$boundRoomCode")
+        AppLogger.debug(LogCategory.SESSION, "Controller session binding started")
         if (roomCode.isBlank()) {
             bindJob?.cancel()
             bindJob = null
@@ -211,11 +211,11 @@ class ControllerScreenViewModel : ViewModel() {
                 )
             }.collect { state ->
                 if (boundRoomCode != roomCode) {
-                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "Ignoring stale Firebase callback room=$roomCode active=$boundRoomCode")
+                    AppLogger.debug(LogCategory.SESSION, "Ignoring stale Firebase callback")
                     return@collect
                 }
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {
-                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "controller room=$roomCode status=${state.roomStatus}")
+                    AppLogger.debug(LogCategory.SESSION, "Controller room status changed: ${state.roomStatus}")
                 }
                 _remoteUiState.value = state
             }

@@ -37,7 +37,7 @@ class BoomerangRecorder(
                 saveVideoToGallery(outputFile)
             }
         }.onFailure {
-            AppLogger.error(LogCategory.CAPTURE, "AICameraAssistant", "Boomerang capture failed", it)
+            AppLogger.error(LogCategory.CAPTURE, "Boomerang capture failed", it)
         }.also {
             frames.forEach { frame -> frame.recycle() }
             outputFile.delete()

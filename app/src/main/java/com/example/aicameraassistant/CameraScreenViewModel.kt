@@ -62,7 +62,7 @@ class CameraScreenViewModel : ViewModel() {
     }
 
     fun bind(repository: FirebaseRoomRepository, roomCode: String) {
-        AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "camera bind room=$roomCode previous=$boundRoomCode")
+        AppLogger.debug(LogCategory.SESSION, "Camera session binding started")
         if (roomCode.isBlank()) {
             bindJob?.cancel()
             bindJob = null
@@ -170,7 +170,7 @@ class CameraScreenViewModel : ViewModel() {
                 )
             }.collect { state ->
                 if (_remoteUiState.value.roomStatus != state.roomStatus) {
-                    AppLogger.debug(LogCategory.SESSION, "SESSION_TRACE", "camera room=$roomCode status=${state.roomStatus}")
+                    AppLogger.debug(LogCategory.SESSION, "Camera room status changed: ${state.roomStatus}")
                 }
                 _remoteUiState.value = state
             }

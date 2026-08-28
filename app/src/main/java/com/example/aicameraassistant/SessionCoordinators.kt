@@ -32,7 +32,7 @@ private class RoomWriteDispatcher(
     fun launch(operation: String, block: suspend () -> Unit) {
         scope.launch {
             runCatching { writeMutex.withLock { block() } }
-                .onFailure { AppLogger.warning(LogCategory.SESSION, tag, "Room write failed during $operation", it) }
+                .onFailure { AppLogger.warning(LogCategory.SESSION, "Room write failed during $operation", it) }
         }
     }
 }
@@ -99,7 +99,7 @@ class HostSessionCoordinator(
         remoteEndScope.launch {
             runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    AppLogger.error(LogCategory.SESSION, "SESSION_END", "Failed to end host session remotely", it)
+                    AppLogger.error(LogCategory.SESSION, it)
                 }
             }
 
@@ -260,7 +260,7 @@ class ControllerSessionCoordinator(
         remoteEndScope.launch {
             runCatching { repository.endSession(roomCode, sessionVersion) }
                 .onFailure {
-                    AppLogger.error(LogCategory.SESSION, "SESSION_END", "Failed to end controller session remotely", it)
+                    AppLogger.error(LogCategory.SESSION, it)
                 }
             }
 
@@ -404,7 +404,7 @@ class ControllerSessionCoordinator(
             setShutterFlashAlpha = setShutterFlashAlpha
         )
         roomWrites.launch("capture request") {
-            AppLogger.debug(LogCategory.SESSION, "AICameraAssistant", "Sending capture request type=$requestType id=$nextRequestId")
+            AppLogger.debug(LogCategory.SESSION, "Sending capture request type=$requestType id=$nextRequestId")
             repository.sendCaptureRequest(roomCode, nextRequestId, requestType)
         }
     }

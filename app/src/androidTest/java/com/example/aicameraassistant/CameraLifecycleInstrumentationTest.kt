@@ -1,7 +1,7 @@
 package com.example.aicameraassistant
 
 import android.content.pm.PackageManager
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import org.junit.Assert.assertFalse
@@ -14,13 +14,14 @@ import org.junit.runner.RunWith
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class CameraLifecycleInstrumentationTest {
-    @get:Rule val composeRule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
     @Test fun cameraCapableDeviceLaunchesAndSurvivesActivityRecreation() {
-        val packageManager = composeRule.activity.packageManager
-        assertTrue(packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY))
-        assertFalse(composeRule.activity.isFinishing)
-        composeRule.activityRule.scenario.recreate()
-        assertFalse(composeRule.activity.isFinishing)
+        activityRule.scenario.onActivity { activity ->
+            assertTrue(activity.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY))
+            assertFalse(activity.isFinishing)
+        }
+        activityRule.scenario.recreate()
+        activityRule.scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
     }
 }

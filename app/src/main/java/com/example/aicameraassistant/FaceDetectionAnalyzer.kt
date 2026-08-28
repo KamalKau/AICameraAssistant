@@ -85,7 +85,7 @@ class MlKitFaceDetectionAnalyzer(
                 lastSceneProcessMs = now
                 onSceneResult(analyzer.detect(imageProxy))
             }.onFailure {
-                AppLogger.warning(LogCategory.CAMERA, "SCENE_DETECTION", "Scene detection failed", it)
+                AppLogger.warning(LogCategory.CAMERA, it)
             }
         }
         val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
@@ -130,7 +130,7 @@ class MlKitFaceDetectionAnalyzer(
                 )
             }
             .addOnFailureListener {
-                AppLogger.warning(LogCategory.CAMERA, "FACE_DETECTION", "ML Kit face detection failed", it)
+                AppLogger.warning(LogCategory.CAMERA, it)
                 onFaceResult(emptyList())
             }
             .addOnCompleteListener {
@@ -141,7 +141,7 @@ class MlKitFaceDetectionAnalyzer(
                 }
             }
         } catch (t: Throwable) {
-            AppLogger.warning(LogCategory.CAMERA, "FACE_DETECTION", "Unable to submit ML Kit face detection", t)
+            AppLogger.warning(LogCategory.CAMERA, t)
             onFaceResult(emptyList())
             try {
                 isProcessing.set(false)
